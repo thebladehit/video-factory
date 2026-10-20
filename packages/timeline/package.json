@@ -11,5 +11,8 @@
   },
   "dependencies": {
     "@vf/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.11"
   }
 }
