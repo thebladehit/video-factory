@@ -349,6 +349,12 @@ importers:
         specifier: ^10
         version: 10.0.0
 
+  packages/media:
+    dependencies:
+      '@vf/shared':
+        specifier: workspace:*
+        version: link:../shared
+
   packages/shared:
     dependencies:
       zod:
