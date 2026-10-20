@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AppError } from './errors';
 
 export const FORMATS = {
   '9:16': { width: 1080, height: 1920 },
@@ -10,10 +11,40 @@ const id = z.string().min(1);
 const time = z.number().finite().min(0);
 const positive = z.number().finite().positive();
 
-const effectSchema = z.object({
-  type: z.enum(['kenburns', 'fade', 'xfade', 'zoom']),
-  params: z.record(z.string(), z.number()),
-});
+const unit = z.number().finite().min(0).max(1);
+
+/** Параметри ефектів: на вході необов'язкові (старі `params: {}`), на виході — заповнені замовчуваннями. */
+export const EFFECT_DEFAULTS = {
+  kenburns: { fromScale: 1, toScale: 1.15, fromX: 0.5, fromY: 0.5, toX: 0.5, toY: 0.5 },
+  zoom: { scale: 1.2, x: 0.5, y: 0.5 },
+  fade: { in: 0.3, out: 0 },
+  xfade: { duration: 0.5 },
+} as const;
+
+const kb = EFFECT_DEFAULTS.kenburns;
+const zm = EFFECT_DEFAULTS.zoom;
+const effectSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('kenburns'),
+    params: z.object({
+      fromScale: positive.default(kb.fromScale),
+      toScale: positive.default(kb.toScale),
+      fromX: unit.default(kb.fromX),
+      fromY: unit.default(kb.fromY),
+      toX: unit.default(kb.toX),
+      toY: unit.default(kb.toY),
+    }),
+  }),
+  z.object({
+    type: z.literal('zoom'),
+    params: z.object({ scale: positive.default(zm.scale), x: unit.default(zm.x), y: unit.default(zm.y) }),
+  }),
+  z.object({
+    type: z.literal('fade'),
+    params: z.object({ in: time.default(EFFECT_DEFAULTS.fade.in), out: time.default(EFFECT_DEFAULTS.fade.out) }),
+  }),
+  z.object({ type: z.literal('xfade'), params: z.object({ duration: time.default(EFFECT_DEFAULTS.xfade.duration) }) }),
+]);
 
 const mediaClipSchema = z.object({
   id,
@@ -24,6 +55,9 @@ const mediaClipSchema = z.object({
   sceneId: id.optional(),
   fit: z.enum(['cover', 'contain']),
   effects: z.array(effectSchema),
+  /** Звук самого відео (0–2), коли він не винесений у зв'язаний аудіокліп. */
+  volume: z.number().min(0).max(2).optional(),
+  linkId: id.optional(),
 });
 
 const audioClipSchema = z.object({
@@ -36,6 +70,7 @@ const audioClipSchema = z.object({
   sceneId: id.optional(),
   fadeIn: time.optional(),
   fadeOut: time.optional(),
+  linkId: id.optional(),
 });
 
 const captionClipSchema = z.object({ id, audioClipId: id, transcriptId: id, styleId: id });
@@ -46,7 +81,7 @@ const trackSchema = z.discriminatedUnion('kind', [
     id,
     kind: z.literal('audio'),
     clips: z.array(audioClipSchema),
-    role: z.enum(['voiceover', 'music', 'sfx']),
+    role: z.enum(['voiceover', 'music', 'sfx', 'original']),
     language: z.string().min(2).optional(),
   }),
   z.object({ id, kind: z.literal('captions'), clips: z.array(captionClipSchema), language: z.string().min(2) }),
@@ -60,12 +95,21 @@ export const timelineDocSchema = z.object({
   tracks: z.array(trackSchema),
 });
 
-export type TimelineDoc = z.infer<typeof timelineDocSchema>;
+export type TimelineDoc = z.output<typeof timelineDocSchema>;
 export type Track = z.infer<typeof trackSchema>;
 export type MediaClip = z.infer<typeof mediaClipSchema>;
 export type AudioClip = z.infer<typeof audioClipSchema>;
 export type CaptionClip = z.infer<typeof captionClipSchema>;
 export type Effect = z.infer<typeof effectSchema>;
+export type EffectType = Effect['type'];
+export type AudioRole = Extract<Track, { kind: 'audio' }>['role'];
+
+/** Документ із бази чи від клієнта → валідний повний `TimelineDoc` (замовчування ефектів заповнені). */
+export function normalizeDoc(input: unknown): TimelineDoc {
+  const r = timelineDocSchema.safeParse(input);
+  if (!r.success) throw new AppError('VALIDATION', 'Невалідний таймлайн', { issues: r.error.issues });
+  return r.data;
+}
 
 export const emptyTimeline = (format: VideoFormat, fps = 30): TimelineDoc => ({
   schemaVersion: 1,

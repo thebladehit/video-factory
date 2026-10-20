@@ -3,7 +3,8 @@ export type JobStatus = (typeof JOB_STATUSES)[number];
 export const TERMINAL_STATUSES: ReadonlySet<JobStatus> = new Set(['done', 'failed', 'cancelled']);
 
 /** Розширюється в наступних підпроєктах. */
-export type JobType = 'debug.sleep' | 'asset.process' | 'image.generate' | 'video.generate' | 'assets.tag';
+export type JobType =
+  'debug.sleep' | 'asset.process' | 'image.generate' | 'video.generate' | 'assets.tag' | 'render' | 'asset.analyze';
 
 export interface JobRecord {
   id: string;
@@ -25,6 +26,8 @@ export interface JobRecord {
 export interface JobSubject {
   assetId?: string;
   generationId?: string;
+  renderId?: string;
+  projectId?: string;
 }
 
 export interface JobEvent {
@@ -43,6 +46,8 @@ export function jobSubject(payload: unknown): JobSubject {
   const subject: JobSubject = {};
   if (typeof p.assetId === 'string') subject.assetId = p.assetId;
   if (typeof p.generationId === 'string') subject.generationId = p.generationId;
+  if (typeof p.renderId === 'string') subject.renderId = p.renderId;
+  if (typeof p.projectId === 'string') subject.projectId = p.projectId;
   return subject;
 }
 
