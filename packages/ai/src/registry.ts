@@ -5,7 +5,10 @@ import { fakeImage, fakeStt, fakeText, fakeTts } from './fake';
 import { anthropicText } from './providers/anthropic';
 import { googleImage, googleText } from './providers/google';
 import { openaiImage, openaiText } from './providers/openai';
-import type { ImageGen, STT, TextGen, TTS } from './types';
+import { createFakeVideo } from './fake/video';
+import { createGeminiOmniVideoGen } from './providers/google-omni';
+import type { ImageGen, STT, TextGen, TTS, VideoGen } from './types';
+import type { MediaTools } from '@vf/media';
 
 export interface CatalogItem extends CatalogEntry {
   available: boolean;
@@ -15,6 +18,7 @@ export interface AiRegistry {
   catalog(userId: string): Promise<CatalogItem[]>;
   text(userId: string, ref: ModelRef): Promise<TextGen>;
   image(userId: string, ref: ModelRef): Promise<ImageGen>;
+  video(userId: string, ref: ModelRef): Promise<VideoGen>;
   tts(userId: string, ref: ModelRef): Promise<TTS>;
   stt(userId: string, ref: ModelRef): Promise<STT>;
 }
@@ -35,8 +39,11 @@ const TEXT_FACTORIES: Partial<Record<ProviderId, (key: string, model: string) =>
 export function createAiRegistry(deps: {
   credentials: CredentialStore;
   catalog?: readonly CatalogEntry[];
+  /** ffmpeg для fake-відео; без нього fake/video недоступна */
+  media?: MediaTools;
 }): AiRegistry {
   const catalog = deps.catalog ?? CATALOG;
+  const fakeVideo = deps.media ? createFakeVideo(deps.media) : null;
 
   async function resolve(userId: string, ref: ModelRef, capability: Capability) {
     const entry = catalog.find((e) => e.ref === ref && e.capability === capability);
@@ -75,6 +82,15 @@ export function createAiRegistry(deps: {
       if (!factory)
         throw new AppError('MODEL_UNAVAILABLE', `Генерацію фото для ${entry.provider} не підключено`, { ref });
       return factory(key, model, entry);
+    },
+    async video(userId, ref) {
+      const { entry, key, model } = await resolve(userId, ref, 'video');
+      if (entry.provider === 'fake') {
+        if (!fakeVideo) throw new AppError('MODEL_UNAVAILABLE', 'Fake-відео потребує ffmpeg', { ref });
+        return fakeVideo;
+      }
+      if (entry.provider === 'google') return createGeminiOmniVideoGen({ apiKey: key, model });
+      throw new AppError('MODEL_UNAVAILABLE', `Генерацію відео для ${entry.provider} не підключено`, { ref });
     },
     tts: (userId, ref) => fakeOnly(userId, ref, 'tts', fakeTts),
     stt: (userId, ref) => fakeOnly(userId, ref, 'stt', fakeStt),

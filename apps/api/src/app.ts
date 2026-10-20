@@ -58,7 +58,10 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     storage,
     ai:
       overrides.ai ??
-      createAiRegistry({ credentials: createEnvCredentialStore({ ...process.env, AI_FAKE: cfg.aiFake ? '1' : '' }) }),
+      createAiRegistry({
+        credentials: createEnvCredentialStore({ ...process.env, AI_FAKE: cfg.aiFake ? '1' : '' }),
+        media: { ffmpegPath: cfg.ffmpegPath, ffprobePath: cfg.ffprobePath },
+      }),
     jobs: overrides.jobs ?? createInProcessJobs(createPgJobStore(dbHandle.db)),
     auth: overrides.auth ?? singleUserAuth,
     ...overrides,

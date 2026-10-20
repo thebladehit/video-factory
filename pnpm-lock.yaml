@@ -308,6 +308,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^4
         version: 4.0.96(zod@4.6.7)
+      '@vf/media':
+        specifier: workspace:*
+        version: link:../media
       '@vf/shared':
         specifier: workspace:*
         version: link:../shared

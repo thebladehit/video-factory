@@ -1,6 +1,7 @@
 import { APICallError } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createAiSdkTextGen } from './ai-sdk-text';
 
 const ok = new MockLanguageModelV4({
@@ -54,4 +55,31 @@ describe('createAiSdkTextGen', () => {
     });
     expect(calls()).toBe(3);
   }, 20_000); // AI SDK чекає з експоненційною затримкою між ретраями
+
+  it('generateObject sends images as file parts and reports usage', async () => {
+    let seen: unknown;
+    const model = new MockLanguageModelV4({
+      doGenerate: async (o) => {
+        seen = o.prompt;
+        return {
+          content: [{ type: 'text', text: '{"title":"t","tags":["a","b","c","d","e"]}' }],
+          finishReason: { unified: 'stop', raw: 'stop' },
+          usage: {
+            inputTokens: { total: 7, noCache: 7, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 3, text: 3, reasoning: 0 },
+          },
+          warnings: [],
+        };
+      },
+    });
+    let usage: unknown;
+    const schema = z.object({ title: z.string(), tags: z.array(z.string()) });
+    await createAiSdkTextGen('anthropic', model).generateObject(schema, {
+      prompt: 'опиши',
+      images: [{ bytes: new Uint8Array([1, 2, 3]), mime: 'image/webp' }],
+      onUsage: (u) => (usage = u),
+    });
+    expect(JSON.stringify(seen)).toContain('image/webp');
+    expect(usage).toEqual({ inputTokens: 7, outputTokens: 3 });
+  });
 });

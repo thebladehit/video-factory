@@ -1,3 +1,4 @@
+import type { ProviderId } from '@vf/shared';
 import type { z } from 'zod';
 
 export interface Word {
@@ -23,22 +24,36 @@ export interface TextGen {
     maxOutputTokens?: number;
     signal?: AbortSignal;
   }): Promise<string>;
-  generateObject<T>(schema: z.ZodType<T>, req: { prompt: string; system?: string; signal?: AbortSignal }): Promise<T>;
+  generateObject<T>(
+    schema: z.ZodType<T>,
+    req: {
+      prompt: string;
+      system?: string;
+      signal?: AbortSignal;
+      /** Зображення для vision-моделей (напр. мініатюра для тегів) */
+      images?: GeneratedFile[];
+      onUsage?: (u: { inputTokens: number; outputTokens: number }) => void;
+    },
+  ): Promise<T>;
 }
 
 export interface ImageGen {
   generate(req: { prompt: string; aspect: Aspect; n: number; signal?: AbortSignal }): Promise<GeneratedFile[]>;
 }
 
-export interface OpRef {
-  id: string;
-}
-export type OpStatus = { state: 'pending' | 'running'; progress?: number };
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-/** Генерація відео — довга операція. Реалізації з'являться в підпроєкті 1. */
+/** Операція провайдера — серіалізується в generations.provider_op, щоб після рестарту продовжити опитування */
+export interface OpRef {
+  provider: ProviderId;
+  data: JsonValue;
+}
+export type OpStatus = { state: 'pending' | 'running'; progress?: number } | { state: 'failed'; error: string };
+
+/** Генерація відео — довга операція: start одразу повертає OpRef, poll — стан або готові файли. */
 export interface VideoGen {
-  start(req: { prompt: string; image?: GeneratedFile; aspect: Aspect; durationSec: number }): Promise<OpRef>;
-  poll(ref: OpRef): Promise<OpStatus | GeneratedFile[]>;
+  start(req: { prompt: string; aspect: Aspect; durationSec?: number; signal?: AbortSignal }): Promise<OpRef>;
+  poll(ref: OpRef, opts?: { signal?: AbortSignal }): Promise<OpStatus | GeneratedFile[]>;
 }
 
 export interface TTS {
