@@ -19,6 +19,23 @@
         "dev"
       ],
       "port": 5199
+    },
+    {
+      "name": "web-e2e-api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@vf/web",
+        "exec",
+        "vite",
+        "--port",
+        "5174",
+        "--strictPort"
+      ],
+      "env": {
+        "VF_API_URL": "http://localhost:3101"
+      },
+      "port": 5174
     }
   ]
 }

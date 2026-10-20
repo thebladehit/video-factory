@@ -12,7 +12,7 @@ describe('assets upload', () => {
     const { caller, deps } = await startApp();
     const bytes = await pngBytes();
     const ticket = await caller.assets.createUpload({ name: 'кіт.png', mime: 'image/png', size: bytes.length });
-    expect(ticket.mode).toBe('single');
+    expect(ticket).toMatchObject({ mode: 'single', mime: 'image/png' });
     if (ticket.mode !== 'single') return;
     const put = await fetch(ticket.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: bytes });
     expect(put.ok).toBe(true);

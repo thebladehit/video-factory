@@ -12,9 +12,10 @@ import {
 import type { AppDeps } from '../../app';
 
 export type AssetRow = typeof assets.$inferSelect;
+/** mime — нормалізований тип, на який підписано URL: браузер має надіслати саме його в Content-Type */
 export type UploadTicket =
-  | { assetId: string; mode: 'single'; url: string }
-  | { assetId: string; mode: 'multipart'; uploadId: string; partSize: number };
+  | { assetId: string; mime: string; mode: 'single'; url: string }
+  | { assetId: string; mime: string; mode: 'multipart'; uploadId: string; partSize: number };
 
 const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 
@@ -59,8 +60,8 @@ export async function createUpload(
     originalName: i.name,
     uploadId,
   });
-  if (uploadId) return { assetId: id, mode: 'multipart', uploadId, partSize: PART_SIZE };
-  return { assetId: id, mode: 'single', url: await deps.storage.presignPut(storageKey, { contentType: mime }) };
+  if (uploadId) return { assetId: id, mime, mode: 'multipart', uploadId, partSize: PART_SIZE };
+  return { assetId: id, mime, mode: 'single', url: await deps.storage.presignPut(storageKey, { contentType: mime }) };
 }
 
 export async function signParts(
