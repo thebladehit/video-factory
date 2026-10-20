@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/main.ts",
     "typecheck": "tsc -p ."
@@ -14,6 +16,7 @@
     "@vf/ai": "workspace:*",
     "@vf/db": "workspace:*",
     "@vf/jobs": "workspace:*",
+    "@vf/media": "workspace:*",
     "@vf/shared": "workspace:*",
     "@vf/storage": "workspace:*",
     "drizzle-orm": "^0.45",

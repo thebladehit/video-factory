@@ -211,6 +211,9 @@ importers:
       '@vf/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
+      '@vf/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@vf/shared':
         specifier: workspace:*
         version: link:../../packages/shared

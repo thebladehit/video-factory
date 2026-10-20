@@ -20,7 +20,10 @@ describe('ai', () => {
     const failingAi = {
       text: async () => ({
         generateText: async () => {
-          throw new AppError('PROVIDER_ERROR', 'anthropic: 401 invalid x-api-key', { provider: 'anthropic', status: 401 });
+          throw new AppError('PROVIDER_ERROR', 'anthropic: 401 invalid x-api-key', {
+            provider: 'anthropic',
+            status: 401,
+          });
         },
       }),
     } as unknown as AiRegistry;

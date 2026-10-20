@@ -1,3 +1,4 @@
+import { assetsRouter } from '../modules/assets/router';
 import { router } from '../trpc';
 import { aiRouter } from './ai';
 import { healthRouter } from './health';
@@ -9,6 +10,7 @@ export const appRouter = router({
   settings: settingsRouter,
   ai: aiRouter,
   jobs: jobsRouter,
+  assets: assetsRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -8,7 +8,10 @@ describe('settings', () => {
   let ctx: Awaited<ReturnType<typeof startApp>>;
   beforeEach(async () => {
     ctx = await startApp();
-    await ctx.deps.db.update(userSettings).set({ defaults: {}, channelStyle: '' }).where(eq(userSettings.userId, LOCAL_USER_ID));
+    await ctx.deps.db
+      .update(userSettings)
+      .set({ defaults: {}, channelStyle: '' })
+      .where(eq(userSettings.userId, LOCAL_USER_ID));
   });
 
   it('saves a default model', async () => {

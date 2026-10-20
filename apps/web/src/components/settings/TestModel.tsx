@@ -7,7 +7,11 @@ export function TestModel({ modelRef }: { modelRef: string | null }) {
   const test = useMutation(trpc.ai.testModel.mutationOptions({ onError: () => {} }));
   return (
     <>
-      <Button variant="outline" disabled={!modelRef || test.isPending} onClick={() => modelRef && test.mutate({ ref: modelRef })}>
+      <Button
+        variant="outline"
+        disabled={!modelRef || test.isPending}
+        onClick={() => modelRef && test.mutate({ ref: modelRef })}
+      >
         {test.isPending ? 'Перевіряю…' : 'Перевірити'}
       </Button>
       {(test.data || test.error) && (

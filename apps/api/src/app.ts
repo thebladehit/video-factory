@@ -6,7 +6,8 @@ import { sql } from 'drizzle-orm';
 import { createDb, seed, type Db } from '@vf/db';
 import { createInProcessJobs, createPgJobStore, type JobQueue, type WorkerRuntime } from '@vf/jobs';
 import { AppError } from '@vf/shared';
-import { createS3BlobStorage, type BlobStorage } from '@vf/storage';
+import { checkTools, type MediaTools } from '@vf/media';
+import { createLazyBucket, createS3BlobStorage, type BlobStorage } from '@vf/storage';
 import { singleUserAuth, type AuthProvider } from './auth/single-user';
 import type { AppConfig } from './config';
 import { debugSleep } from './jobs/debug-sleep';
@@ -16,6 +17,11 @@ export interface AppDeps {
   db: Db;
   dbPing: () => Promise<void>;
   storage: BlobStorage;
+  /** Бакет і CORS створюються при першій потребі (якщо на старті S3 був недоступний) */
+  bucket: { ensure(): Promise<void> };
+  media: MediaTools;
+  /** ffmpeg/ffprobe доступні (кеш 30 с) */
+  mediaPing: () => Promise<boolean>;
   jobs: { queue: JobQueue; runtime: WorkerRuntime };
   ai: AiRegistry;
   auth: AuthProvider;
@@ -43,9 +49,17 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
 
   const server = Fastify({ logger: !process.env.VITEST, routerOptions: { maxParamLength: 5000 } });
   const storage = overrides.storage ?? createS3BlobStorage(cfg.s3);
+  const bucket = createLazyBucket(storage, { corsOrigins: [cfg.webOrigin] });
+  const media: MediaTools = { ffmpegPath: cfg.ffmpegPath, ffprobePath: cfg.ffprobePath };
+  let mediaCheck: { at: number; ok: Promise<boolean> } | null = null;
+  const mediaPing = () => {
+    if (!mediaCheck || Date.now() - mediaCheck.at > 30_000) mediaCheck = { at: Date.now(), ok: checkTools(media) };
+    return mediaCheck.ok;
+  };
+  if (!(await mediaPing())) server.log.warn('FFmpeg/ffprobe недоступні — обробка медіа не працюватиме');
   try {
     await Promise.race([
-      storage.ensureBucket({ corsOrigins: [cfg.webOrigin] }),
+      bucket.ensure(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
     ]);
   } catch (e) {
@@ -56,6 +70,9 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     db: dbHandle.db,
     dbPing: dbHandle.ping,
     storage,
+    bucket,
+    media,
+    mediaPing,
     ai:
       overrides.ai ??
       createAiRegistry({
@@ -67,6 +84,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
+  deps.jobs.runtime.register({ type: 'asset.process', concurrency: 2, handler: async () => ({}) });
 
   await server.register(cors, { origin: cfg.webOrigin });
   await server.register(fastifyTRPCPlugin, {

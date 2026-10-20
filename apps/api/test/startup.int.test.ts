@@ -44,7 +44,11 @@ describe('job recovery', () => {
   it('does not touch running jobs until start() — a second instance that fails to bind must not fail them', async () => {
     const { db, close } = createDb(process.env.TEST_DATABASE_URL!);
     const store = createPgJobStore(db);
-    const job = await store.insert({ userId: LOCAL_USER_ID, type: 'debug.sleep', payload: { durationMs: 100, steps: 1 } });
+    const job = await store.insert({
+      userId: LOCAL_USER_ID,
+      type: 'debug.sleep',
+      payload: { durationMs: 100, steps: 1 },
+    });
     await store.claim(job.id);
 
     const app = await createApp(testConfig());
