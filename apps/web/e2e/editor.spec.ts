@@ -37,6 +37,17 @@ async function dropFile(page: Page, file: { name: string; type: string; bytes: B
   );
 }
 
+/** Файл з панелі бібліотеки під плейхед: спершу дочекатися відфільтрованого списку (клік — за координатами). */
+async function addFromPanel(page: Page, name: string) {
+  const panel = page.getByTestId('library-panel');
+  await panel.getByPlaceholder('Пошук у бібліотеці').fill(name);
+  await expect(panel.getByTestId('library-item')).toHaveCount(1);
+  const item = panel.getByTestId('library-item').first();
+  await item.hover();
+  await item.getByRole('button', { name: `Додати «${name}» під плейхед` }).click();
+  await expect(page.getByTestId('track-video').locator('[data-clip-id]').first()).toBeVisible();
+}
+
 const videoClip = (page: Page) => page.getByTestId('track-video').locator('[data-clip-id]').first();
 const duration = async (clip: Locator) => Number(await clip.getAttribute('data-duration'));
 
@@ -119,9 +130,7 @@ test('photo from the library panel gets Ken Burns; changing the end scale in the
   });
 
   await newProject(page, `Ken Burns ${uid()}`);
-  const panel = page.getByTestId('library-panel');
-  await panel.getByPlaceholder('Пошук у бібліотеці').fill(name);
-  await panel.getByRole('button', { name: `Додати «${name}» під плейхед` }).click({ force: true });
+  await addFromPanel(page, name);
   const clip = videoClip(page);
   await expect(clip).toHaveAttribute('data-duration', '5');
   await clip.click();
@@ -147,9 +156,7 @@ test('deleting a used file shows the usage warning and leaves a "файл вид
 
   await newProject(page, project);
   const editorUrl = page.url();
-  const panel = page.getByTestId('library-panel');
-  await panel.getByPlaceholder('Пошук у бібліотеці').fill(name);
-  await panel.getByRole('button', { name: `Додати «${name}» під плейхед` }).click({ force: true });
+  await addFromPanel(page, name);
   await expect(videoClip(page)).toBeVisible();
   await savedState(page);
 
@@ -211,9 +218,7 @@ test('a slider released outside itself still ends its undo step', async ({ page 
     timeout: 20_000,
   });
   await newProject(page, `Gesture ${uid()}`);
-  const panel = page.getByTestId('library-panel');
-  await panel.getByPlaceholder('Пошук у бібліотеці').fill(name);
-  await panel.getByRole('button', { name: `Додати «${name}» під плейхед` }).click({ force: true });
+  await addFromPanel(page, name);
   await videoClip(page).click();
   const slider = page.getByTestId('inspector').getByTestId('kb-to-scale');
   const box = (await slider.boundingBox())!;
