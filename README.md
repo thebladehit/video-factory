@@ -6,6 +6,7 @@
 - План підпроєкту 0: [docs/plans/2026-10-20-subproject-0-foundation.md](docs/plans/2026-10-20-subproject-0-foundation.md)
 - Підпроєкт 1 «Бібліотека»: [специфікація](docs/specs/2026-10-20-subproject-1-library.md), [план](docs/plans/2026-10-20-subproject-1-library.md)
 - Підпроєкт 2 «Редактор + рендер»: [специфікація](docs/specs/2026-10-20-subproject-2-editor.md), [план](docs/plans/2026-10-20-subproject-2-editor.md)
+- Підпроєкт 3 «Озвучка й субтитри»: [специфікація](docs/specs/2026-10-20-subproject-3-voice.md)
 - Прототипи рушіїв монтажу: [prototypes/editor-demos](prototypes/editor-demos)
 
 ## Передумови
