@@ -50,8 +50,11 @@ async function dragBy(page: Page, handle: Locator, dx: number) {
   await page.mouse.up();
 }
 
-const savedState = (page: Page) =>
-  expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved', { timeout: 10_000 });
+/** Після debounce автозбереження (1,5 с) — інакше «saved» видно ще до початку збереження. */
+const savedState = async (page: Page) => {
+  await page.waitForTimeout(1700);
+  await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved', { timeout: 10_000 });
+};
 
 test('new 9:16 project → drop MP4 from OS onto the timeline → video clip and waveform clip appear', async ({
   page,
@@ -162,4 +165,26 @@ test('deleting a used file shows the usage warning and leaves a "файл вид
   await page.goto(editorUrl);
   await expect(videoClip(page)).toContainText('файл видалено');
   await expect(page.getByTestId('render-menu')).toBeDisabled();
+});
+
+test('reopening a project right after editing shows the latest timeline and saves without a conflict', async ({
+  page,
+}) => {
+  await newProject(page, `Reopen ${uid()}`);
+  await dropFile(page, { name: `tone-${uid()}.mp4`, type: 'video/mp4', bytes: TONE });
+  await expect(page.getByTestId('track-audio').locator('[data-clip-id]')).toHaveCount(1, { timeout: 30_000 });
+  await savedState(page);
+  const clip = videoClip(page);
+  await dragBy(page, clip.getByTestId('clip-handle-r'), -60);
+  const trimmed = await duration(clip);
+  await savedState(page);
+
+  await page.getByRole('link', { name: 'До проєктів' }).click();
+  await expect(page.getByRole('heading', { name: 'Проєкти' })).toBeVisible();
+  await page.goBack();
+  await expect(videoClip(page)).toHaveAttribute('data-duration', String(trimmed));
+  // наступна зміна зберігається без конфлікту
+  await dragBy(page, videoClip(page), 60);
+  await savedState(page);
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
 });
