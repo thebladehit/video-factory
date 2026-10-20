@@ -9,6 +9,8 @@ export function AssetCard({ asset, onOpen }: { asset: AssetView; onOpen: () => v
     <button
       type="button"
       data-testid="asset-card"
+      data-kind={asset.kind}
+      data-source={asset.source}
       aria-label={asset.title || 'Без назви'}
       onClick={onOpen}
       onMouseEnter={() => setHover(true)}
