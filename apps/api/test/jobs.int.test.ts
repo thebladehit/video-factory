@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { JobEvent } from '@vf/shared';
+import { appRouter } from '../src/index';
 import { startApp } from './helpers';
 
 type Caller = Awaited<ReturnType<typeof startApp>>['caller'];
@@ -49,5 +50,17 @@ describe('jobs', () => {
   it('get of an unknown job is NOT_FOUND', async () => {
     const { caller } = await startApp();
     await expect(caller.jobs.get({ id: crypto.randomUUID() })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('hides jobs of other users', async () => {
+    const { caller, deps } = await startApp();
+    const { jobId } = await caller.jobs.enqueueDebug({ durationMs: 2000, steps: 2 });
+    const other = appRouter.createCaller({ userId: crypto.randomUUID(), deps });
+    await expect(other.jobs.get({ id: jobId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(other.jobs.cancel({ id: jobId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(other.jobs.retry({ id: jobId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(other.jobs.events({ id: jobId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect((await caller.jobs.get({ id: jobId })).status).not.toBe('cancelled');
+    await caller.jobs.cancel({ id: jobId });
   });
 });

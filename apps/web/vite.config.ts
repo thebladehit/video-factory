@@ -9,6 +9,6 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     // SSE-підписки tRPC теж ідуть через цей проксі
-    proxy: { '/trpc': { target: 'http://localhost:3001' } },
+    proxy: { '/trpc': { target: process.env.VF_API_URL ?? 'http://localhost:3001' } },
   },
 });

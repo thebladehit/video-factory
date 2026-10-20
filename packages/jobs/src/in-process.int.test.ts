@@ -144,6 +144,41 @@ describe('InProcessQueue', () => {
     await expect(queue.retry(ok)).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
+  it('survives a store error during execution without an unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on('unhandledRejection', onUnhandled);
+    let failClaim = true;
+    const flaky = {
+      ...store,
+      claim: async (id: string) => {
+        if (failClaim) {
+          failClaim = false;
+          throw new Error('connection terminated');
+        }
+        return store.claim(id);
+      },
+    };
+    ({ queue, runtime } = createInProcessJobs(flaky));
+    runtime.register(sleepDef());
+    await runtime.start();
+    await queue.enqueue('debug.sleep', { steps: 1, ms: 1 }, opts);
+    const ok = await queue.enqueue('debug.sleep', { steps: 1, ms: 1 }, opts);
+    expect((await waitFor(ok)).status).toBe('done');
+    await new Promise((r) => setTimeout(r, 20));
+    process.off('unhandledRejection', onUnhandled);
+    expect(unhandled).toEqual([]);
+  });
+
+  it('stop() marks running jobs as interrupted by restart, not cancelled', async () => {
+    setup();
+    await runtime.start();
+    const id = await queue.enqueue('debug.sleep', { steps: 50, ms: 10 }, opts);
+    await waitFor(id, ['running']);
+    await runtime.stop();
+    expect(await queue.get(id)).toMatchObject({ status: 'failed', error: 'Перервано перезапуском сервера' });
+  });
+
   it('get of an unknown id throws NOT_FOUND', async () => {
     setup();
     await expect(queue.get(crypto.randomUUID())).rejects.toMatchObject({ code: 'NOT_FOUND' });

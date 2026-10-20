@@ -2,7 +2,8 @@ import cors from '@fastify/cors';
 import { fastifyTRPCPlugin, type FastifyTRPCPluginOptions } from '@trpc/server/adapters/fastify';
 import Fastify from 'fastify';
 import { createAiRegistry, createEnvCredentialStore, type AiRegistry } from '@vf/ai';
-import { createDb, type Db } from '@vf/db';
+import { sql } from 'drizzle-orm';
+import { createDb, seed, type Db } from '@vf/db';
 import { createInProcessJobs, createPgJobStore, type JobQueue, type WorkerRuntime } from '@vf/jobs';
 import { AppError } from '@vf/shared';
 import { createS3BlobStorage, type BlobStorage } from '@vf/storage';
@@ -25,13 +26,20 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   const dbHandle = createDb(cfg.databaseUrl);
   try {
     await dbHandle.ping();
-  } catch {
+  } catch (e) {
     await dbHandle.close();
     throw new AppError(
       'INFRA_UNAVAILABLE',
-      'Postgres недоступний за DATABASE_URL. Запустіть: docker compose up -d (і pnpm db:migrate, якщо БД нова)',
+      `Postgres недоступний за DATABASE_URL (${(e as Error).message}). Запустіть: docker compose up -d`,
     );
   }
+  const [migrated] = await dbHandle.db.execute<{ t: string | null }>(sql`select to_regclass('public.jobs') as t`);
+  if (!migrated?.t) {
+    await dbHandle.close();
+    throw new AppError('INFRA_UNAVAILABLE', 'База даних не мігрована. Виконайте: pnpm db:migrate');
+  }
+  // v1: локальний користувач має існувати без ручного кроку (ідемпотентно)
+  await seed(dbHandle.db);
 
   const server = Fastify({ logger: !process.env.VITEST, routerOptions: { maxParamLength: 5000 } });
   const storage = overrides.storage ?? createS3BlobStorage(cfg.s3);

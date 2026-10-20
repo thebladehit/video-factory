@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { userSettings } from '@vf/db';
 import { AppError, CAPABILITIES, type Capability, type ModelRef } from '@vf/shared';
@@ -29,17 +29,20 @@ export const settingsRouter = router({
       );
       if (!entry) throw new AppError('MODEL_NOT_FOUND', `Модель ${input.ref} не підходить для «${input.capability}»`);
       if (!entry.available) throw new AppError('MODEL_UNAVAILABLE', `Немає ключа для провайдера ${entry.provider}`);
-      const [row] = await ctx.deps.db.select().from(userSettings).where(eq(userSettings.userId, ctx.userId));
+      // upsert + jsonb-злиття: працює без рядка налаштувань і не губить паралельні зміни
       await ctx.deps.db
-        .update(userSettings)
-        .set({ defaults: { ...row?.defaults, [input.capability]: input.ref }, updatedAt: new Date() })
-        .where(eq(userSettings.userId, ctx.userId));
+        .insert(userSettings)
+        .values({ userId: ctx.userId, defaults: { [input.capability]: input.ref } })
+        .onConflictDoUpdate({
+          target: userSettings.userId,
+          set: { defaults: sql`${userSettings.defaults} || excluded.defaults`, updatedAt: new Date() },
+        });
     }),
 
   setChannelStyle: procedure.input(z.object({ text: z.string().max(4000) })).mutation(async ({ ctx, input }) => {
     await ctx.deps.db
-      .update(userSettings)
-      .set({ channelStyle: input.text, updatedAt: new Date() })
-      .where(eq(userSettings.userId, ctx.userId));
+      .insert(userSettings)
+      .values({ userId: ctx.userId, channelStyle: input.text })
+      .onConflictDoUpdate({ target: userSettings.userId, set: { channelStyle: input.text, updatedAt: new Date() } });
   }),
 });

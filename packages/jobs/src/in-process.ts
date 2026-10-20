@@ -17,6 +17,7 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
   const controllers = new Map<string, AbortController>();
   const listeners = new Set<(e: JobEvent) => void>();
   let started = false;
+  let shuttingDown = false;
 
   const emit = (r: JobRecord) => {
     const e: JobEvent = { jobId: r.id, status: r.status, progress: r.progress, message: r.message, error: r.error };
@@ -34,28 +35,38 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
 
   const schedule = (r: JobRecord) => void pqueueFor(r.type).add(() => execute(r.id));
 
+  /** Перерване зупинкою сервера — «failed» (як після рестарту), перерване користувачем — «cancelled». */
+  const finishAborted = (id: string) =>
+    shuttingDown ? store.finish(id, 'failed', { error: RESTART_ERROR }) : store.finish(id, 'cancelled', {});
+
   async function execute(id: string) {
-    const claimed = await store.claim(id);
-    if (!claimed) return;
-    emit(claimed);
-    const def = defs.get(claimed.type)!;
-    const ctrl = new AbortController();
-    controllers.set(id, ctrl);
     try {
-      const result = await def.handler(claimed.payload, {
-        jobId: id,
-        userId: claimed.userId,
-        signal: ctrl.signal,
-        progress: async (pct, message) => {
-          if (ctrl.signal.aborted) return;
-          emit(await store.progress(id, Math.min(100, Math.max(0, pct)), message ?? null));
-        },
-      });
-      emit(await store.finish(id, ctrl.signal.aborted ? 'cancelled' : 'done', { result }));
+      const claimed = await store.claim(id);
+      if (!claimed) return;
+      emit(claimed);
+      const def = defs.get(claimed.type)!;
+      const ctrl = new AbortController();
+      controllers.set(id, ctrl);
+      try {
+        const result = await def.handler(claimed.payload, {
+          jobId: id,
+          userId: claimed.userId,
+          signal: ctrl.signal,
+          progress: async (pct, message) => {
+            if (ctrl.signal.aborted) return;
+            emit(await store.progress(id, Math.min(100, Math.max(0, pct)), message ?? null));
+          },
+        });
+        emit(await (ctrl.signal.aborted ? finishAborted(id) : store.finish(id, 'done', { result })));
+      } catch (e) {
+        emit(await (ctrl.signal.aborted ? finishAborted(id) : store.finish(id, 'failed', { error: errorMessage(e) })));
+      } finally {
+        controllers.delete(id);
+      }
     } catch (e) {
-      emit(await store.finish(id, ctrl.signal.aborted ? 'cancelled' : 'failed', { error: errorMessage(e) }));
-    } finally {
-      controllers.delete(id);
+      // Збій сховища (напр. Postgres перезапускається) не має валити весь процес:
+      // задача лишиться queued/running, і її підбере відновлення під час наступного start().
+      console.error(`[jobs] не вдалося виконати задачу ${id}:`, e);
     }
   }
 
@@ -100,6 +111,7 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
       defs.set(def.type, def);
     },
     async start() {
+      shuttingDown = false;
       for (const r of await store.listByStatus(['running'])) {
         emit(await store.finish(r.id, 'failed', { error: RESTART_ERROR }));
       }
@@ -110,6 +122,7 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
     },
     async stop() {
       started = false;
+      shuttingDown = true;
       for (const q of queues.values()) q.clear();
       for (const c of controllers.values()) c.abort();
       await Promise.all([...queues.values()].map((q) => q.onIdle()));

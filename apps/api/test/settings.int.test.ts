@@ -42,4 +42,13 @@ describe('settings', () => {
     await ctx.caller.settings.setChannelStyle({ text: 'Коротко, з гумором' });
     expect((await ctx.caller.settings.get()).channelStyle).toBe('Коротко, з гумором');
   });
+
+  it('persists a default even when the settings row is missing', async () => {
+    await ctx.deps.db.delete(userSettings).where(eq(userSettings.userId, LOCAL_USER_ID));
+    await ctx.caller.settings.setDefault({ capability: 'text', ref: 'fake/text' });
+    await ctx.caller.settings.setChannelStyle({ text: 'x' });
+    const s = await ctx.caller.settings.get();
+    expect(s.defaults.text?.ref).toBe('fake/text');
+    expect(s.channelStyle).toBe('x');
+  });
 });
