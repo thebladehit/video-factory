@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import { deleteAsset, getAsset, listAssets, pendingAssets, topTags, updateAsset } from './search';
 import { procedure, router } from '../../trpc';
 import { abortUpload, completeUpload, createUpload, listUploadedParts, retryProcess, signParts } from './service';
 
 const assetId = z.object({ assetId: z.string() });
+const byId = z.object({ id: z.string() });
 
 export const assetsRouter = router({
   createUpload: procedure
@@ -23,6 +25,38 @@ export const assetsRouter = router({
       }),
     )
     .mutation(({ ctx, input }) => completeUpload(ctx.deps, ctx.userId, input)),
+
+  list: procedure
+    .input(
+      z.object({
+        q: z.string().max(200).optional(),
+        kind: z.enum(['image', 'video', 'audio']).optional(),
+        source: z.enum(['uploaded', 'generated']).optional(),
+        orientation: z.enum(['vertical', 'horizontal', 'square']).optional(),
+        tags: z.array(z.string().max(40)).max(10).optional(),
+        cursor: z.string().max(500).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      }),
+    )
+    .query(({ ctx, input }) => listAssets(ctx.deps, ctx.userId, input)),
+
+  pending: procedure.query(({ ctx }) => pendingAssets(ctx.deps, ctx.userId)),
+
+  get: procedure.input(byId).query(({ ctx, input }) => getAsset(ctx.deps, ctx.userId, input.id)),
+
+  update: procedure
+    .input(
+      z.object({
+        id: z.string(),
+        title: z.string().max(200).optional(),
+        tags: z.array(z.string()).max(100).optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) => updateAsset(ctx.deps, ctx.userId, input)),
+
+  delete: procedure.input(byId).mutation(({ ctx, input }) => deleteAsset(ctx.deps, ctx.userId, input.id)),
+
+  tags: procedure.query(({ ctx }) => topTags(ctx.deps, ctx.userId)),
 
   retryProcess: procedure
     .input(z.object({ id: z.string() }))
