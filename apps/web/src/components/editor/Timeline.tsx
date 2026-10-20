@@ -99,7 +99,6 @@ export function Timeline({
 }) {
   const doc = useStore(store, (s) => s.doc);
   const pps = useStore(ui, (s) => s.pxPerSec);
-  const playhead = useStore(ui, (s) => s.playhead);
   const selected = useStore(ui, (s) => s.selected);
   const snapLine = useStore(ui, (s) => s.snapLine);
   const invalid = useStore(ui, (s) => s.invalidClips);
@@ -289,7 +288,7 @@ export function Timeline({
     if (!raw && !files.length) return;
     // без stopPropagation: глобальний DropOverlay має побачити drop (defaultPrevented), щоб сховатися
     e.preventDefault();
-    const at = snap(timeAt(e.clientX), snapTargets(doc, { playhead, exclude: [] }), {
+    const at = snap(timeAt(e.clientX), snapTargets(doc, { playhead: ui.getState().playhead, exclude: [] }), {
       tolerancePx: SNAP_PX,
       pxPerSec: pps,
     }).value;
@@ -397,11 +396,7 @@ export function Timeline({
               Перетягніть сюди файли з бібліотеки або з комп'ютера
             </div>
           )}
-          <div
-            data-testid="playhead"
-            className="pointer-events-none absolute top-0 bottom-0 z-30 w-px bg-red-500"
-            style={{ left: LABEL_W + playhead * pps }}
-          />
+          <Playhead ui={ui} pps={pps} />
           {snapLine !== null && (
             <div
               className="pointer-events-none absolute top-0 bottom-0 z-30 w-px bg-amber-400"
@@ -411,5 +406,17 @@ export function Timeline({
         </div>
       </div>
     </div>
+  );
+}
+
+/** Окремий компонент: під час програвання оновлюється лише лінія, а не всі доріжки й кліпи. */
+function Playhead({ ui, pps }: { ui: UiStore; pps: number }) {
+  const playhead = useStore(ui, (s) => s.playhead);
+  return (
+    <div
+      data-testid="playhead"
+      className="pointer-events-none absolute top-0 bottom-0 z-30 w-px bg-red-500"
+      style={{ left: LABEL_W + playhead * pps }}
+    />
   );
 }
