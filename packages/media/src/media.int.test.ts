@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { probe, run, synthAudio, synthImage, synthVideo, thumbnail, type MediaTools } from './index';
+import { peaks, probe, run, synthAudio, synthImage, synthVideo, thumbnail, type MediaTools } from './index';
 
 const tools: MediaTools = { ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' };
 let dir: string;
@@ -17,12 +17,18 @@ describe('probe', () => {
   it('probes a png', async () => {
     await synthImage(tools, file('a.png'), { width: 64, height: 48, color: '#ff0000', format: 'png' });
     const p = await probe(tools, file('a.png'));
-    expect(p).toEqual({ kind: 'image', mime: 'image/png', width: 64, height: 48 });
+    expect(p).toEqual({ kind: 'image', mime: 'image/png', width: 64, height: 48, hasAudio: false });
   });
 
   it('probes a jpg', async () => {
     await synthImage(tools, file('a.jpg'), { width: 64, height: 48, color: '#00ff00', format: 'jpg' });
-    expect(await probe(tools, file('a.jpg'))).toEqual({ kind: 'image', mime: 'image/jpeg', width: 64, height: 48 });
+    expect(await probe(tools, file('a.jpg'))).toEqual({
+      kind: 'image',
+      mime: 'image/jpeg',
+      width: 64,
+      height: 48,
+      hasAudio: false,
+    });
   });
 
   it('probes an mp4', async () => {
@@ -91,6 +97,7 @@ describe('thumbnail', () => {
     expect(await probe(tools, file('big.webp'))).toEqual({
       kind: 'image',
       mime: 'image/webp',
+      hasAudio: false,
       width: 512,
       height: 288,
     });
@@ -114,4 +121,65 @@ describe('run', () => {
   it('times out', async () => {
     await expect(run('sleep', ['5'], { timeoutMs: 200 })).rejects.toThrow(/таймаут/i);
   });
+
+  it('with onStdout streams chunks and does not buffer stdout', async () => {
+    const chunks: Buffer[] = [];
+    const r = await run('printf', ['hello'], { onStdout: (c) => chunks.push(c) });
+    expect(Buffer.concat(chunks).toString()).toBe('hello');
+    expect(r.stdout.length).toBe(0);
+  });
+});
+
+describe('audio detection and peaks', () => {
+  it('probe reports hasAudio for a video with a tone and not for a silent one', async () => {
+    await synthVideo(tools, file('tone.mp4'), { width: 160, height: 90, durationSec: 1, color: '#123456', tone: 440 });
+    await synthVideo(tools, file('mute.mp4'), { width: 160, height: 90, durationSec: 1, color: '#123456' });
+    expect(await probe(tools, file('tone.mp4'))).toMatchObject({ kind: 'video', hasAudio: true });
+    expect(await probe(tools, file('mute.mp4'))).toMatchObject({ kind: 'video', hasAudio: false });
+    await synthAudio(tools, file('h.wav'), { durationSec: 1, format: 'wav' });
+    expect(await probe(tools, file('h.wav'))).toMatchObject({ kind: 'audio', hasAudio: true });
+  });
+
+  it('peaks of 2s tone ≈ 200 values all > 100', async () => {
+    await synthVideo(tools, file('tone2.mp4'), { width: 160, height: 90, durationSec: 2, color: '#123456', tone: 440 });
+    const p = await peaks(tools, file('tone2.mp4'));
+    expect(Math.abs(p.length - 200)).toBeLessThanOrEqual(3);
+    // перші/останні вікна AAC можуть бути тихішими (priming)
+    expect([...p.slice(2, -2)].every((v) => v > 100)).toBe(true);
+  });
+
+  it('peaks of silence are all 0', async () => {
+    await run(tools.ffmpegPath, [
+      '-v',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'anullsrc=r=44100:cl=mono',
+      '-t',
+      '1',
+      file('sil.wav'),
+    ]);
+    const p = await peaks(tools, file('sil.wav'));
+    expect(p.length).toBe(100);
+    expect(p.every((v) => v === 0)).toBe(true);
+  });
+
+  it('peaks streams a 10-minute file without buffering stdout', async () => {
+    await run(tools.ffmpegPath, [
+      '-v',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'anullsrc=r=8000:cl=mono',
+      '-t',
+      '600',
+      file('long.wav'),
+    ]);
+    const p = await peaks(tools, file('long.wav'));
+    expect(p.length).toBe(60_000);
+  }, 60_000);
 });

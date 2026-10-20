@@ -16,6 +16,7 @@ export async function hasLiveJob(deps: AppDeps, type: string, key: 'assetId' | '
 /**
  * Після старту: черга позначила перервані задачі «failed (рестарт)», а доменні рядки лишились «в роботі».
  * Обробники ідемпотентні, тож просто ставимо задачі знову: asset.process — для processing без живої задачі,
+ * asset.analyze — для ready-відео/аудіо без аналізу звуку,
  * генерації — для перерваних рестартом (відео продовжить опитування збереженої операції, не платячи вдруге).
  */
 export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
@@ -23,6 +24,17 @@ export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
   for (const a of stuckAssets) {
     if (!(await hasLiveJob(deps, 'asset.process', 'assetId', a.id))) {
       await deps.jobs.queue.enqueue('asset.process', { assetId: a.id }, { userId: a.userId });
+    }
+  }
+
+  // файли, оброблені до появи аналізу звуку
+  const unanalyzed = await deps.db
+    .select({ id: assets.id, userId: assets.userId })
+    .from(assets)
+    .where(and(eq(assets.status, 'ready'), isNull(assets.hasAudio), inArray(assets.kind, ['video', 'audio'])));
+  for (const a of unanalyzed) {
+    if (!(await hasLiveJob(deps, 'asset.analyze', 'assetId', a.id))) {
+      await deps.jobs.queue.enqueue('asset.analyze', { assetId: a.id }, { userId: a.userId });
     }
   }
 

@@ -7,6 +7,8 @@ export interface MediaProbe {
   width?: number;
   height?: number;
   durationMs?: number;
+  /** Є аудіопотік (для відео — звук, для аудіо — завжди true) */
+  hasAudio: boolean;
 }
 
 interface FfStream {
@@ -79,7 +81,13 @@ export async function probe(tools: MediaTools, path: string, opts: { signal?: Ab
     IMAGE_CODECS[video.codec_name] &&
     (format.endsWith('_pipe') || format === 'gif' || format === 'image2')
   ) {
-    return { kind: 'image', mime: IMAGE_CODECS[video.codec_name]!, width: video.width, height: video.height };
+    return {
+      kind: 'image',
+      mime: IMAGE_CODECS[video.codec_name]!,
+      width: video.width,
+      height: video.height,
+      hasAudio: false,
+    };
   }
   if (video && video.width && video.height) {
     const swap = rotation(video);
@@ -89,8 +97,9 @@ export async function probe(tools: MediaTools, path: string, opts: { signal?: Ab
       width: swap ? video.height : video.width,
       height: swap ? video.width : video.height,
       durationMs,
+      hasAudio: !!audio,
     };
   }
-  if (audio) return { kind: 'audio', mime: audioMime(format, audio.codec_name), durationMs };
+  if (audio) return { kind: 'audio', mime: audioMime(format, audio.codec_name), durationMs, hasAudio: true };
   throw new AppError('VALIDATION', UNREADABLE);
 }

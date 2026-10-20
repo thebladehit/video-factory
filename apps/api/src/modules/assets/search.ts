@@ -23,6 +23,8 @@ export interface AssetView {
   width: number | null;
   height: number | null;
   durationMs: number | null;
+  /** null — ще не проаналізовано */
+  hasAudio: boolean | null;
   sizeBytes: number | null;
   prompt: string | null;
   url: string;
@@ -88,6 +90,7 @@ async function toView(deps: AppDeps, r: Joined): Promise<AssetView> {
     width: a.width,
     height: a.height,
     durationMs: a.durationMs,
+    hasAudio: a.hasAudio,
     sizeBytes: a.sizeBytes,
     prompt: a.prompt,
     url: await deps.storage.presignGet(a.storageKey),
@@ -189,6 +192,7 @@ export async function deleteAsset(deps: AppDeps, userId: string, id: string): Pr
   if (row.uploadId) await deps.storage.abortMultipart(row.storageKey, row.uploadId);
   await deps.storage.delete(row.storageKey);
   if (row.thumbKey) await deps.storage.delete(row.thumbKey);
+  if (row.peaksKey) await deps.storage.delete(row.peaksKey);
   await deps.db.delete(assets).where(eq(assets.id, row.id));
 }
 

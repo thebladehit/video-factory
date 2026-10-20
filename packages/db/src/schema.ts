@@ -14,8 +14,8 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { ASSET_STATUSES, CAPABILITIES, JOB_STATUSES } from '@vf/shared';
-import type { DefaultSlot, ModelRef } from '@vf/shared';
+import { ASSET_STATUSES, CAPABILITIES, FORMATS, JOB_STATUSES } from '@vf/shared';
+import type { DefaultSlot, ModelRef, TimelineDoc, VideoFormat } from '@vf/shared';
 
 const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -122,6 +122,10 @@ export const assets = pgTable(
     prompt: text('prompt'),
     language: text('language'),
     generationId: uuid('generation_id').references(() => generations.id, { onDelete: 'set null' }),
+    /** null — ще не проаналізовано (asset.analyze) */
+    hasAudio: boolean('has_audio'),
+    /** Піки хвилі: Uint8 по 100 значень на секунду */
+    peaksKey: text('peaks_key'),
     // 'simple': контент багатомовний, української конфігурації в Postgres немає
     search: tsvector('search').generatedAlwaysAs(
       sql`to_tsvector('simple', coalesce(title, '') || ' ' || vf_tags_text(tags) || ' ' || coalesce(prompt, ''))`,
@@ -136,5 +140,74 @@ export const assets = pgTable(
     check('assets_kind_check', sql`${t.kind} in ('image', 'video', 'audio')`),
     check('assets_source_check', sql`${t.source} in ('generated', 'uploaded', 'rendered')`),
     check('assets_status_check', sql`${t.status} in (${inList(ASSET_STATUSES)})`),
+  ],
+);
+
+const VIDEO_FORMATS = Object.keys(FORMATS) as VideoFormat[];
+export const PROJECT_STATUSES = ['draft', 'ready', 'published'] as const;
+export const RENDER_PRESETS = ['final', 'draft'] as const;
+
+export const projects = pgTable(
+  'projects',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    format: text('format').$type<VideoFormat>().notNull(),
+    fps: integer('fps').notNull().default(30),
+    timeline: jsonb('timeline').$type<TimelineDoc>().notNull(),
+    timelineVersion: integer('timeline_version').notNull().default(1),
+    /** Перераховується сервером з таймлайну при кожному збереженні (для assets.usage) */
+    assetIds: uuid('asset_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    status: text('status', { enum: PROJECT_STATUSES }).notNull().default('draft'),
+    topic: text('topic'),
+    baseLanguage: text('base_language').notNull().default('uk'),
+    languages: text('languages')
+      .array()
+      .notNull()
+      .default(sql`'{uk}'::text[]`),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('projects_user_updated_idx').on(t.userId, t.updatedAt),
+    index('projects_asset_ids_idx').using('gin', t.assetIds),
+    check('projects_format_check', sql`${t.format} in (${inList(VIDEO_FORMATS)})`),
+    check('projects_status_check', sql`${t.status} in (${inList(PROJECT_STATUSES)})`),
+  ],
+);
+
+export const renders = pgTable(
+  'renders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    preset: text('preset', { enum: RENDER_PRESETS }).notNull(),
+    language: text('language'),
+    timelineSnapshot: jsonb('timeline_snapshot').$type<TimelineDoc>().notNull(),
+    timelineVersion: integer('timeline_version').notNull(),
+    /** Дзеркало статусу задачі */
+    status: text('status', { enum: JOB_STATUSES }).notNull().default('queued'),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    /** = id рендеру, коли asset створено після ffmpeg */
+    outputAssetId: uuid('output_asset_id').references(() => assets.id, { onDelete: 'set null' }),
+    error: text('error'),
+    createdAt: createdAt(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('renders_project_created_idx').on(t.projectId, t.createdAt),
+    check('renders_preset_check', sql`${t.preset} in (${inList(RENDER_PRESETS)})`),
+    check('renders_status_check', sql`${t.status} in (${inList(JOB_STATUSES)})`),
   ],
 );

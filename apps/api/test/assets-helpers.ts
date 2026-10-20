@@ -25,6 +25,8 @@ export const pngBytes = (width = 64, height = 48, color = '#ff8800') =>
   synth('a.png', (p) => synthImage(tools, p, { width, height, color, format: 'png' }));
 export const mp4Bytes = (durationSec = 2) =>
   synth('v.mp4', (p) => synthVideo(tools, p, { width: 320, height: 180, durationSec, color: '#2244aa' }));
+export const toneMp4Bytes = (durationSec = 2) =>
+  synth('t.mp4', (p) => synthVideo(tools, p, { width: 320, height: 180, durationSec, color: '#2244aa', tone: 440 }));
 export const mp3Bytes = () => synth('a.mp3', (p) => synthAudio(tools, p, { durationSec: 1, format: 'mp3' }));
 
 /** Повний шлях браузера: createUpload → PUT на presigned URL → complete */

@@ -18,6 +18,7 @@ import { singleUserAuth, type AuthProvider } from './auth/single-user';
 import type { AppConfig } from './config';
 import { debugSleep } from './jobs/debug-sleep';
 import { cleanupStaleUploads } from './modules/assets/cleanup';
+import { assetAnalyzeJob } from './modules/assets/analyze-job';
 import { assetProcessJob } from './modules/assets/process-job';
 import { reconcileAfterRestart } from './modules/recovery';
 import { assetsTagJob } from './modules/assets/tag-job';
@@ -98,6 +99,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   };
   deps.jobs.runtime.register(debugSleep);
   deps.jobs.runtime.register(assetProcessJob(deps, tagAfterProcess));
+  deps.jobs.runtime.register(assetAnalyzeJob(deps));
   deps.jobs.runtime.register(assetsTagJob(deps));
   deps.jobs.runtime.register(imageGenerateJob(deps));
   deps.jobs.runtime.register(videoGenerateJob(deps, { pollMs: cfg.videoPollMs, timeoutMs: cfg.videoTimeoutMs }));
