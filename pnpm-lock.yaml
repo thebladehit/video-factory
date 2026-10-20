@@ -220,6 +220,9 @@ importers:
       '@vf/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@vf/timeline':
+        specifier: workspace:*
+        version: link:../../packages/timeline
       drizzle-orm:
         specifier: ^0.45
         version: 0.45.4(postgres@3.4.9)

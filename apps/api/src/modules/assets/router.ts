@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { deleteAsset, getAsset, listAssets, pendingAssets, topTags, updateAsset } from './search';
 import { procedure, router } from '../../trpc';
+import { assetUsage } from '../projects/service';
 import {
   abortUpload,
   completeUpload,
@@ -66,6 +67,8 @@ export const assetsRouter = router({
     .mutation(({ ctx, input }) => updateAsset(ctx.deps, ctx.userId, input)),
 
   delete: procedure.input(byId).mutation(({ ctx, input }) => deleteAsset(ctx.deps, ctx.userId, input.id)),
+
+  usage: procedure.input(byId).query(({ ctx, input }) => assetUsage(ctx.deps, ctx.userId, input.id)),
 
   tags: procedure.query(({ ctx }) => topTags(ctx.deps, ctx.userId)),
 
