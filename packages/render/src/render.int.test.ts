@@ -428,6 +428,33 @@ describe('FfmpegRenderer', () => {
     120_000,
   );
 
+  it('phone photo with EXIF Orientation=6 renders upright and undistorted, like the browser shows it', async () => {
+    // збережено 64×32: ліва половина червона, права синя; показується 32×64 (поворот на 90°) — червоне зверху
+    const path = file('rot6.jpg');
+    await synthImage(tools, path, {
+      width: 64,
+      height: 32,
+      color: '#ff0000',
+      rightColor: '#0000ff',
+      format: 'jpg',
+      orientation: 6,
+    });
+    const p = await probe(tools, path);
+    fixtures.set('rot6', { path, kind: 'image', width: p.width, height: p.height, hasAudio: false });
+    const r = put(emptyTimeline('16:9'), asset('rot6'), 0);
+    const doc = {
+      ...r.doc,
+      tracks: r.doc.tracks.map((t) =>
+        t.kind === 'video' ? { ...t, clips: t.clips.map((c) => ({ ...c, fit: 'contain' as const })) } : t,
+      ),
+    } as TimelineDoc;
+    const out = await renderDoc(doc, 'draft', 'exif');
+    // contain портретного 1:2 у 16:9 — смуга 360 px по центру, по боках чорне
+    expect(near(await rgbAt(out, 1, 0.15, 0.5), BLACK)).toBe(true);
+    expect(near(await rgbAt(out, 1, 0.5, 0.25), RED, 60)).toBe(true);
+    expect(near(await rgbAt(out, 1, 0.5, 0.75), BLUE, 60)).toBe(true);
+  }, 60_000);
+
   it('tone inside clip, silence outside', async () => {
     const doc = put(emptyTimeline('9:16'), asset('vtone'), 1).doc; // відео + зв'язане аудіо [1,3)
     const out = await renderDoc(doc, 'draft', 'tone');

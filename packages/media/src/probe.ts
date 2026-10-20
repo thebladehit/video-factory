@@ -1,4 +1,6 @@
 import { AppError } from '@vf/shared';
+import { open } from 'node:fs/promises';
+import { jpegOrientation } from './exif';
 import { MediaToolError, run, type MediaTools } from './ffmpeg';
 
 export interface MediaProbe {
@@ -11,6 +13,20 @@ export interface MediaProbe {
   hasAudio: boolean;
   /** Кількість каналів аудіопотоку (моно в рендері розкладається на обидва канали без −3 дБ) */
   audioChannels?: number;
+  /** EXIF Orientation фото (1–8); розміри вже відображувані */
+  orientation?: number;
+}
+
+/** Початок файлу, де лежать EXIF-сегменти JPEG. */
+async function head(path: string, bytes = 256 * 1024): Promise<Buffer> {
+  const fh = await open(path, 'r');
+  try {
+    const buf = Buffer.alloc(bytes);
+    const { bytesRead } = await fh.read(buf, 0, bytes, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
 }
 
 interface FfStream {
@@ -84,12 +100,16 @@ export async function probe(tools: MediaTools, path: string, opts: { signal?: Ab
     IMAGE_CODECS[video.codec_name] &&
     (format.endsWith('_pipe') || format === 'gif' || format === 'image2')
   ) {
+    const mime = IMAGE_CODECS[video.codec_name]!;
+    const orientation = mime === 'image/jpeg' ? jpegOrientation(await head(path)) : 1;
+    const swap = orientation >= 5; // 5–8 — поворот на 90°
     return {
       kind: 'image',
-      mime: IMAGE_CODECS[video.codec_name]!,
-      width: video.width,
-      height: video.height,
+      mime,
+      width: swap ? video.height : video.width,
+      height: swap ? video.width : video.height,
       hasAudio: false,
+      ...(orientation !== 1 ? { orientation } : {}),
     };
   }
   if (video && video.width && video.height) {

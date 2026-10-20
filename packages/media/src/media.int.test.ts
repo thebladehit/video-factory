@@ -2,7 +2,17 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { peaks, probe, run, synthAudio, synthImage, synthVideo, thumbnail, type MediaTools } from './index';
+import {
+  jpegOrientation,
+  peaks,
+  probe,
+  run,
+  synthAudio,
+  synthImage,
+  synthVideo,
+  thumbnail,
+  type MediaTools,
+} from './index';
 
 const tools: MediaTools = { ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' };
 let dir: string;
@@ -182,4 +192,28 @@ describe('audio detection and peaks', () => {
     const p = await peaks(tools, file('long.wav'));
     expect(p.length).toBe(60_000);
   }, 60_000);
+});
+
+describe('EXIF orientation (phone photos)', () => {
+  it('probe reports display size and orientation of a JPEG with Orientation=6', async () => {
+    await synthImage(tools, file('rot6.jpg'), {
+      width: 64,
+      height: 32,
+      color: '#ff0000',
+      format: 'jpg',
+      orientation: 6,
+    });
+    expect(await probe(tools, file('rot6.jpg'))).toMatchObject({
+      kind: 'image',
+      width: 32,
+      height: 64,
+      orientation: 6,
+    });
+  });
+
+  it('plain JPEG has orientation 1 and stored size', async () => {
+    await synthImage(tools, file('rot1.jpg'), { width: 64, height: 32, color: '#ff0000', format: 'jpg' });
+    expect(await probe(tools, file('rot1.jpg'))).toMatchObject({ width: 64, height: 32 });
+    expect(jpegOrientation(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBe(1);
+  });
 });
