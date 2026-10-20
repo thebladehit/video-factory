@@ -39,10 +39,10 @@ export function imageGenerateJob(deps: AppDeps): JobDef<{ generationId: string }
         await setGenerationStatus(deps, g.id, { status: 'done', costEstimate: cost === null ? null : cost.toFixed(6) });
         return { assetIds };
       } catch (e) {
-        await setGenerationStatus(deps, g.id, {
-          status: ctx.signal.aborted ? 'cancelled' : 'failed',
-          error: (e as Error).message,
-        });
+        // скасування користувачем чи зупинка сервера: стан бере задача (див. listGenerations),
+        // а перервану рестартом генерацію відновлення підхопить з provider_op
+        if (!ctx.signal.aborted)
+          await setGenerationStatus(deps, g.id, { status: 'failed', error: (e as Error).message });
         throw e;
       }
     },

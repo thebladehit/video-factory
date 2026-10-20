@@ -91,8 +91,11 @@ export function createS3BlobStorage(cfg: S3Config): BlobStorage {
       });
     },
 
-    presignGet(key, { expiresSec = 3600 } = {}) {
-      return getSignedUrl(signer, new GetObjectCommand({ Bucket, Key: key }), { expiresIn: expiresSec });
+    presignGet(key, { expiresSec = 3600, downloadName } = {}) {
+      const disposition = downloadName ? `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}` : undefined;
+      return getSignedUrl(signer, new GetObjectCommand({ Bucket, Key: key, ResponseContentDisposition: disposition }), {
+        expiresIn: expiresSec,
+      });
     },
 
     async head(key) {

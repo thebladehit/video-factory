@@ -7,7 +7,8 @@ export interface BlobStorage {
   /** Ідемпотентно */
   delete(key: string): Promise<void>;
   presignPut(key: string, opts: { contentType: string; expiresSec?: number }): Promise<string>;
-  presignGet(key: string, opts?: { expiresSec?: number }): Promise<string>;
+  /** downloadName — віддати як файл для збереження (Content-Disposition: attachment) */
+  presignGet(key: string, opts?: { expiresSec?: number; downloadName?: string }): Promise<string>;
   /** Розмір і тип об'єкта; null — немає */
   head(key: string): Promise<{ size: number; contentType: string } | null>;
   /** Multipart-завантаження великих файлів напряму з браузера; повертає uploadId */

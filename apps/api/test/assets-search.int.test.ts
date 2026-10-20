@@ -148,6 +148,8 @@ describe('asset management', () => {
     const id = await seed({ source: 'generated', generationId: gen!.id, thumbKey: 'k/thumb.webp' });
     const a = await caller.assets.get({ id });
     expect(a.url).toMatch(/^http/);
+    // кнопка «Завантажити файл»: cross-origin <a download> браузер ігнорує — потрібен attachment від S3
+    expect(decodeURIComponent(a.downloadUrl)).toContain('attachment');
     expect(a.thumbUrl).toMatch(/^http/);
     expect(a.generation).toEqual({ model: 'fake/image', costEstimate: 0.04 });
   });

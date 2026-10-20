@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { assets } from '@vf/db';
 import {
   AppError,
@@ -10,6 +10,7 @@ import {
   type AssetStatus,
 } from '@vf/shared';
 import type { AppDeps } from '../../app';
+import { hasLiveJob } from '../recovery';
 
 export type AssetRow = typeof assets.$inferSelect;
 /** mime — нормалізований тип, на який підписано URL: браузер має надіслати саме його в Content-Type */
@@ -62,6 +63,21 @@ export async function createUpload(
   });
   if (uploadId) return { assetId: id, mime, mode: 'multipart', uploadId, partSize: PART_SIZE };
   return { assetId: id, mime, mode: 'single', url: await deps.storage.presignPut(storageKey, { contentType: mime }) };
+}
+
+/** Новий presigned PUT для того самого asset — повтор одиночного завантаження без дубліката */
+export async function resignPut(
+  deps: AppDeps,
+  userId: string,
+  assetId: string,
+): Promise<{ assetId: string; mime: string; url: string }> {
+  const row = uploading(await ownAsset(deps, userId, assetId));
+  if (row.uploadId) throw new AppError('VALIDATION', 'Це multipart-завантаження');
+  return {
+    assetId: row.id,
+    mime: row.mime,
+    url: await deps.storage.presignPut(row.storageKey, { contentType: row.mime }),
+  };
 }
 
 export async function signParts(
@@ -126,12 +142,15 @@ export async function abortUpload(deps: AppDeps, userId: string, assetId: string
 /** «Повторити» для файлу з помилкою обробки */
 export async function retryProcess(deps: AppDeps, userId: string, assetId: string): Promise<{ jobId: string }> {
   const row = await ownAsset(deps, userId, assetId);
-  if (row.status !== 'failed')
+  // processing без живої задачі — обробку перервали (збій сховища, рестарт): теж можна повторити
+  const stuck = row.status === 'processing' && !(await hasLiveJob(deps, 'asset.process', 'assetId', row.id));
+  if (row.status !== 'failed' && !stuck) {
     throw new AppError('CONFLICT', 'Повторити можна лише файл з помилкою', { status: row.status });
+  }
   await deps.db
     .update(assets)
     .set({ status: 'processing', error: null })
-    .where(and(eq(assets.id, row.id), eq(assets.status, 'failed')));
+    .where(and(eq(assets.id, row.id), inArray(assets.status, ['failed', 'processing'])));
   return { jobId: await deps.jobs.queue.enqueue('asset.process', { assetId: row.id }, { userId }) };
 }
 

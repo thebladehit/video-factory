@@ -113,10 +113,10 @@ export async function estimate(
   return { usd };
 }
 
-/** Блок «В роботі»: активні й невдалі генерації за 7 днів */
+/** Блок «В роботі»: активні й невдалі генерації за 7 днів. Незавершена генерація бере стан своєї задачі. */
 export async function listGenerations(deps: AppDeps, userId: string): Promise<GenerationView[]> {
   const rows = await deps.db
-    .select({ g: generations, progress: jobs.progress })
+    .select({ g: generations, progress: jobs.progress, jobStatus: jobs.status, jobError: jobs.error })
     .from(generations)
     .leftJoin(jobs, eq(jobs.id, generations.jobId))
     .where(
@@ -129,15 +129,21 @@ export async function listGenerations(deps: AppDeps, userId: string): Promise<Ge
     )
     .orderBy(desc(generations.createdAt))
     .limit(50);
-  return rows.map(({ g, progress }) => ({
-    id: g.id,
-    capability: g.capability as 'image' | 'video',
-    model: `${g.provider}/${g.model}` as ModelRef,
-    prompt: g.prompt ?? '',
-    status: g.status,
-    error: g.error,
-    jobId: g.jobId,
-    progress: progress ?? 0,
-    createdAt: g.createdAt.toISOString(),
-  }));
+  return rows
+    .map(({ g, progress, jobStatus, jobError }) => {
+      // задачу скасували або перервали до того, як обробник оновив генерацію
+      const fromJob = g.status !== 'failed' && (jobStatus === 'cancelled' || jobStatus === 'failed');
+      return {
+        id: g.id,
+        capability: g.capability as 'image' | 'video',
+        model: `${g.provider}/${g.model}` as ModelRef,
+        prompt: g.prompt ?? '',
+        status: fromJob ? jobStatus! : g.status,
+        error: fromJob ? jobError : g.error,
+        jobId: g.jobId,
+        progress: progress ?? 0,
+        createdAt: g.createdAt.toISOString(),
+      };
+    })
+    .filter((g) => g.status !== 'cancelled');
 }

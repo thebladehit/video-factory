@@ -3,7 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc -p ." },
-  "dependencies": { "@vf/db": "workspace:*", "@vf/shared": "workspace:*", "drizzle-orm": "^0.45", "p-queue": "^10" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@vf/db": "workspace:*",
+    "@vf/shared": "workspace:*",
+    "drizzle-orm": "^0.45",
+    "p-queue": "^10"
+  }
 }

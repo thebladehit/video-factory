@@ -17,6 +17,9 @@ describe('asset.process', () => {
     expect(a).toMatchObject({ status: 'ready', width: 640, height: 480, mime: 'image/png', error: null });
     expect(a.thumbKey).toBe(assetKeys.thumb(LOCAL_USER_ID, id));
     expect(await deps.storage.head(a.thumbKey!)).toMatchObject({ contentType: 'image/webp' });
+    const view = await caller.assets.get({ id });
+    const res = await fetch(view.downloadUrl);
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment/);
   });
 
   it('processes an mp4', async () => {

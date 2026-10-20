@@ -45,6 +45,32 @@ describe('probe', () => {
     expect(await probe(tools, file('a.wav'))).toMatchObject({ kind: 'audio', mime: 'audio/wav' });
   });
 
+  it.each(['mp3', 'm4a'])('%s with embedded cover art is audio, not video', async (ext) => {
+    await synthAudio(tools, file('plain.mp3'), { durationSec: 1, format: 'mp3' });
+    await synthImage(tools, file('cover.png'), { width: 300, height: 300, color: '#aa3366', format: 'png' });
+    const out = file(`cover-art.${ext}`);
+    await run(tools.ffmpegPath, [
+      '-v',
+      'error',
+      '-y',
+      '-i',
+      file('plain.mp3'),
+      '-i',
+      file('cover.png'),
+      '-map',
+      '0:a',
+      '-map',
+      '1:v',
+      ...(ext === 'm4a' ? ['-c:a', 'aac'] : ['-c:a', 'copy']),
+      '-c:v',
+      ext === 'm4a' ? 'png' : 'copy',
+      '-disposition:v:0',
+      'attached_pic',
+      out,
+    ]);
+    expect(await probe(tools, out)).toMatchObject({ kind: 'audio', mime: ext === 'mp3' ? 'audio/mpeg' : 'audio/mp4' });
+  });
+
   it('rotated phone video reports display size', async () => {
     await synthVideo(tools, file('r.mp4'), { width: 320, height: 180, durationSec: 1, color: '#00ffff', rotate: 90 });
     expect(await probe(tools, file('r.mp4'))).toMatchObject({ kind: 'video', width: 180, height: 320 });

@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { createAiRegistry, createEnvCredentialStore, type AiRegistry, type VideoGen } from '@vf/ai';
+import { CATALOG, createAiRegistry, createEnvCredentialStore, type AiRegistry, type VideoGen } from '@vf/ai';
 import { assets, generations, jobs } from '@vf/db';
 import type { JobEvent } from '@vf/shared';
 import { LOCAL_USER_ID } from '@vf/shared';
@@ -195,5 +195,33 @@ describe('generate', () => {
       prompt: 'у списку',
       model: 'fake/video',
     });
+  });
+
+  it('video cost uses the measured duration when the provider does not report it', async () => {
+    // як Gemini Omni: тривалість обирає модель, файл приходить без durationMs
+    const catalog = CATALOG.map((e) =>
+      e.ref === 'fake/video'
+        ? {
+            ...e,
+            durations: undefined,
+            durationRange: [3, 10] as [number, number],
+            pricing: [{ unit: 'second' as const, usd: 0.1 }],
+          }
+        : e,
+    );
+    const bytes = await mp4Bytes(3);
+    const video: VideoGen = {
+      start: async () => ({ provider: 'fake', data: { id: 'x' } }),
+      poll: async () => [{ bytes, mime: 'video/mp4' }],
+    };
+    const ai: AiRegistry = {
+      ...createAiRegistry({ credentials: createEnvCredentialStore({ AI_FAKE: '1' }), media: tools, catalog }),
+      video: async () => video,
+    };
+    const { caller, deps } = await startApp(fast, { ai });
+    const { generationId } = await caller.generate.video({ model: 'fake/video', prompt: 'вартість', aspect: '16:9' });
+    const g = await waitForGeneration(deps, generationId, ['done', 'failed']);
+    expect(g.status).toBe('done');
+    expect(Number(g.costEstimate)).toBeCloseTo(0.3, 1);
   });
 });

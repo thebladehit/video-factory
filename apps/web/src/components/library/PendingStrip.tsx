@@ -7,6 +7,8 @@ import { Progress } from '@/components/ui/progress';
 import { useJobFeed } from '@/lib/job-feed';
 import { useTRPC } from '@/lib/trpc';
 
+/** Завантаження, що «висить» довше, — швидше за все, вкладку закрили: даємо прибрати вручну */
+const STALE_UPLOAD_MS = 5 * 60_000;
 const LIBRARY_JOBS = new Set(['asset.process', 'image.generate', 'video.generate', 'assets.tag']);
 const ASSET_STATUS = {
   uploading: 'Завантажується',
@@ -28,6 +30,7 @@ export function PendingStrip() {
   };
   const retryAsset = useMutation(trpc.assets.retryProcess.mutationOptions({ onSuccess: invalidate }));
   const deleteAsset = useMutation(trpc.assets.delete.mutationOptions({ onSuccess: invalidate }));
+  const abortUpload = useMutation(trpc.assets.abort.mutationOptions({ onSuccess: invalidate }));
   const retryJob = useMutation(trpc.jobs.retry.mutationOptions({ onSuccess: invalidate }));
 
   useJobFeed((e) => {
@@ -79,6 +82,11 @@ export function PendingStrip() {
             <span className={a.status === 'failed' ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
               {a.status === 'failed' ? a.error : ASSET_STATUS[a.status]}
             </span>
+            {a.status === 'uploading' && Date.now() - Date.parse(a.createdAt) > STALE_UPLOAD_MS && (
+              <Button size="sm" variant="ghost" onClick={() => abortUpload.mutate({ assetId: a.id })}>
+                <Trash2 /> Скасувати
+              </Button>
+            )}
             {a.status === 'failed' && (
               <div className="flex gap-1">
                 <Button size="sm" variant="outline" onClick={() => retryAsset.mutate({ id: a.id })}>

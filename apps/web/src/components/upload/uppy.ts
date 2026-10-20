@@ -34,6 +34,12 @@ export function createUppy(client: typeof trpcClient): VfUppy {
     shouldUseMultipart: (file) => (file.size ?? 0) >= MULTIPART_THRESHOLD,
     getChunkSize: () => PART_SIZE,
     async getUploadParameters(file) {
+      // повтор після помилки: той самий asset, новий URL (а не ще один рядок у бібліотеці)
+      const existing = file.meta.assetId as string | undefined;
+      if (existing && file.meta.mode === 'single') {
+        const again = await client.assets.resignPut.mutate({ assetId: existing });
+        return { method: 'PUT', url: again.url, headers: { 'content-type': again.mime } };
+      }
       const t = await ticket(file);
       if (t.mode !== 'single') throw new Error('Очікувалось одиночне завантаження');
       return { method: 'PUT', url: t.url, headers: { 'content-type': t.mime } };

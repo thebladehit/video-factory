@@ -1,5 +1,5 @@
 import { AppError } from '@vf/shared';
-import { run, type MediaTools } from './ffmpeg';
+import { MediaToolError, run, type MediaTools } from './ffmpeg';
 
 export interface MediaProbe {
   kind: 'image' | 'video' | 'audio';
@@ -17,6 +17,7 @@ interface FfStream {
   nb_frames?: string;
   tags?: { rotate?: string };
   side_data_list?: { rotation?: number }[];
+  disposition?: { attached_pic?: number };
 }
 interface FfProbe {
   streams?: FfStream[];
@@ -62,12 +63,13 @@ export async function probe(tools: MediaTools, path: string, opts: { signal?: Ab
     info = JSON.parse(stdout.toString()) as FfProbe;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw e;
-    if (opts.signal?.aborted) throw e;
+    if (e instanceof MediaToolError && e.reason === 'aborted') throw e;
     throw new AppError('VALIDATION', UNREADABLE, { cause: (e as Error).message });
   }
   const format = info.format?.format_name ?? '';
   const streams = info.streams ?? [];
-  const video = streams.find((s) => s.codec_type === 'video');
+  // обкладинка альбому в MP3/M4A — це «відеопотік» з attached_pic, а не відео
+  const video = streams.find((s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1);
   const audio = streams.find((s) => s.codec_type === 'audio');
   const seconds = Number(info.format?.duration);
   const durationMs = Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : undefined;

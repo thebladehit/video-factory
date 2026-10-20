@@ -26,6 +26,8 @@ export interface AssetView {
   sizeBytes: number | null;
   prompt: string | null;
   url: string;
+  /** Те саме, але браузер збереже файл, а не відкриє */
+  downloadUrl: string;
   thumbUrl: string | null;
   createdAt: string;
   generation: { model: string; costEstimate: number | null } | null;
@@ -66,6 +68,12 @@ const selection = {
 };
 type Joined = { asset: AssetRow; genProvider: string | null; genModel: string | null; genCost: string | null };
 
+const downloadName = (a: AssetRow) => {
+  if (a.originalName) return a.originalName;
+  const ext = a.storageKey.slice(a.storageKey.lastIndexOf('.') + 1);
+  return `${(a.title || 'file').slice(0, 80)}.${ext}`;
+};
+
 async function toView(deps: AppDeps, r: Joined): Promise<AssetView> {
   const a = r.asset;
   return {
@@ -83,6 +91,7 @@ async function toView(deps: AppDeps, r: Joined): Promise<AssetView> {
     sizeBytes: a.sizeBytes,
     prompt: a.prompt,
     url: await deps.storage.presignGet(a.storageKey),
+    downloadUrl: await deps.storage.presignGet(a.storageKey, { downloadName: downloadName(a) }),
     thumbUrl: a.thumbKey ? await deps.storage.presignGet(a.thumbKey) : null,
     createdAt: a.createdAt.toISOString(),
     generation:

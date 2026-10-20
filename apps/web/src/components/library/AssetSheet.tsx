@@ -151,7 +151,7 @@ export function AssetSheet({ assetId, onClose }: { assetId: string | null; onClo
                 <Sparkles /> Згенерувати теги
               </Button>
               <Button variant="outline" asChild>
-                <a href={asset.url} download>
+                <a href={asset.downloadUrl} download>
                   <Download /> Завантажити файл
                 </a>
               </Button>

@@ -19,6 +19,7 @@ import type { AppConfig } from './config';
 import { debugSleep } from './jobs/debug-sleep';
 import { cleanupStaleUploads } from './modules/assets/cleanup';
 import { assetProcessJob } from './modules/assets/process-job';
+import { reconcileAfterRestart } from './modules/recovery';
 import { assetsTagJob } from './modules/assets/tag-job';
 import { imageGenerateJob } from './modules/generate/image-job';
 import { videoGenerateJob } from './modules/generate/video-job';
@@ -111,6 +112,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     } satisfies FastifyTRPCPluginOptions<AppRouter>['trpcOptions'],
   });
 
+  let closed = false;
   return {
     server,
     deps,
@@ -120,11 +122,14 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
      */
     async start() {
       await deps.jobs.runtime.start();
+      await reconcileAfterRestart(deps);
       scheduler.every('assets.cleanup', 3_600_000, async () => void (await cleanupStaleUploads(deps)), {
         runOnStart: true,
       });
     },
     async close() {
+      if (closed) return;
+      closed = true;
       scheduler.stop();
       await deps.jobs.runtime.stop();
       await server.close();

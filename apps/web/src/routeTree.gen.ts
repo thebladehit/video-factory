@@ -8,131 +8,139 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root';
-import { Route as IndexRouteImport } from './routes/index';
-import { Route as AnalyticsRouteImport } from './routes/analytics';
-import { Route as LibraryRouteImport } from './routes/library';
-import { Route as PublicationsRouteImport } from './routes/publications';
-import { Route as SettingsRouteImport } from './routes/settings';
-import { Route as VoiceRouteImport } from './routes/voice';
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as AnalyticsRouteImport } from './routes/analytics'
+import { Route as LibraryRouteImport } from './routes/library'
+import { Route as PublicationsRouteImport } from './routes/publications'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as VoiceRouteImport } from './routes/voice'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const AnalyticsRoute = AnalyticsRouteImport.update({
   id: '/analytics',
   path: '/analytics',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const LibraryRoute = LibraryRouteImport.update({
   id: '/library',
   path: '/library',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const PublicationsRoute = PublicationsRouteImport.update({
   id: '/publications',
   path: '/publications',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const VoiceRoute = VoiceRouteImport.update({
   id: '/voice',
   path: '/voice',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute;
-  '/analytics': typeof AnalyticsRoute;
-  '/library': typeof LibraryRoute;
-  '/publications': typeof PublicationsRoute;
-  '/settings': typeof SettingsRoute;
-  '/voice': typeof VoiceRoute;
+  '/': typeof IndexRoute
+  '/analytics': typeof AnalyticsRoute
+  '/library': typeof LibraryRoute
+  '/publications': typeof PublicationsRoute
+  '/settings': typeof SettingsRoute
+  '/voice': typeof VoiceRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute;
-  '/analytics': typeof AnalyticsRoute;
-  '/library': typeof LibraryRoute;
-  '/publications': typeof PublicationsRoute;
-  '/settings': typeof SettingsRoute;
-  '/voice': typeof VoiceRoute;
+  '/': typeof IndexRoute
+  '/analytics': typeof AnalyticsRoute
+  '/library': typeof LibraryRoute
+  '/publications': typeof PublicationsRoute
+  '/settings': typeof SettingsRoute
+  '/voice': typeof VoiceRoute
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport;
-  '/': typeof IndexRoute;
-  '/analytics': typeof AnalyticsRoute;
-  '/library': typeof LibraryRoute;
-  '/publications': typeof PublicationsRoute;
-  '/settings': typeof SettingsRoute;
-  '/voice': typeof VoiceRoute;
+  __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/analytics': typeof AnalyticsRoute
+  '/library': typeof LibraryRoute
+  '/publications': typeof PublicationsRoute
+  '/settings': typeof SettingsRoute
+  '/voice': typeof VoiceRoute
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: '/' | '/analytics' | '/library' | '/publications' | '/settings' | '/voice';
-  fileRoutesByTo: FileRoutesByTo;
-  to: '/' | '/analytics' | '/library' | '/publications' | '/settings' | '/voice';
-  id: '__root__' | '/' | '/analytics' | '/library' | '/publications' | '/settings' | '/voice';
-  fileRoutesById: FileRoutesById;
+  fileRoutesByFullPath: FileRoutesByFullPath
+  fullPaths:
+    '/' | '/analytics' | '/library' | '/publications' | '/settings' | '/voice'
+  fileRoutesByTo: FileRoutesByTo
+  to: '/' | '/analytics' | '/library' | '/publications' | '/settings' | '/voice'
+  id:
+    | '__root__'
+    | '/'
+    | '/analytics'
+    | '/library'
+    | '/publications'
+    | '/settings'
+    | '/voice'
+  fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute;
-  AnalyticsRoute: typeof AnalyticsRoute;
-  LibraryRoute: typeof LibraryRoute;
-  PublicationsRoute: typeof PublicationsRoute;
-  SettingsRoute: typeof SettingsRoute;
-  VoiceRoute: typeof VoiceRoute;
+  IndexRoute: typeof IndexRoute
+  AnalyticsRoute: typeof AnalyticsRoute
+  LibraryRoute: typeof LibraryRoute
+  PublicationsRoute: typeof PublicationsRoute
+  SettingsRoute: typeof SettingsRoute
+  VoiceRoute: typeof VoiceRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
     '/': {
-      id: '/';
-      path: '/';
-      fullPath: '/';
-      preLoaderRoute: typeof IndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/analytics': {
-      id: '/analytics';
-      path: '/analytics';
-      fullPath: '/analytics';
-      preLoaderRoute: typeof AnalyticsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/analytics'
+      path: '/analytics'
+      fullPath: '/analytics'
+      preLoaderRoute: typeof AnalyticsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/library': {
-      id: '/library';
-      path: '/library';
-      fullPath: '/library';
-      preLoaderRoute: typeof LibraryRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/library'
+      path: '/library'
+      fullPath: '/library'
+      preLoaderRoute: typeof LibraryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/publications': {
-      id: '/publications';
-      path: '/publications';
-      fullPath: '/publications';
-      preLoaderRoute: typeof PublicationsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/publications'
+      path: '/publications'
+      fullPath: '/publications'
+      preLoaderRoute: typeof PublicationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
-      id: '/settings';
-      path: '/settings';
-      fullPath: '/settings';
-      preLoaderRoute: typeof SettingsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/voice': {
-      id: '/voice';
-      path: '/voice';
-      fullPath: '/voice';
-      preLoaderRoute: typeof VoiceRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/voice'
+      path: '/voice'
+      fullPath: '/voice'
+      preLoaderRoute: typeof VoiceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -143,5 +151,7 @@ const rootRouteChildren: RootRouteChildren = {
   PublicationsRoute: PublicationsRoute,
   SettingsRoute: SettingsRoute,
   VoiceRoute: VoiceRoute,
-};
-export const routeTree = rootRouteImport._addFileChildren(rootRouteChildren)._addFileTypes<FileRouteTypes>();
+}
+export const routeTree = rootRouteImport
+  ._addFileChildren(rootRouteChildren)
+  ._addFileTypes<FileRouteTypes>()

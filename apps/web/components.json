@@ -5,5 +5,11 @@
   "tsx": true,
   "tailwind": { "config": "", "css": "src/styles.css", "baseColor": "neutral", "cssVariables": true },
   "iconLibrary": "lucide",
-  "aliases": { "components": "@/components", "utils": "@/lib/utils", "ui": "@/components/ui", "lib": "@/lib", "hooks": "@/hooks" }
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  }
 }

@@ -7,6 +7,7 @@ import {
   createUpload,
   listUploadedParts,
   requestTagging,
+  resignPut,
   retryProcess,
   signParts,
 } from './service';
@@ -18,6 +19,8 @@ export const assetsRouter = router({
   createUpload: procedure
     .input(z.object({ name: z.string().min(1).max(255), mime: z.string().max(100), size: z.number().int().min(0) }))
     .mutation(({ ctx, input }) => createUpload(ctx.deps, ctx.userId, input)),
+
+  resignPut: procedure.input(assetId).mutation(({ ctx, input }) => resignPut(ctx.deps, ctx.userId, input.assetId)),
 
   signParts: procedure
     .input(z.object({ assetId: z.string(), partNumbers: z.array(z.number().int().min(1).max(10_000)).min(1).max(100) }))

@@ -120,4 +120,20 @@ describe('assets upload', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('50 МБ') });
     expect((await deps.db.select().from(assets)).length).toBe(before);
   });
+
+  it('resignPut gives a fresh URL for the same asset so a retried upload does not create a duplicate', async () => {
+    const { caller, deps } = await startApp();
+    const bytes = await pngBytes();
+    const name = `retry-${crypto.randomUUID()}.png`;
+    const t = await caller.assets.createUpload({ name, mime: 'image/png', size: bytes.length });
+    const again = await caller.assets.resignPut({ assetId: t.assetId });
+    expect(again).toMatchObject({ assetId: t.assetId, mime: 'image/png' });
+    const put = await fetch(again.url, { method: 'PUT', headers: { 'content-type': again.mime }, body: bytes });
+    expect(put.ok).toBe(true);
+    expect((await caller.assets.complete({ assetId: t.assetId })).status).toMatch(/processing|ready/);
+    await expect(caller.assets.resignPut({ assetId: t.assetId })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const rows = await deps.db.select().from(assets).where(eq(assets.originalName, name));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).not.toBe('uploading');
+  });
 });

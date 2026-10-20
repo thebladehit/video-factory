@@ -3,7 +3,8 @@ import { AppError, TERMINAL_STATUSES, toJobEvent, type JobEvent, type JobRecord,
 import { assertSerializablePayload } from './serializable';
 import type { JobDef, JobQueue, JobStore, WorkerRuntime } from './types';
 
-const RESTART_ERROR = 'Перервано перезапуском сервера';
+/** Помилка задач, перерваних зупинкою або рестартом сервера (за нею їх знаходить відновлення) */
+export const RESTART_ERROR = 'Перервано перезапуском сервера';
 const STOP_TIMEOUT_MS = 10_000;
 const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));

@@ -1,13 +1,31 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { eq } from 'drizzle-orm';
-import { estimateCost, type Aspect, type OpRef } from '@vf/ai';
-import { generations } from '@vf/db';
+import { and, eq, inArray } from 'drizzle-orm';
+import { estimateCost, type Aspect, type GeneratedFile, type OpRef } from '@vf/ai';
+import { probe } from '@vf/media';
+import { assets, generations } from '@vf/db';
 import type { JobDef } from '@vf/jobs';
 import type { ModelRef } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { setGenerationStatus, storeGeneratedFiles } from './store-files';
 
 const EXPECTED_MS = 120_000;
+
+/** Тривалість для вартості: від провайдера, інакше — виміряна ffprobe (Omni її не повідомляє). */
+async function measuredMs(deps: AppDeps, f: GeneratedFile, durationSec: number | null): Promise<number> {
+  if (f.durationMs) return f.durationMs;
+  const dir = await mkdtemp(join(tmpdir(), 'vf-gen-'));
+  try {
+    await writeFile(join(dir, 'v'), f.bytes);
+    return (await probe(deps.media, join(dir, 'v'))).durationMs ?? (durationSec ?? 0) * 1000;
+  } catch {
+    return (durationSec ?? 0) * 1000;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
 /**
  * video.generate: start → provider_op одразу в БД → poll до готовності → asset.
@@ -23,7 +41,17 @@ export function videoGenerateJob(
     async handler({ generationId }, ctx) {
       const [g] = await deps.db.select().from(generations).where(eq(generations.id, generationId));
       if (!g) return { assetIds: [] };
-      if (g.assetIds.length) return { assetIds: g.assetIds };
+      if (g.assetIds.length) {
+        // файли вже збережено (збій стався пізніше) — лише догнати обробку
+        const stuck = await deps.db
+          .select({ id: assets.id })
+          .from(assets)
+          .where(and(inArray(assets.id, g.assetIds), eq(assets.status, 'processing')));
+        for (const { id } of stuck)
+          await deps.jobs.queue.enqueue('asset.process', { assetId: id }, { userId: g.userId });
+        if (g.status !== 'done') await setGenerationStatus(deps, g.id, { status: 'done', error: null });
+        return { assetIds: g.assetIds };
+      }
       const ref = `${g.provider}/${g.model}` as ModelRef;
       const { aspect, durationSec } = g.params as { aspect: Aspect; durationSec: number | null };
       await setGenerationStatus(deps, g.id, { status: 'running', error: null });
@@ -45,7 +73,8 @@ export function videoGenerateJob(
           if (Array.isArray(state)) {
             await ctx.progress(95, 'Зберігаю');
             const assetIds = await storeGeneratedFiles(deps, g, state);
-            const seconds = state.reduce((s, f) => s + (f.durationMs ?? (durationSec ?? 0) * 1000), 0) / 1000;
+            const seconds =
+              (await Promise.all(state.map((f) => measuredMs(deps, f, durationSec)))).reduce((a, b) => a + b, 0) / 1000;
             const entry = (await deps.ai.catalog(g.userId)).find((e) => e.ref === ref);
             const cost = entry ? estimateCost(entry, { seconds }) : null;
             await setGenerationStatus(deps, g.id, {
@@ -63,10 +92,10 @@ export function videoGenerateJob(
           await sleep(opts.pollMs, undefined, { signal: ctx.signal });
         }
       } catch (e) {
-        await setGenerationStatus(deps, g.id, {
-          status: ctx.signal.aborted ? 'cancelled' : 'failed',
-          error: (e as Error).message,
-        });
+        // скасування користувачем чи зупинка сервера: стан бере задача (див. listGenerations),
+        // а перервану рестартом генерацію відновлення підхопить з provider_op
+        if (!ctx.signal.aborted)
+          await setGenerationStatus(deps, g.id, { status: 'failed', error: (e as Error).message });
         throw e;
       }
     },
