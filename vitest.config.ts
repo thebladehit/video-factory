@@ -12,6 +12,7 @@ export default defineConfig({
       ? { projects: roots.map((root) => ({ extends: true, test: { name: basename(root), root: resolve(root) } })) }
       : { include: ['packages/**/*.test.ts'] }),
     setupFiles: [resolve('vitest.setup.ts')],
+    globalSetup: [resolve('packages/db/test/global-setup.ts')],
     passWithNoTests: true,
     // int-тести різних пакетів ділять одну тестову БД
     fileParallelism: false,

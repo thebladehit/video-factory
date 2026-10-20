@@ -1,0 +1,15 @@
+{
+  "name": "@vf/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "generate": "drizzle-kit generate",
+    "migrate": "tsx --env-file=../../.env src/migrate.ts",
+    "seed": "tsx --env-file=../../.env src/seed-cli.ts"
+  },
+  "dependencies": { "@vf/shared": "workspace:*", "drizzle-orm": "^0.45", "postgres": "^3.4" },
+  "devDependencies": { "drizzle-kit": "^0.31" }
+}
