@@ -2,6 +2,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { synthAudio, synthImage, synthVideo, type MediaTools } from '@vf/media';
+import { eq } from 'drizzle-orm';
+import { assets } from '@vf/db';
+import type { AppDeps } from '../src/index';
 import type { startApp } from './helpers';
 
 type Caller = Awaited<ReturnType<typeof startApp>>['caller'];
@@ -34,10 +37,11 @@ export async function upload(caller: Caller, name: string, mime: string, bytes: 
   return ticket.assetId;
 }
 
-export async function waitForAsset(caller: Caller, id: string, statuses: string[], timeoutMs = 15_000) {
+export async function waitForAsset(deps: AppDeps, id: string, statuses: string[], timeoutMs = 15_000) {
   const started = Date.now();
   for (;;) {
-    const a = await caller.assets.get({ id });
+    const [a] = await deps.db.select().from(assets).where(eq(assets.id, id));
+    if (!a) throw new Error(`asset ${id} is gone`);
     if (statuses.includes(a.status)) return a;
     if (Date.now() - started > timeoutMs) throw new Error(`asset ${id} stuck in ${a.status}`);
     await new Promise((r) => setTimeout(r, 100));
