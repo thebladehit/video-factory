@@ -67,4 +67,34 @@ describe('db', () => {
       expect(Number(rows[0]!.s)).toBeGreaterThan(0.3);
     });
   });
+
+  describe('library columns', () => {
+    const base = () => ({
+      userId: LOCAL_USER_ID,
+      kind: 'image' as const,
+      source: 'uploaded' as const,
+      storageKey: `test/${crypto.randomUUID()}.png`,
+      mime: 'image/png',
+    });
+
+    it('asset status defaults to ready and rejects unknown values', async () => {
+      const [row] = await db.insert(assets).values(base()).returning();
+      expect(row!.status).toBe('ready');
+      await expect(db.insert(assets).values({ ...base(), status: 'bogus' as never })).rejects.toThrow();
+      await db.delete(assets).where(sql`${assets.id} = ${row!.id}`);
+    });
+
+    it('trigram on tags finds a typo', async () => {
+      const [row] = await db
+        .insert(assets)
+        .values({ ...base(), tags: ['котик'] })
+        .returning();
+      const found = await db
+        .select({ id: assets.id })
+        .from(assets)
+        .where(sql`similarity(vf_tags_text(${assets.tags}), 'котк') > 0.3`);
+      expect(found.map((r) => r.id)).toContain(row!.id);
+      await db.delete(assets).where(sql`${assets.id} = ${row!.id}`);
+    });
+  });
 });

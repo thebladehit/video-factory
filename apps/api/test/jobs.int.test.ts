@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { users } from '@vf/db';
 import type { JobEvent } from '@vf/shared';
 import { appRouter } from '../src/index';
@@ -85,6 +86,7 @@ describe('jobs', () => {
     expect(seen.every((e) => e.jobId === jobId)).toBe(true);
     expect(seen.some((e) => e.jobId === foreign.jobId)).toBe(false);
     expect(seen.at(-1)).toMatchObject({ jobId, status: 'done', type: 'debug.sleep' });
+    await deps.db.delete(users).where(eq(users.id, stranger!.id));
   });
 
   it('error responses carry no stack trace', async () => {
