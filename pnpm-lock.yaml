@@ -385,6 +385,12 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
+  packages/timeline:
+    dependencies:
+      '@vf/shared':
+        specifier: workspace:*
+        version: link:../shared
+
 packages:
 
   '@ai-sdk/anthropic@4.0.82':
