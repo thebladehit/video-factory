@@ -6,6 +6,8 @@ export interface LibrarySearch {
   source?: 'uploaded' | 'generated';
   orientation?: Orientation;
   tags?: string[];
+  /** Відкрита картка файлу (посилання «Відкрити в бібліотеці» з редактора) */
+  open?: string;
 }
 
 const oneOf = <T extends string>(v: unknown, values: readonly T[]): T | undefined =>
@@ -20,5 +22,6 @@ export function validateLibrarySearch(raw: Record<string, unknown>): LibrarySear
     source: oneOf(raw.source, ['uploaded', 'generated'] as const),
     orientation: oneOf(raw.orientation, ['vertical', 'horizontal', 'square'] as const),
     tags: tags?.length ? tags : undefined,
+    open: typeof raw.open === 'string' && raw.open ? raw.open : undefined,
   };
 }

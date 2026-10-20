@@ -287,8 +287,8 @@ export function Timeline({
     const raw = e.dataTransfer.getData(ASSET_MIME);
     const files = [...e.dataTransfer.files];
     if (!raw && !files.length) return;
+    // без stopPropagation: глобальний DropOverlay має побачити drop (defaultPrevented), щоб сховатися
     e.preventDefault();
-    e.stopPropagation();
     const at = snap(timeAt(e.clientX), snapTargets(doc, { playhead, exclude: [] }), {
       tolerancePx: SNAP_PX,
       pxPerSec: pps,

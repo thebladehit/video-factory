@@ -11,6 +11,18 @@ export interface EditorState {
   endGesture(): void;
   /** Документ з сервера (перезавантаження після конфлікту) — історія очищується */
   replaceDoc(doc: TimelineDoc): void;
+  /** Файл з ОС отримав id у бібліотеці: `local:…` → uuid у документі й у всій історії (не крок історії) */
+  rewriteAssetId(from: string, to: string): void;
+}
+
+function renameAsset(doc: TimelineDoc, from: string, to: string): TimelineDoc {
+  let changed = false;
+  const tracks = doc.tracks.map((t) => {
+    if (t.kind === 'captions' || !t.clips.some((c) => c.assetId === from)) return t;
+    changed = true;
+    return { ...t, clips: t.clips.map((c) => (c.assetId === from ? { ...c, assetId: to } : c)) } as typeof t;
+  });
+  return changed ? { ...doc, tracks } : doc;
 }
 
 export const HISTORY_LIMIT = 100;
@@ -39,6 +51,15 @@ export function createEditorStore(initial: TimelineDoc) {
           set({ doc: start });
           store.temporal.getState().resume();
           if (final !== start) set({ doc: final });
+        },
+        rewriteAssetId(from, to) {
+          const t = store.temporal;
+          const map = (states: Partial<{ doc: TimelineDoc }>[]) =>
+            states.map((st) => (st.doc ? { ...st, doc: renameAsset(st.doc, from, to) } : st));
+          t.getState().pause();
+          set({ doc: renameAsset(get().doc, from, to) });
+          t.getState().resume();
+          t.setState({ pastStates: map(t.getState().pastStates), futureStates: map(t.getState().futureStates) });
         },
         replaceDoc(doc) {
           gestureStart = null;

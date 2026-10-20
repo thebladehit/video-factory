@@ -491,3 +491,8 @@ export function setFormat(doc: TimelineDoc, format: VideoFormat): TimelineDoc {
 export function addVideoTrack(doc: TimelineDoc, newId: () => string = defaultId): TimelineDoc {
   return insertTrack(doc, { id: newId(), kind: 'video', clips: [] });
 }
+
+/** Усі кліпи відео- й звукових доріжок. */
+export function allClips(doc: TimelineDoc): (MediaClip | AudioClip)[] {
+  return clipTracks(doc).flatMap((t) => t.clips as AnyClip[]);
+}

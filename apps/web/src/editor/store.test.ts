@@ -70,3 +70,17 @@ describe('ui store', () => {
     expect(ui.getState().playhead).toBe(2);
   });
 });
+
+describe('rewriteAssetId', () => {
+  it('renames a local asset id in the doc and in the whole history without adding a step', () => {
+    const r = addClip(emptyTimeline('9:16'), { id: 'local:1', kind: 'image' }, { at: 0 }, () => `x${Math.random()}`);
+    const store = createEditorStore(emptyTimeline('9:16'));
+    store.getState().apply(() => r.doc);
+    store.getState().apply((d) => moveClip(d, r.clipIds[0]!, 2, {}));
+    store.getState().rewriteAssetId('local:1', 'real');
+    expect(findClip(store.getState().doc, r.clipIds[0]!)!.clip.assetId).toBe('real');
+    expect(store.temporal.getState().pastStates).toHaveLength(2);
+    store.temporal.getState().undo();
+    expect(findClip(store.getState().doc, r.clipIds[0]!)!.clip.assetId).toBe('real');
+  });
+});

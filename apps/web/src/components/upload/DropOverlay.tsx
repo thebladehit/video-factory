@@ -25,9 +25,11 @@ export function DropOverlay({ onFiles }: { onFiles: (files: File[]) => void }) {
     };
     const drop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
-      e.preventDefault();
       depth = 0;
       setActive(false);
+      // drop уже обробив таймлайн редактора (файли йдуть у бібліотеку звідти)
+      if (e.defaultPrevented) return;
+      e.preventDefault();
       onFiles(Array.from(e.dataTransfer!.files));
     };
     window.addEventListener('dragenter', enter);
