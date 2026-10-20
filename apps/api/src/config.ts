@@ -7,8 +7,6 @@ export interface AppConfig {
   apiPort: number;
   /** У контейнері — 0.0.0.0, локально — 127.0.0.1 */
   apiHost: string;
-  /** Адреса S3 для браузера: presigned URL підписуються на неї (у Docker відрізняється від S3_ENDPOINT) */
-  s3PublicEndpoint: string;
   ffmpegPath: string;
   ffprobePath: string;
   webOrigin: string;
@@ -21,9 +19,13 @@ const REQUIRED = ['DATABASE_URL', 'S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_
 export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   const missing = REQUIRED.filter((k) => !env[k]?.trim());
   if (missing.length) {
-    throw new AppError('VALIDATION', `Не задано змінні середовища: ${missing.join(', ')}. Скопіюйте .env.example у .env`, {
-      missing,
-    });
+    throw new AppError(
+      'VALIDATION',
+      `Не задано змінні середовища: ${missing.join(', ')}. Скопіюйте .env.example у .env`,
+      {
+        missing,
+      },
+    );
   }
   if (env.QUEUE_DRIVER && env.QUEUE_DRIVER !== 'inprocess') {
     throw new AppError('VALIDATION', `QUEUE_DRIVER=${env.QUEUE_DRIVER} ще не підтримується (доступно: inprocess)`);
@@ -37,10 +39,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       secretAccessKey: env.S3_SECRET_ACCESS_KEY!,
       bucket: env.S3_BUCKET!,
       forcePathStyle: env.S3_FORCE_PATH_STYLE !== 'false',
+      // адреса S3 для браузера (у Docker відрізняється від S3_ENDPOINT)
+      publicEndpoint: env.S3_PUBLIC_ENDPOINT || undefined,
     },
     apiPort: Number(env.API_PORT || 3001),
     apiHost: env.API_HOST || '127.0.0.1',
-    s3PublicEndpoint: env.S3_PUBLIC_ENDPOINT || env.S3_ENDPOINT!,
     ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
     ffprobePath: env.FFPROBE_PATH || 'ffprobe',
     webOrigin: env.WEB_ORIGIN || 'http://localhost:5173',

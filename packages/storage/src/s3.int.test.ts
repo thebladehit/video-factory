@@ -54,7 +54,11 @@ describe('S3BlobStorage', () => {
     const putUrl = await storage.presignPut(`${prefix}/cors.bin`, { contentType: 'application/octet-stream' });
     const res = await fetch(putUrl, {
       method: 'OPTIONS',
-      headers: { Origin: origin, 'Access-Control-Request-Method': 'PUT', 'Access-Control-Request-Headers': 'content-type' },
+      headers: {
+        Origin: origin,
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'content-type',
+      },
     });
     expect(res.headers.get('access-control-allow-origin')).toBeTruthy();
   });
@@ -63,5 +67,43 @@ describe('S3BlobStorage', () => {
     const started = Date.now();
     await expect(createS3BlobStorage({ ...cfg, endpoint: 'http://localhost:1' }).ping()).rejects.toThrow();
     expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('multipart upload via presigned parts', async () => {
+    const key = `${prefix}/multi.bin`;
+    const uploadId = await storage.createMultipart(key, { contentType: 'application/octet-stream' });
+    const chunks = [new Uint8Array(5 * 1024 * 1024), new TextEncoder().encode('0123456789')];
+    const parts = [];
+    for (const [i, body] of chunks.entries()) {
+      const url = await storage.presignPart(key, uploadId, i + 1);
+      const res = await fetch(url, { method: 'PUT', body });
+      expect(res.ok).toBe(true);
+      parts.push({ PartNumber: i + 1, ETag: res.headers.get('etag')! });
+    }
+    expect(await storage.listParts(key, uploadId)).toHaveLength(2);
+    await storage.completeMultipart(key, uploadId, parts);
+    expect(await storage.head(key)).toMatchObject({ size: 5 * 1024 * 1024 + 10 });
+  });
+
+  it('head of a missing key is null', async () => {
+    expect(await storage.head(`${prefix}/nope`)).toBeNull();
+  });
+
+  it('abortMultipart is idempotent', async () => {
+    const key = `${prefix}/aborted.bin`;
+    const uploadId = await storage.createMultipart(key, { contentType: 'application/octet-stream' });
+    await storage.abortMultipart(key, uploadId);
+    await storage.abortMultipart(key, uploadId);
+    await storage.abortMultipart(key, 'no-such-upload');
+  });
+
+  it('presigned urls use the public endpoint', async () => {
+    const pub = createS3BlobStorage({ ...cfg, publicEndpoint: 'http://public.example:9000' });
+    const urls = [
+      await pub.presignPut(`${prefix}/p`, { contentType: 'image/png' }),
+      await pub.presignGet(`${prefix}/p`),
+      await pub.presignPart(`${prefix}/p`, 'upload-1', 1),
+    ];
+    for (const url of urls) expect(url.startsWith('http://public.example:9000/')).toBe(true);
   });
 });

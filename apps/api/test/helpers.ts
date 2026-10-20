@@ -2,8 +2,9 @@ import { LOCAL_USER_ID } from '@vf/shared';
 import { afterEach } from 'vitest';
 import { createApp, loadConfig, appRouter, type AppConfig, type AppDeps } from '../src/index';
 
+// тести самі ходять за presigned URL зсередини контейнера — підписуємо на внутрішню адресу S3
 export const testConfig = (patch: Partial<AppConfig> = {}): AppConfig => ({
-  ...loadConfig({ ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL }),
+  ...loadConfig({ ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL, S3_PUBLIC_ENDPOINT: '' }),
   aiFake: true,
   ...patch,
 });
