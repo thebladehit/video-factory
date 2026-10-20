@@ -13,6 +13,7 @@ import {
 } from '@vf/jobs';
 import { AppError } from '@vf/shared';
 import { checkTools, type MediaTools } from '@vf/media';
+import { createFfmpegRenderer, type Renderer } from '@vf/render';
 import { createLazyBucket, createS3BlobStorage, type BlobStorage } from '@vf/storage';
 import { singleUserAuth, type AuthProvider } from './auth/single-user';
 import type { AppConfig } from './config';
@@ -24,6 +25,7 @@ import { reconcileAfterRestart } from './modules/recovery';
 import { assetsTagJob } from './modules/assets/tag-job';
 import { imageGenerateJob } from './modules/generate/image-job';
 import { videoGenerateJob } from './modules/generate/video-job';
+import { renderJob } from './modules/renders/render-job';
 import { tagAfterProcess } from './modules/assets/tagger';
 import { appRouter, type AppRouter } from './routers';
 
@@ -39,6 +41,7 @@ export interface AppDeps {
   jobs: { queue: JobQueue; runtime: WorkerRuntime };
   ai: AiRegistry;
   auth: AuthProvider;
+  renderer: Renderer;
 }
 
 /** Composition root: єдине місце, де інтерфейси отримують реалізації. */
@@ -95,6 +98,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
       }),
     jobs: overrides.jobs ?? createInProcessJobs(createPgJobStore(dbHandle.db)),
     auth: overrides.auth ?? singleUserAuth,
+    renderer: overrides.renderer ?? createFfmpegRenderer(media),
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
@@ -102,6 +106,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(assetAnalyzeJob(deps));
   deps.jobs.runtime.register(assetsTagJob(deps));
   deps.jobs.runtime.register(imageGenerateJob(deps));
+  deps.jobs.runtime.register(renderJob(deps));
   deps.jobs.runtime.register(videoGenerateJob(deps, { pollMs: cfg.videoPollMs, timeoutMs: cfg.videoTimeoutMs }));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
 

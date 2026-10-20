@@ -214,6 +214,9 @@ importers:
       '@vf/media':
         specifier: workspace:*
         version: link:../../packages/media
+      '@vf/render':
+        specifier: workspace:*
+        version: link:../../packages/render
       '@vf/shared':
         specifier: workspace:*
         version: link:../../packages/shared

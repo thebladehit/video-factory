@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { assets, generations, jobs } from '@vf/db';
+import { assets, generations, jobs, renders } from '@vf/db';
 import { RESTART_ERROR } from '@vf/jobs';
 import type { AppDeps } from '../app';
 
@@ -37,6 +37,27 @@ export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
       await deps.jobs.queue.enqueue('asset.analyze', { assetId: a.id }, { userId: a.userId });
     }
   }
+
+  // рендер, перерваний рестартом, — failed («Повторити» = новий запуск того самого рендеру)
+  const stuckRenders = await deps.db
+    .select({ id: renders.id, jobStatus: jobs.status, error: jobs.error })
+    .from(renders)
+    .leftJoin(jobs, eq(jobs.id, renders.jobId))
+    .where(
+      and(
+        inArray(renders.status, ['queued', 'running']),
+        or(isNull(jobs.id), inArray(jobs.status, ['failed', 'cancelled'])),
+      ),
+    );
+  for (const r of stuckRenders)
+    await deps.db
+      .update(renders)
+      .set(
+        r.jobStatus === 'cancelled'
+          ? { status: 'cancelled', finishedAt: new Date() }
+          : { status: 'failed', error: r.error ?? RESTART_ERROR, finishedAt: new Date() },
+      )
+      .where(eq(renders.id, r.id));
 
   const interrupted = await deps.db
     .select({ g: generations })

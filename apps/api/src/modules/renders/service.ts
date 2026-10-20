@@ -1,0 +1,134 @@
+import { and, desc, eq, inArray } from 'drizzle-orm';
+import { assets, jobs, renders } from '@vf/db';
+import type { Preset } from '@vf/render';
+import { AppError, normalizeDoc, TERMINAL_STATUSES, type AssetStatus, type JobStatus } from '@vf/shared';
+import { docDuration } from '@vf/timeline';
+import type { AppDeps } from '../../app';
+import { isUuid } from '../projects/editor-assets';
+import { ownProject } from '../projects/service';
+
+export interface RenderView {
+  id: string;
+  preset: Preset;
+  status: JobStatus;
+  progress: number;
+  message: string | null;
+  error: string | null;
+  createdAt: string;
+  output: { assetId: string; durationMs: number | null; downloadUrl: string; status: AssetStatus } | null;
+}
+
+export type RenderRow = typeof renders.$inferSelect;
+
+async function ownRender(deps: AppDeps, userId: string, id: string): Promise<RenderRow> {
+  const [row] = isUuid(id)
+    ? await deps.db
+        .select()
+        .from(renders)
+        .where(and(eq(renders.id, id), eq(renders.userId, userId)))
+    : [];
+  if (!row) throw new AppError('NOT_FOUND', 'Рендер не знайдено');
+  return row;
+}
+
+/** Перевірки перед рендером: версія, непорожній таймлайн, усі файли існують і готові. */
+export async function startRender(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; preset: Preset; version: number },
+): Promise<{ renderId: string; jobId: string }> {
+  const project = await ownProject(deps, userId, input.projectId);
+  if (project.timelineVersion !== input.version)
+    throw new AppError('CONFLICT', 'Проєкт змінено в іншій вкладці — оновіть сторінку');
+  const doc = normalizeDoc(project.timeline);
+  const clips: { id: string; assetId: string }[] = [];
+  for (const t of doc.tracks) if (t.kind !== 'captions') for (const c of t.clips) clips.push(c);
+  if (!clips.length || docDuration(doc) <= 0) throw new AppError('VALIDATION', 'Таймлайн порожній — додайте файли');
+  const ids = [...new Set(clips.map((c) => c.assetId).filter(isUuid))];
+  const rows = ids.length
+    ? await deps.db
+        .select({ id: assets.id, status: assets.status })
+        .from(assets)
+        .where(and(eq(assets.userId, userId), inArray(assets.id, ids)))
+    : [];
+  const ready = new Set(rows.filter((r) => r.status === 'ready').map((r) => r.id));
+  const bad = clips.filter((c) => !ready.has(c.assetId)).map((c) => c.id);
+  if (bad.length)
+    throw new AppError('VALIDATION', 'Деякі файли видалено або вони ще обробляються — замініть або приберіть їх', {
+      clipIds: bad,
+    });
+
+  const [r] = await deps.db
+    .insert(renders)
+    .values({
+      userId,
+      projectId: project.id,
+      preset: input.preset,
+      timelineSnapshot: doc,
+      timelineVersion: input.version,
+    })
+    .returning({ id: renders.id });
+  const jobId = await deps.jobs.queue.enqueue('render', { renderId: r!.id }, { userId });
+  await deps.db.update(renders).set({ jobId }).where(eq(renders.id, r!.id));
+  return { renderId: r!.id, jobId };
+}
+
+/** Історія рендерів проєкту. Незавершений рендер бере стан своєї задачі (скасування, рестарт). */
+export async function listRenders(deps: AppDeps, userId: string, projectId: string): Promise<RenderView[]> {
+  await ownProject(deps, userId, projectId);
+  const rows = await deps.db
+    .select({
+      r: renders,
+      job: { status: jobs.status, progress: jobs.progress, message: jobs.message, error: jobs.error },
+      a: assets,
+    })
+    .from(renders)
+    .leftJoin(jobs, eq(jobs.id, renders.jobId))
+    .leftJoin(assets, eq(assets.id, renders.outputAssetId))
+    .where(and(eq(renders.projectId, projectId), eq(renders.userId, userId)))
+    .orderBy(desc(renders.createdAt))
+    .limit(50);
+  return Promise.all(
+    rows.map(async ({ r, job, a }) => {
+      const fromJob =
+        !TERMINAL_STATUSES.has(r.status) && !!job?.status && TERMINAL_STATUSES.has(job.status) && job.status !== 'done';
+      const status = fromJob ? job!.status! : r.status;
+      return {
+        id: r.id,
+        preset: r.preset,
+        status,
+        progress: status === 'done' ? 100 : (job?.progress ?? 0),
+        message: job?.message ?? null,
+        error: fromJob ? (job?.error ?? null) : r.error,
+        createdAt: r.createdAt.toISOString(),
+        output: a
+          ? {
+              assetId: a.id,
+              durationMs: a.durationMs,
+              status: a.status,
+              downloadUrl: await deps.storage.presignGet(a.storageKey, { downloadName: `${a.title || 'render'}.mp4` }),
+            }
+          : null,
+      };
+    }),
+  );
+}
+
+export async function cancelRender(deps: AppDeps, userId: string, id: string): Promise<void> {
+  const r = await ownRender(deps, userId, id);
+  if (r.jobId) await deps.jobs.queue.cancel(r.jobId);
+}
+
+/** «Повторити»: новий запуск того самого рендеру (знімок таймлайну той самий). */
+export async function retryRender(deps: AppDeps, userId: string, id: string): Promise<{ jobId: string }> {
+  const r = await ownRender(deps, userId, id);
+  const job = r.jobId ? await deps.jobs.queue.get(r.jobId).catch(() => null) : null;
+  const live = job && !TERMINAL_STATUSES.has(job.status);
+  if (live || r.status === 'done') throw new AppError('CONFLICT', 'Рендер ще йде або вже готовий');
+  const jobId = await deps.jobs.queue.enqueue('render', { renderId: r.id }, { userId });
+  await deps.db
+    .update(renders)
+    .set({ jobId, status: 'queued', error: null, finishedAt: null })
+    .where(eq(renders.id, r.id));
+  return { jobId };
+}
