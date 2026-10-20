@@ -17,12 +17,17 @@ export interface GeneratedFile {
 export type Aspect = '9:16' | '16:9' | '1:1';
 
 export interface TextGen {
-  generateText(req: { prompt: string; system?: string; maxOutputTokens?: number; signal?: AbortSignal }): Promise<string>;
+  generateText(req: {
+    prompt: string;
+    system?: string;
+    maxOutputTokens?: number;
+    signal?: AbortSignal;
+  }): Promise<string>;
   generateObject<T>(schema: z.ZodType<T>, req: { prompt: string; system?: string; signal?: AbortSignal }): Promise<T>;
 }
 
 export interface ImageGen {
-  generate(req: { prompt: string; aspect: Aspect; n: number }): Promise<GeneratedFile[]>;
+  generate(req: { prompt: string; aspect: Aspect; n: number; signal?: AbortSignal }): Promise<GeneratedFile[]>;
 }
 
 export interface OpRef {

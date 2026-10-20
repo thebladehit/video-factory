@@ -20,7 +20,13 @@ const failing = (statusCode: number, message: string) => {
   const model = new MockLanguageModelV4({
     doGenerate: async () => {
       calls++;
-      throw new APICallError({ message, url: 'https://x', requestBodyValues: {}, statusCode, isRetryable: statusCode === 429 });
+      throw new APICallError({
+        message,
+        url: 'https://x',
+        requestBodyValues: {},
+        statusCode,
+        isRetryable: statusCode === 429,
+      });
     },
   });
   return { model, calls: () => calls };

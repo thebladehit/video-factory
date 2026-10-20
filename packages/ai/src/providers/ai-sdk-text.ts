@@ -1,15 +1,7 @@
-import { APICallError, generateText, Output, type LanguageModel } from 'ai';
-import { AppError, isAppError, type ProviderId } from '@vf/shared';
+import { generateText, Output, type LanguageModel } from 'ai';
+import type { ProviderId } from '@vf/shared';
+import { toProviderError } from './errors';
 import type { TextGen } from '../types';
-
-function toProviderError(provider: ProviderId, e: unknown): AppError {
-  if (isAppError(e)) return e;
-  // AI SDK обгортає ретраї в RetryError з lastError
-  const last = (e as { lastError?: unknown })?.lastError ?? e;
-  const status = APICallError.isInstance(last) ? last.statusCode : undefined;
-  const message = last instanceof Error ? last.message : String(last);
-  return new AppError('PROVIDER_ERROR', `${provider}: ${message}`, { provider, status });
-}
 
 export function createAiSdkTextGen(provider: ProviderId, model: LanguageModel): TextGen {
   return {
