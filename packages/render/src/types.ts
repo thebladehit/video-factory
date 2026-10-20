@@ -9,6 +9,8 @@ export interface SourceInfo {
   width?: number;
   height?: number;
   hasAudio: boolean;
+  /** Каналів у звуковому потоці; моно дублюється в обидва канали на повній гучності */
+  audioChannels?: number;
 }
 
 export interface CompileInput {

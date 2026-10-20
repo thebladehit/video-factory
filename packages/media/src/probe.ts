@@ -9,11 +9,14 @@ export interface MediaProbe {
   durationMs?: number;
   /** Є аудіопотік (для відео — звук, для аудіо — завжди true) */
   hasAudio: boolean;
+  /** Кількість каналів аудіопотоку (моно в рендері розкладається на обидва канали без −3 дБ) */
+  audioChannels?: number;
 }
 
 interface FfStream {
   codec_type?: string;
   codec_name?: string;
+  channels?: number;
   width?: number;
   height?: number;
   nb_frames?: string;
@@ -98,8 +101,16 @@ export async function probe(tools: MediaTools, path: string, opts: { signal?: Ab
       height: swap ? video.width : video.height,
       durationMs,
       hasAudio: !!audio,
+      ...(audio?.channels ? { audioChannels: audio.channels } : {}),
     };
   }
-  if (audio) return { kind: 'audio', mime: audioMime(format, audio.codec_name), durationMs, hasAudio: true };
+  if (audio)
+    return {
+      kind: 'audio',
+      mime: audioMime(format, audio.codec_name),
+      durationMs,
+      hasAudio: true,
+      ...(audio.channels ? { audioChannels: audio.channels } : {}),
+    };
   throw new AppError('VALIDATION', UNREADABLE);
 }

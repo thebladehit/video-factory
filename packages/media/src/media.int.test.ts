@@ -137,7 +137,7 @@ describe('audio detection and peaks', () => {
     expect(await probe(tools, file('tone.mp4'))).toMatchObject({ kind: 'video', hasAudio: true });
     expect(await probe(tools, file('mute.mp4'))).toMatchObject({ kind: 'video', hasAudio: false });
     await synthAudio(tools, file('h.wav'), { durationSec: 1, format: 'wav' });
-    expect(await probe(tools, file('h.wav'))).toMatchObject({ kind: 'audio', hasAudio: true });
+    expect(await probe(tools, file('h.wav'))).toMatchObject({ kind: 'audio', hasAudio: true, audioChannels: 1 });
   });
 
   it('peaks of 2s tone ≈ 200 values all > 100', async () => {

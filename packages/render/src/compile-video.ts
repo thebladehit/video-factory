@@ -10,6 +10,11 @@ import type { Size } from './types';
  * `overlay` з виразними `x/y` (глобальний `t`, фактичний `overlay_w/h` після округлення) на чорне полотно.
  * Варіант з `crop` відкинуто: crop тримає `in_w` з конфігурації й при змінному розмірі зсуває кадр
  * (асиметрія 126/255 у середині Ken Burns), до того ж не вміє contain і масштаб < 1. `zoompan` — тремтить.
+ * Композиція в yuv444 (overlay у yuv420 округлює позицію до парного пікселя: центр «пилкою» на 1,5 px),
+ * для Ken Burns — у 2× з поверненням до розміру виходу (compile.ts).
+ * Виміряно (ffmpeg 5.1.9, шахівниця 1200², 720×1280): середня абсолютна різниця з drawFrame
+ * 1.24 / 0.71 / 0.60 з 255 (t = 0.1 / 2.5 / 4.9 с), zoom 1.7 / 0.5 / 0.3; крок масштабу клітинки
+ * 0…0.30 px/кадр при середньому 0.16 (монотонно), дрейф центру 0.22 px.
  */
 export function transformFilter(
   effects: Effect[],
@@ -59,7 +64,7 @@ export function clipChain(
     ...(src.kind === 'video' ? [`tpad=stop_mode=clone:stop_duration=${D}`] : []),
     `trim=duration=${D}`,
     `scale=w='${tf.w}':h='${tf.h}':eval=frame:flags=bicubic`,
-    'format=yuva420p',
+    'format=yuva444p',
     ...(fadeIn > 0 ? [`fade=t=in:st=0:d=${num(Math.min(fadeIn, clip.duration))}:alpha=1`] : []),
     ...(fadeOut > 0
       ? [
@@ -68,6 +73,6 @@ export function clipChain(
       : []),
     `setpts=PTS+${num(clip.start)}/TB`,
   ];
-  const overlay = `overlay=x='${tf.x}':y='${tf.y}':eval=frame:eof_action=pass:enable='between(t,${num(clip.start)},${num(clip.start + clip.duration)})'`;
+  const overlay = `overlay=x='${tf.x}':y='${tf.y}':eval=frame:format=yuv444:eof_action=pass:enable='between(t,${num(clip.start)},${num(clip.start + clip.duration)})'`;
   return { chain: `[${input}:v]${steps.join(',')}[${label}]`, overlay };
 }

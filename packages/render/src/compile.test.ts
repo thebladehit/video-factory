@@ -103,6 +103,14 @@ describe('compileFfmpeg', () => {
     expect(c.filterScript).toMatch(/amix=inputs=2:normalize=0:duration=first/);
   });
 
+  it('mono audio goes to both channels at full level (as Web Audio plays it in the preview)', () => {
+    const m = add(emptyTimeline('9:16'), { id: 'M', kind: 'audio', durationSec: 3 }, 0);
+    expect(compile(m.doc, [src('M', 'audio', { audioChannels: 1 })]).filterScript).toMatch(
+      /\[0:a\]pan=stereo\|c0=c0\|c1=c0,/,
+    );
+    expect(compile(m.doc, [src('M', 'audio', { audioChannels: 2 })]).filterScript).not.toContain('pan=');
+  });
+
   it('audio fades are afade filters', () => {
     const m = add(emptyTimeline('9:16'), { id: 'M', kind: 'audio', durationSec: 3 }, 0);
     const doc = {
@@ -126,7 +134,7 @@ describe('compileFfmpeg', () => {
     const c = compile(add(emptyTimeline('9:16'), photo, 0).doc, [src('P', 'image')], 'draft');
     expect([c.width, c.height]).toEqual([720, 1280]);
     expect(c.args.join(' ')).toContain('-preset veryfast -crf 26');
-    expect(c.filterScript).toContain('color=c=black:s=720x1280:r=30');
+    expect(c.filterScript).toContain('format=yuv420p[vout]');
     expect(outputSize(emptyTimeline('16:9'), 'draft')).toEqual({ width: 1280, height: 720 });
   });
 
@@ -151,6 +159,19 @@ describe('compileFfmpeg', () => {
     const c = compile(doc, [src('P', 'image'), src('M', 'audio')]);
     expect(c.durationSec).toBe(8.5);
     expect(c.args[c.args.indexOf('-t', c.args.indexOf('-filter_complex_script')) + 1]).toBe('8.5');
+  });
+
+  it('ken burns composes at 2x and downsamples to the output size (smooth sub-pixel motion)', () => {
+    const c = compile(add(emptyTimeline('9:16'), photo, 0).doc, [src('P', 'image')], 'draft');
+    expect(c.filterScript).toContain('color=c=black:s=1440x2560:r=30');
+    expect(c.filterScript).toMatch(/scale=720:1280:flags=area,format=yuv420p\[vout\]/);
+    expect([c.width, c.height]).toEqual([720, 1280]);
+  });
+
+  it('without ken burns composes at 1x', () => {
+    const c = compile(add(emptyTimeline('9:16'), video, 0).doc, [src('V', 'video')], 'draft');
+    expect(c.filterScript).toContain('color=c=black:s=720x1280:r=30');
+    expect(c.filterScript).not.toContain('flags=area');
   });
 
   it('missing source → VALIDATION with clip ids', () => {

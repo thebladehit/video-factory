@@ -13,5 +13,8 @@
     "@vf/media": "workspace:*",
     "@vf/shared": "workspace:*",
     "@vf/timeline": "workspace:*"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.11"
   }
 }

@@ -44,19 +44,25 @@ export function compileFfmpeg(input: CompileInput): Compiled {
   }
   if (missing.length) throw new AppError('VALIDATION', 'Деякі файли проєкту недоступні', { clipIds: missing });
 
+  // Ken Burns: композиція в 2× з поверненням до розміру виходу — overlay ставить шар лише в цілі пікселі,
+  // а розмір шару округлюється до пікселя; у 2× похибка руху вдвічі менша (спайк Task 8)
+  const ss = visual.some(({ clip }) => clip.effects.some((e) => e.type === 'kenburns')) ? 2 : 1;
+  const canvas = { width: width * ss, height: height * ss };
   const args: string[] = [];
-  const graph: string[] = [`color=c=black:s=${width}x${height}:r=${fps}:d=${num(T)},format=yuv420p[base]`];
+  const graph: string[] = [
+    `color=c=black:s=${canvas.width}x${canvas.height}:r=${fps}:d=${num(T)},format=yuv444p[base]`,
+  ];
   let n = 0;
   let last = 'base';
   visual.forEach(({ clip, src }, i) => {
     if (src.kind === 'image')
       args.push('-loop', '1', '-framerate', String(fps), '-t', num(clip.duration), '-i', src.path);
     else args.push('-ss', num(clip.in), '-t', num(clip.duration), '-i', src.path);
-    const { chain, overlay } = clipChain(clip, n++, `v${i}`, src, { width, height }, fps);
+    const { chain, overlay } = clipChain(clip, n++, `v${i}`, src, canvas, fps);
     graph.push(chain, `[${last}][v${i}]${overlay}[o${i}]`);
     last = `o${i}`;
   });
-  graph.push(`[${last}]format=yuv420p[vout]`);
+  graph.push(`[${last}]${ss > 1 ? `scale=${width}:${height}:flags=area,` : ''}format=yuv420p[vout]`);
 
   // звук відео без аудіопотоку — тиша, а не «Stream specifier ':a' matches no streams»
   const sounds = audioPlan(doc).filter((a) => sources.get(a.assetId)?.hasAudio);
@@ -65,7 +71,7 @@ export function compileFfmpeg(input: CompileInput): Compiled {
   else {
     sounds.forEach((item, i) => {
       args.push('-ss', num(item.in), '-t', num(item.duration), '-i', sources.get(item.assetId)!.path);
-      graph.push(audioChain(item, n++, `a${i}`));
+      graph.push(audioChain(item, n++, `a${i}`, sources.get(item.assetId)!.audioChannels));
     });
     graph.push(`${silence}[asil]`);
     graph.push(
