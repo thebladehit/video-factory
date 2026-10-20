@@ -19,6 +19,8 @@ import type { AppConfig } from './config';
 import { debugSleep } from './jobs/debug-sleep';
 import { cleanupStaleUploads } from './modules/assets/cleanup';
 import { assetProcessJob } from './modules/assets/process-job';
+import { assetsTagJob } from './modules/assets/tag-job';
+import { tagAfterProcess } from './modules/assets/tagger';
 import { appRouter, type AppRouter } from './routers';
 
 export interface AppDeps {
@@ -92,7 +94,8 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
-  deps.jobs.runtime.register(assetProcessJob(deps));
+  deps.jobs.runtime.register(assetProcessJob(deps, tagAfterProcess));
+  deps.jobs.runtime.register(assetsTagJob(deps));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
 
   await server.register(cors, { origin: cfg.webOrigin });

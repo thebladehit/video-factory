@@ -133,3 +133,10 @@ export async function retryProcess(deps: AppDeps, userId: string, assetId: strin
     .where(and(eq(assets.id, row.id), eq(assets.status, 'failed')));
   return { jobId: await deps.jobs.queue.enqueue('asset.process', { assetId: row.id }, { userId }) };
 }
+
+/** «Згенерувати теги» */
+export async function requestTagging(deps: AppDeps, userId: string, assetId: string): Promise<{ jobId: string }> {
+  const row = await ownAsset(deps, userId, assetId);
+  if (row.status !== 'ready') throw new AppError('CONFLICT', 'Файл ще обробляється', { status: row.status });
+  return { jobId: await deps.jobs.queue.enqueue('assets.tag', { assetId: row.id }, { userId }) };
+}

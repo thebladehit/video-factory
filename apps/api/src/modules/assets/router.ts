@@ -1,7 +1,15 @@
 import { z } from 'zod';
 import { deleteAsset, getAsset, listAssets, pendingAssets, topTags, updateAsset } from './search';
 import { procedure, router } from '../../trpc';
-import { abortUpload, completeUpload, createUpload, listUploadedParts, retryProcess, signParts } from './service';
+import {
+  abortUpload,
+  completeUpload,
+  createUpload,
+  listUploadedParts,
+  requestTagging,
+  retryProcess,
+  signParts,
+} from './service';
 
 const assetId = z.object({ assetId: z.string() });
 const byId = z.object({ id: z.string() });
@@ -57,6 +65,8 @@ export const assetsRouter = router({
   delete: procedure.input(byId).mutation(({ ctx, input }) => deleteAsset(ctx.deps, ctx.userId, input.id)),
 
   tags: procedure.query(({ ctx }) => topTags(ctx.deps, ctx.userId)),
+
+  tag: procedure.input(byId).mutation(({ ctx, input }) => requestTagging(ctx.deps, ctx.userId, input.id)),
 
   retryProcess: procedure
     .input(z.object({ id: z.string() }))
