@@ -123,10 +123,10 @@ SSE-підписка на всі події задач поточного кор
 
 ## 5. AI-адаптери
 
-- **ImageGen:** OpenAI (gpt-image, дешевша mini-модель) і Google (Gemini Image / Imagen) через `generateImage` Vercel AI SDK 7. Аспект `9:16 | 16:9 | 1:1` → розмір або `aspectRatio` за мапою в каталозі.
+- **ImageGen:** OpenAI (gpt-image, дешевша mini-модель) і Google (Gemini Image; Imagen у прайсі Gemini API більше немає) через `generateImage` Vercel AI SDK 7. Аспект `9:16 | 16:9 | 1:1` → розмір або `aspectRatio` за мапою в каталозі.
 - **VideoGen** (`start` / `poll`):
-  - Veo — через відео-модель `@ai-sdk/google`, якщо вона дає доступ до id операції для відновлення; інакше прямий REST Gemini (`predictLongRunning` + `operations.get`).
-  - Sora — офіційний пакет `openai` (`videos.create` / `retrieve` / `downloadContent`); у `@ai-sdk/openai` відео-моделі немає.
+  - Google — **Gemini Omni Flash** (`gemini-omni-1.1-flash`) через Interactions API: `POST /v1beta/interactions` з `background: true` → id операції, опитування `GET /v1beta/interactions/{id}`. Тривалість (3–10 с) обирає модель; вартість рахується за виміряною ffprobe тривалістю.
+  - ~~Veo~~ — Veo 3.1 preview у Gemini API вимикається 2026-10-22; ~~Sora~~ — OpenAI Videos API вимкнено 2026-09-24 (рішення під час реалізації).
 - **Vision-тегер:** `TextGen.generateObject` отримує опційні `images: GeneratedFile[]`; схема `{ title: string, tags: string[5..10] }`. Теги українською + англійські синоніми ключових сутностей (пошук знаходить і «кіт», і «cat»). Промпти — у `packages/ai/src/prompts` з версією.
 - **Fake:** `fake/video` — ffmpeg `lavfi` (колір за хешем промпту, 2 с, mp4), `poll` двічі повертає `running`, потім файл; `fake/text` для тегів — детерміновані теги зі слів промпту; `fake/image` уже є.
 - **Каталог:** рядки image/video з цінами, підтримуваними аспектами й тривалостями. Точні id моделей і ціни звіряються з документацією провайдерів під час реалізації; живе підтвердження — `pnpm test:live` після додавання ключів.
@@ -136,7 +136,7 @@ SSE-підписка на всі події задач поточного кор
 
 ### 6.1 Глобальне завантаження
 - `UploadProvider` у кореневому layout: перетягування файлів над вікном → напівпрозорий оверлей «Відпустіть, щоб додати в бібліотеку».
-- Uppy (`@uppy/core` + `@uppy/aws-s3`, без його UI) з колбеками на `createUpload` / `signParts` / `complete` / `abort`; до 5 повторів частини.
+- Uppy **5** (`@uppy/core` + `@uppy/aws-s3`, без його UI; у v6 S3-протокол веде браузер, що суперечить серверному життєвому циклу) з колбеками на `createUpload` / `signParts` / `complete` / `abort`; до 5 повторів частини.
 - Плаваюча панель завантажень (правий нижній кут): файл, прогрес, швидкість, «Скасувати»; після 100% — «Обробка…» → ✓ (за `jobs.feed`); помилка — «Повторити»; згортається. `beforeunload`-попередження, поки є активні завантаження.
 
 ### 6.2 Сторінка «Бібліотека» (`/library`, замість `ComingSoon`)
