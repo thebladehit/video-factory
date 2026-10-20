@@ -1,0 +1,28 @@
+{
+  "name": "video-factory",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "typecheck": "turbo run typecheck",
+    "lint": "eslint .",
+    "test": "vitest run --exclude \"**/*.live.test.ts\" --exclude \"**/node_modules/**\"",
+    "test:unit": "vitest run --exclude \"**/*.int.test.ts\" --exclude \"**/*.live.test.ts\" --exclude \"**/node_modules/**\"",
+    "test:live": "vitest run live",
+    "db:migrate": "pnpm --filter @vf/db migrate",
+    "db:seed": "pnpm --filter @vf/db seed"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "dotenv": "^18",
+    "eslint": "^10",
+    "prettier": "^3.9",
+    "tsx": "^4.23",
+    "turbo": "^2.11",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72",
+    "vitest": "^5"
+  }
+}
