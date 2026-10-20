@@ -39,6 +39,11 @@ export function EditorPage({ project }: { project: ProjectView }) {
     setStarting(true);
     try {
       await s.autosave.flush();
+      // інакше сервер відрендерить останню збережену версію без свіжих змін
+      if (s.autosave.hasPending()) {
+        toast.error('Не вдалося зберегти проєкт — рендер не запущено. Повторіть збереження.');
+        return;
+      }
       await trpcClient.renders.start.mutate({ projectId: project.id, preset, version: s.autosave.getVersion() });
       s.ui.getState().set({ invalidClips: [] });
       toast.success(preset === 'final' ? 'Фінал 1080p — у черзі' : 'Чернетка 720p — у черзі');

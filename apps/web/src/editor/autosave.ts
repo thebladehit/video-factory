@@ -82,7 +82,12 @@ export class Autosave {
       return this.inFlight;
     }
     const doc = this.pending;
-    if (!doc || this.conflict || hasLocal(doc)) return Promise.resolve();
+    if (!doc || this.conflict) return Promise.resolve();
+    if (hasLocal(doc)) {
+      // файл з ОС ще вантажиться — документ збережеться, щойно отримає id у бібліотеці
+      this.o.onState('saving');
+      return Promise.resolve();
+    }
     this.pending = null;
     this.o.onState('saving');
     this.inFlight = this.o

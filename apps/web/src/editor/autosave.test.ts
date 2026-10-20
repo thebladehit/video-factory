@@ -121,4 +121,12 @@ describe('Autosave', () => {
     expect(save).not.toHaveBeenCalled();
     expect(a.hasPending()).toBe(true);
   });
+
+  it('while a local file blocks saving the indicator does not say saved', async () => {
+    const save = vi.fn(async (_d: TimelineDoc, base: number) => ({ version: base + 1 }));
+    const { a, states } = setup(save);
+    a.change(addClip(emptyTimeline('9:16'), { id: 'local:u1', kind: 'image' }, { at: 0 }).doc);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(states.at(-1)).toBe('saving');
+  });
 });

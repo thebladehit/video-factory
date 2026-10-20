@@ -188,3 +188,17 @@ test('reopening a project right after editing shows the latest timeline and save
   await savedState(page);
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
 });
+
+test('render does not start when the save before it fails', async ({ page }) => {
+  await newProject(page, `SaveFail ${uid()}`);
+  await dropFile(page, { name: `tone-${uid()}.mp4`, type: 'video/mp4', bytes: TONE });
+  await expect(page.getByTestId('track-audio').locator('[data-clip-id]')).toHaveCount(1, { timeout: 30_000 });
+  await savedState(page);
+  await page.route('**/trpc/projects.save**', (route) => route.fulfill({ status: 500, body: 'down' }));
+  await dragBy(page, videoClip(page).getByTestId('clip-handle-r'), -60);
+  await page.getByTestId('render-menu').click();
+  await page.getByRole('menuitem', { name: 'Чернетка 720p' }).click();
+  await expect(page.getByText('Не вдалося зберегти проєкт')).toBeVisible();
+  await page.waitForTimeout(1000);
+  await expect(page.getByTestId('render-item')).toHaveCount(0);
+});

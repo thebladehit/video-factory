@@ -9,6 +9,7 @@ import { useUploads } from '@/components/upload/UploadProvider';
 import { useJobFeed } from '@/lib/job-feed';
 import { trpcClient, useTRPC } from '@/lib/trpc';
 import { Autosave, type SaveState } from './autosave';
+import { reconcileUploads, type TrackedUpload } from './uploads';
 import { createCanvasPreviewEngine } from './preview-engine';
 import { createEditorStore, createUiStore } from './store';
 import { isPresent, type AnyAsset, type LocalAsset } from './types';
@@ -147,36 +148,45 @@ export function useEditorSession(project: ProjectView) {
     };
   }, [autosave]);
 
-  // файли з ОС: прогрес, id у бібліотеці, помилки
+  // файли з ОС: прогрес, id у бібліотеці, помилки й скасування
   useEffect(() => {
-    for (const item of uploads.items) {
-      const id = localUploads.current.get(item.id);
-      if (!id) continue;
-      const cur = assetsRef.current[id];
-      if (item.assetId && id !== item.assetId) {
-        const assetId = item.assetId;
-        localUploads.current.set(item.id, assetId);
-        awaiting.current.add(assetId);
-        store.getState().rewriteAssetId(id, assetId);
-        setAssets((all) => {
-          const next = { ...all };
-          delete next[id];
-          if (isPresent(cur)) next[assetId] = { ...cur, id: assetId } as LocalAsset;
-          return next;
-        });
-      } else if (item.state === 'error' && !item.assetId) {
-        localUploads.current.delete(item.id);
-        const ids = store
-          .getState()
-          .doc.tracks.flatMap((t) =>
-            t.kind === 'captions' ? [] : t.clips.filter((c) => c.assetId === id).map((c) => c.id),
-          );
+    const tracked = new Map<string, TrackedUpload>();
+    for (const [uploadId, id] of localUploads.current) {
+      const a = assetsRef.current[id];
+      tracked.set(uploadId, { id, local: isPresent(a) && 'local' in a });
+    }
+    for (const action of reconcileUploads(uploads.items, tracked)) {
+      if (action.type === 'forget') localUploads.current.delete(action.uploadId);
+      else if (action.type === 'rewrite') {
+        const { from, to } = action;
+        const cur = assetsRef.current[from];
+        localUploads.current.set(action.uploadId, to);
+        awaiting.current.add(to);
+        store.getState().rewriteAssetId(from, to);
+        const next = { ...assetsRef.current };
+        delete next[from];
+        if (isPresent(cur)) next[to] = { ...cur, id: to } as LocalAsset;
+        assetsRef.current = next;
+        setAssets(next);
+      } else if (action.type === 'progress') {
+        const cur = assetsRef.current[action.id];
+        if (isPresent(cur) && 'local' in cur && Math.round(cur.progress) !== Math.round(action.progress))
+          merge({ [action.id]: { ...cur, progress: action.progress } });
+      } else {
+        // файлу не буде: кліпи прибираємо; в історії id стає «відсутнім» (undo покаже заглушку, а не вічний local:)
+        localUploads.current.delete(action.uploadId);
+        awaiting.current.delete(action.id);
+        const gone = `missing:${action.uploadId}`;
+        store.getState().rewriteAssetId(action.id, gone);
+        const next = { ...assetsRef.current, [gone]: { id: gone, missing: true } as AnyAsset };
+        delete next[action.id];
+        assetsRef.current = next;
+        setAssets(next);
+        const ids = allClips(store.getState().doc)
+          .filter((c) => c.assetId === gone)
+          .map((c) => c.id);
         store.getState().apply((d) => deleteClips(d, ids));
-        toast.error(`Не вдалося завантажити «${item.name}»: ${item.error ?? 'помилка'}`);
-      } else if (!isPresent(cur) || !('local' in cur)) {
-        localUploads.current.delete(item.id);
-      } else if (Math.round(cur.progress) !== Math.round(item.progress)) {
-        merge({ [id]: { ...cur, progress: item.progress } });
+        toast.error(action.message);
       }
     }
   }, [uploads.items, store, merge]);
