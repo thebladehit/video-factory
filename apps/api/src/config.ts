@@ -9,6 +9,9 @@ export interface AppConfig {
   apiHost: string;
   ffmpegPath: string;
   ffprobePath: string;
+  /** Опитування провайдера під час генерації відео */
+  videoPollMs: number;
+  videoTimeoutMs: number;
   webOrigin: string;
   queueDriver: 'inprocess';
   aiFake: boolean;
@@ -46,6 +49,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     apiHost: env.API_HOST || '127.0.0.1',
     ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
     ffprobePath: env.FFPROBE_PATH || 'ffprobe',
+    videoPollMs: 10_000,
+    videoTimeoutMs: 15 * 60_000,
     webOrigin: env.WEB_ORIGIN || 'http://localhost:5173',
     queueDriver: 'inprocess',
     aiFake: env.AI_FAKE === '1',

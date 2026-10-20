@@ -20,6 +20,8 @@ import { debugSleep } from './jobs/debug-sleep';
 import { cleanupStaleUploads } from './modules/assets/cleanup';
 import { assetProcessJob } from './modules/assets/process-job';
 import { assetsTagJob } from './modules/assets/tag-job';
+import { imageGenerateJob } from './modules/generate/image-job';
+import { videoGenerateJob } from './modules/generate/video-job';
 import { tagAfterProcess } from './modules/assets/tagger';
 import { appRouter, type AppRouter } from './routers';
 
@@ -96,6 +98,8 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(debugSleep);
   deps.jobs.runtime.register(assetProcessJob(deps, tagAfterProcess));
   deps.jobs.runtime.register(assetsTagJob(deps));
+  deps.jobs.runtime.register(imageGenerateJob(deps));
+  deps.jobs.runtime.register(videoGenerateJob(deps, { pollMs: cfg.videoPollMs, timeoutMs: cfg.videoTimeoutMs }));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
 
   await server.register(cors, { origin: cfg.webOrigin });

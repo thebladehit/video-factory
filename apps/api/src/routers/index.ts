@@ -1,4 +1,5 @@
 import { assetsRouter } from '../modules/assets/router';
+import { generateRouter } from '../modules/generate/router';
 import { router } from '../trpc';
 import { aiRouter } from './ai';
 import { healthRouter } from './health';
@@ -11,6 +12,7 @@ export const appRouter = router({
   ai: aiRouter,
   jobs: jobsRouter,
   assets: assetsRouter,
+  generate: generateRouter,
 });
 
 export type AppRouter = typeof appRouter;
