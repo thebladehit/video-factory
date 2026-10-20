@@ -18,11 +18,18 @@ export class MediaToolError extends Error {
   }
 }
 
-/** Запуск ffmpeg/ffprobe окремим процесом: таймаут, скасування, хвіст stderr у помилці. */
+/**
+ * Запуск ffmpeg/ffprobe окремим процесом: таймаут, скасування, хвіст stderr у помилці.
+ * З `onStdout` stdout віддається потоком і не буферизується (`stdout` у результаті порожній).
+ */
 export function run(
   bin: string,
   args: string[],
-  { signal, timeoutMs = 60_000 }: { signal?: AbortSignal; timeoutMs?: number } = {},
+  {
+    signal,
+    timeoutMs = 60_000,
+    onStdout,
+  }: { signal?: AbortSignal; timeoutMs?: number; onStdout?: (chunk: Buffer) => void } = {},
 ): Promise<{ stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new MediaToolError('Скасовано', 'aborted'));
@@ -37,7 +44,7 @@ export function run(
     const timer = setTimeout(() => kill('timeout'), timeoutMs);
     const onAbort = () => kill('aborted');
     signal?.addEventListener('abort', onAbort, { once: true });
-    child.stdout.on('data', (d: Buffer) => out.push(d));
+    child.stdout.on('data', (d: Buffer) => (onStdout ? onStdout(d) : out.push(d)));
     child.stderr.on('data', (d: Buffer) => {
       stderr = (stderr + d.toString()).slice(-STDERR_TAIL);
     });

@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { assets, generations, jobs } from '@vf/db';
+import { assets, generations, jobs, renders } from '@vf/db';
 import { RESTART_ERROR } from '@vf/jobs';
 import type { AppDeps } from '../app';
 
@@ -16,6 +16,7 @@ export async function hasLiveJob(deps: AppDeps, type: string, key: 'assetId' | '
 /**
  * Після старту: черга позначила перервані задачі «failed (рестарт)», а доменні рядки лишились «в роботі».
  * Обробники ідемпотентні, тож просто ставимо задачі знову: asset.process — для processing без живої задачі,
+ * asset.analyze — для ready-відео/аудіо без аналізу звуку,
  * генерації — для перерваних рестартом (відео продовжить опитування збереженої операції, не платячи вдруге).
  */
 export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
@@ -25,6 +26,38 @@ export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
       await deps.jobs.queue.enqueue('asset.process', { assetId: a.id }, { userId: a.userId });
     }
   }
+
+  // файли, оброблені до появи аналізу звуку
+  const unanalyzed = await deps.db
+    .select({ id: assets.id, userId: assets.userId })
+    .from(assets)
+    .where(and(eq(assets.status, 'ready'), isNull(assets.hasAudio), inArray(assets.kind, ['video', 'audio'])));
+  for (const a of unanalyzed) {
+    if (!(await hasLiveJob(deps, 'asset.analyze', 'assetId', a.id))) {
+      await deps.jobs.queue.enqueue('asset.analyze', { assetId: a.id }, { userId: a.userId });
+    }
+  }
+
+  // рендер, перерваний рестартом, — failed («Повторити» = новий запуск того самого рендеру)
+  const stuckRenders = await deps.db
+    .select({ id: renders.id, jobStatus: jobs.status, error: jobs.error })
+    .from(renders)
+    .leftJoin(jobs, eq(jobs.id, renders.jobId))
+    .where(
+      and(
+        inArray(renders.status, ['queued', 'running']),
+        or(isNull(jobs.id), inArray(jobs.status, ['failed', 'cancelled'])),
+      ),
+    );
+  for (const r of stuckRenders)
+    await deps.db
+      .update(renders)
+      .set(
+        r.jobStatus === 'cancelled'
+          ? { status: 'cancelled', finishedAt: new Date() }
+          : { status: 'failed', error: r.error ?? RESTART_ERROR, finishedAt: new Date() },
+      )
+      .where(eq(renders.id, r.id));
 
   const interrupted = await deps.db
     .select({ g: generations })

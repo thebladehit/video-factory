@@ -17,8 +17,10 @@
     "@vf/db": "workspace:*",
     "@vf/jobs": "workspace:*",
     "@vf/media": "workspace:*",
+    "@vf/render": "workspace:*",
     "@vf/shared": "workspace:*",
     "@vf/storage": "workspace:*",
+    "@vf/timeline": "workspace:*",
     "drizzle-orm": "^0.45",
     "fastify": "^5.12",
     "zod": "^4.6"

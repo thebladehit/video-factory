@@ -9,6 +9,7 @@ import type { JobDef } from '@vf/jobs';
 import { MediaToolError, probe, thumbnail } from '@vf/media';
 import { assetKeys, isAppError } from '@vf/shared';
 import type { AppDeps } from '../../app';
+import { analyzeAsset } from './analyze-job';
 import type { AssetRow } from './service';
 
 const KIND_LABEL = { image: 'фото', video: 'відео', audio: 'аудіо' } as const;
@@ -28,7 +29,7 @@ function userFacingError(e: unknown): string | null {
 }
 
 /**
- * asset.process: ffprobe-метадані → мініатюра → ready, далі теги.
+ * asset.process: ffprobe-метадані → мініатюра → звук (has_audio, піки) → ready, далі теги.
  * Ідемпотентна: працює лише з processing, фіксований ключ мініатюри, стан пишеться наприкінці.
  */
 export function assetProcessJob(
@@ -83,9 +84,13 @@ export function assetProcessJob(
           await deps.storage.put(thumbKey, await readFile(out), { contentType: 'image/webp' });
         }
 
+        await ctx.progress(75, 'Аналізую звук');
+        const sound = await analyzeAsset(deps, row, original, ctx.signal);
+
         const [ready] = await deps.db
           .update(assets)
           .set({
+            ...sound,
             status: 'ready',
             error: null,
             mime: meta.mime,
@@ -99,6 +104,7 @@ export function assetProcessJob(
         if (!ready) {
           // файл видалили під час обробки — прибираємо те, що встигли покласти
           if (thumbKey) await deps.storage.delete(thumbKey);
+          if (sound.peaksKey) await deps.storage.delete(sound.peaksKey);
           return { assetId };
         }
         await ctx.progress(90, 'Теги');

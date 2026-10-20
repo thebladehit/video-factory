@@ -21,8 +21,9 @@ export interface UploadItem {
   assetId?: string;
 }
 
-interface UploadsApi {
-  addFiles(files: File[]): void;
+export interface UploadsApi {
+  /** id завантажень (для невалідних файлів — немає); `UploadItem.assetId` з'являється після createUpload */
+  addFiles(files: File[]): string[];
   items: UploadItem[];
   cancel(id: string): void;
   retry(id: string): void;
@@ -131,14 +132,16 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const api: UploadsApi = {
     items,
     addFiles(files) {
+      const ids: string[] = [];
       for (const file of files) {
         try {
           validateUpload({ name: file.name, mime: file.type, size: file.size });
-          uppy.addFile({ name: file.name, type: file.type, data: file, source: 'local' });
+          ids.push(uppy.addFile({ name: file.name, type: file.type, data: file, source: 'local' }));
         } catch (e) {
           toast.error(message(e));
         }
       }
+      return ids;
     },
     cancel(id) {
       const item = items.find((i) => i.id === id);

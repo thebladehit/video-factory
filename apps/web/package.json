@@ -17,6 +17,7 @@
     "@uppy/aws-s3": "^5.1.0",
     "@uppy/core": "^5.2.0",
     "@vf/shared": "workspace:*",
+    "@vf/timeline": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.0",
     "lucide-react": "^1.59.0",
@@ -24,7 +25,9 @@
     "radix-ui": "^1.8.1",
     "react": "^19",
     "react-dom": "^19",
-    "sonner": "^2.0.8"
+    "sonner": "^2.0.8",
+    "zundo": "^2.3.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@playwright/test": "^1.64",

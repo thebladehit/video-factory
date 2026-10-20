@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import type { AssetView } from '@vf/api';
 import { Download, Sparkles, Trash2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -28,12 +29,21 @@ function Preview({ asset }: { asset: AssetView }) {
   return <img src={asset.url} alt={asset.title} className="max-h-[50vh] w-full rounded-md object-contain" />;
 }
 
+const plural = (n: number) => {
+  const d = n % 10;
+  const dd = n % 100;
+  if (d === 1 && dd !== 11) return 'проєкті';
+  return 'проєктах';
+};
+
 export function AssetSheet({ assetId, onClose }: { assetId: string | null; onClose: () => void }) {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const { data: asset } = useQuery(trpc.assets.get.queryOptions({ id: assetId ?? '' }, { enabled: !!assetId }));
   const [title, setTitle] = useState('');
   const [newTag, setNewTag] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const usage = useQuery(trpc.assets.usage.queryOptions({ id: assetId ?? '' }, { enabled: !!assetId && confirming }));
   useEffect(() => setTitle(asset?.title ?? ''), [asset?.title]);
 
   const refresh = () => qc.invalidateQueries({ queryKey: trpc.assets.pathKey() });
@@ -155,20 +165,42 @@ export function AssetSheet({ assetId, onClose }: { assetId: string | null; onClo
                   <Download /> Завантажити файл
                 </a>
               </Button>
-              <AlertDialog>
+              <AlertDialog open={confirming} onOpenChange={setConfirming}>
                 <AlertDialogTrigger asChild>
                   <Button variant="destructive">
                     <Trash2 /> Видалити
                   </Button>
                 </AlertDialogTrigger>
-                <AlertDialogContent>
+                <AlertDialogContent data-testid="delete-dialog">
                   <AlertDialogHeader>
                     <AlertDialogTitle>Видалити файл назавжди?</AlertDialogTitle>
-                    <AlertDialogDescription>Файл буде видалено зі сховища й бібліотеки.</AlertDialogDescription>
+                    {usage.data?.length ? (
+                      <AlertDialogDescription data-testid="usage-warning">
+                        Файл використано в {usage.data.length} {plural(usage.data.length)}:{' '}
+                        {usage.data.map((p, i) => (
+                          <span key={p.projectId}>
+                            {i > 0 && ', '}
+                            <Link to="/projects/$id" params={{ id: p.projectId }} className="underline">
+                              «{p.title}»
+                            </Link>
+                          </span>
+                        ))}
+                        . Після видалення на таймлайні лишиться заглушка, а рендер буде недоступний, доки ви її не
+                        заміните. Видалити все одно?
+                      </AlertDialogDescription>
+                    ) : (
+                      <AlertDialogDescription>Файл буде видалено зі сховища й бібліотеки.</AlertDialogDescription>
+                    )}
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Скасувати</AlertDialogCancel>
-                    <AlertDialogAction onClick={() => remove.mutate({ id: asset.id })}>Видалити</AlertDialogAction>
+                    <AlertDialogAction
+                      variant="destructive"
+                      disabled={usage.isPending}
+                      onClick={() => remove.mutate({ id: asset.id })}
+                    >
+                      Видалити
+                    </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>

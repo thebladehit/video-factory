@@ -11,6 +11,7 @@ const MAX_PROMPT_TITLE = 80;
 export const assetKeys = {
   original: (userId: string, assetId: string, ext: string) => `u/${userId}/assets/${assetId}/original.${ext}`,
   thumb: (userId: string, assetId: string) => `u/${userId}/assets/${assetId}/thumb.webp`,
+  peaks: (userId: string, assetId: string) => `u/${userId}/assets/${assetId}/peaks.bin`,
 };
 
 export function normalizeTags(tags: string[]): string[] {

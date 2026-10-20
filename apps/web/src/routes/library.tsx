@@ -17,7 +17,7 @@ export const Route = createFileRoute('/library')({
 function LibraryPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: '/library' });
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(search.open ?? null);
   const [generating, setGenerating] = useState(false);
 
   const onSearch = useCallback(
@@ -35,7 +35,7 @@ function LibraryPage() {
       <LibraryToolbar search={search} onSearch={onSearch} onGenerate={() => setGenerating(true)} />
       <TagChips selected={search.tags ?? []} onToggle={toggleTag} />
       <PendingStrip />
-      <AssetGrid search={search} onOpen={(a: AssetView) => setOpenId(a.id)} />
+      <AssetGrid search={{ ...search, open: undefined }} onOpen={(a: AssetView) => setOpenId(a.id)} />
       <AssetSheet assetId={openId} onClose={() => setOpenId(null)} />
       <GenerateDialog open={generating} onOpenChange={setGenerating} />
     </div>

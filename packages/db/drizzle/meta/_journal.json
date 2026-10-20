@@ -29,6 +29,13 @@
       "when": 1792493982941,
       "tag": "0003_library",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792506815796,
+      "tag": "0004_editor",
+      "breakpoints": true
     }
   ]
 }

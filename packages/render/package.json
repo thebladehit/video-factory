@@ -1,0 +1,20 @@
+{
+  "name": "@vf/render",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@vf/media": "workspace:*",
+    "@vf/shared": "workspace:*",
+    "@vf/timeline": "workspace:*"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.11"
+  }
+}
