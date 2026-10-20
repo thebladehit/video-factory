@@ -370,6 +370,18 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
+  packages/render:
+    dependencies:
+      '@vf/media':
+        specifier: workspace:*
+        version: link:../media
+      '@vf/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vf/timeline':
+        specifier: workspace:*
+        version: link:../timeline
+
   packages/shared:
     dependencies:
       zod:

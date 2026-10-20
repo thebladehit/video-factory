@@ -55,6 +55,7 @@ services:
       - nm-ai:/app/packages/ai/node_modules
       - nm-media:/app/packages/media/node_modules
       - nm-timeline:/app/packages/timeline/node_modules
+      - nm-render:/app/packages/render/node_modules
     depends_on: &api-deps
       postgres: { condition: service_healthy }
       rustfs: { condition: service_started }
@@ -92,3 +93,4 @@ volumes:
   nm-ai:
   nm-media:
   nm-timeline:
+  nm-render:
