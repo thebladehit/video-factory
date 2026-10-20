@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CAPABILITIES, type Capability, type ModelRef } from '@vf/shared';
+import { DEFAULT_SLOTS, type DefaultSlot, type ModelRef } from '@vf/shared';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -7,12 +7,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useTRPC } from '@/lib/trpc';
 import { TestModel } from './TestModel';
 
-export const CAPABILITY_LABELS: Record<Capability, string> = {
+export const CAPABILITY_LABELS: Record<DefaultSlot, string> = {
   text: 'Текст',
   image: 'Зображення',
   video: 'Відео',
   tts: 'Озвучка',
   stt: 'Розпізнавання мови',
+  tagger: 'Модель для тегів',
 };
 
 export function ModelDefaults() {
@@ -32,8 +33,12 @@ export function ModelDefaults() {
         <CardTitle>Моделі за замовчуванням</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {CAPABILITIES.map((cap) => {
-          const models = catalog.data?.filter((m) => m.capability === cap) ?? [];
+        {DEFAULT_SLOTS.map((cap) => {
+          // модель для тегів — текстова з підтримкою зображень
+          const models =
+            catalog.data?.filter((m) =>
+              cap === 'tagger' ? m.capability === 'text' && m.vision : m.capability === cap,
+            ) ?? [];
           const current = settings.data?.defaults[cap];
           const id = `model-${cap}`;
           return (
