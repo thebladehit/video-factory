@@ -33,7 +33,9 @@
 
 | Рішення | Вибір | Чому |
 |---|---|---|
-| Де працює v1 | Локально, `docker compose` (Postgres + MinIO), S3-сумісне сховище з першого дня | Найдешевший старт; деплой на сервер = інші змінні середовища |
+| Де працює v1 | Локально, `docker compose` (Postgres + RustFS), S3-сумісне сховище з першого дня | Найдешевший старт; деплой на сервер = інші змінні середовища |
+| S3 локально | **RustFS** (Apache-2.0, 1.0 GA вересень 2026); резерв — SeaweedFS. **Не MinIO**: з жовтня 2025 без Docker-образів, з квітня 2026 репозиторій в архіві | Будь-яке S3-сумісне сховище підходить, бо доступ лише через `BlobStorage` |
+| Фронтенд-фреймворк | React + Vite SPA, **не Next.js** | Додаток за логіном (SEO не потрібне), редактор повністю клієнтський (canvas, WASM, `<video>`), бекенд однаково окремий (довгі задачі, FFmpeg). Лендинг SaaS — пізніше окремим проєктом (Next.js/Astro); за потреби SSR — TanStack Start на тому ж роутері |
 | Основний режим | Конвеєр «тема → чернетка» + повний ручний режим | Головна мета — спростити процес |
 | AI-провайдери | Anthropic (Claude), OpenAI, Google Gemini (**лише платний ключ**); ElevenLabs — пізніше. **Безкоштовний Gemini не використовується** | Вибір провайдера/моделі на кожному кроці робить користувач |
 | Рушій монтажу | **Варіант A:** власний таймлайн + canvas-прев'ю у браузері + рендер FFmpeg на сервері, за інтерфейсами `PreviewEngine` / `Renderer` | Див. 2.1 |
@@ -80,7 +82,7 @@
 │ TTS  STT  Publisher  StatsCollector                  │
 └──┬──────────┬───────────┬───────────┬────────────────┘
    │          │           │           │
- Postgres   MinIO(S3)   ffmpeg     AI-провайдери / платформи
+ Postgres   RustFS(S3)   ffmpeg     AI-провайдери / платформи
 ```
 
 ### 3.1 Стек
@@ -91,7 +93,7 @@
 | Фронтенд | React 19, Vite, TypeScript, TanStack Router, TanStack Query, Tailwind CSS v4, shadcn/ui, Zustand (+ undo/redo через zundo) |
 | API | Node (LTS ≥ 24), Fastify 5, tRPC, Zod |
 | БД | PostgreSQL + Drizzle ORM; full-text (`tsvector`) + `pg_trgm`; пізніше `pgvector` |
-| Сховище | MinIO (S3 API, `@aws-sdk/client-s3`, presigned URL) |
+| Сховище | RustFS (S3 API, `@aws-sdk/client-s3`, presigned URL) |
 | AI | Vercel AI SDK (текст, зображення, TTS, STT; провайдери Anthropic/OpenAI/Google/ElevenLabs) + офіційні SDK для генерації відео (Veo, Sora) — усе за власними інтерфейсами |
 | Рендер | FFmpeg / ffprobe (child process) |
 | Субтитри у браузері | JASSUB |
@@ -109,7 +111,7 @@ packages/
   shared/         TimelineDoc (Zod), спільні типи, коди помилок
   db/             Drizzle-схема, міграції, seed
   jobs/           JobQueue/JobDef/WorkerRuntime контракти + InProcessQueue
-  storage/        BlobStorage + S3/MinIO реалізація
+  storage/        BlobStorage + S3-реалізація (RustFS / S3 / R2)
   ai/             інтерфейси можливостей, реєстр, каталог моделей, адаптери, FakeProvider, промпти
   render/         (підпроєкт 2) compileFfmpeg, генератор ASS, FfmpegRenderer
   publish/        (підпроєкт 5) Publisher-адаптери
@@ -131,7 +133,7 @@ docker-compose.yml
 | `CredentialStore` | `EnvCredentialStore` — ключі з `.env` | зашифровані ключі користувачів (BYOK) або ключі платформи + білінг |
 | `JobQueue` + `WorkerRuntime` | `InProcessQueue` | `BullMqQueue` (`QUEUE_DRIVER=bullmq`) |
 | `Scheduler` | перевірка раз на хвилину в процесі | відкладені/повторювані задачі BullMQ |
-| `BlobStorage` | MinIO | S3 / Cloudflare R2 |
+| `BlobStorage` | RustFS | S3 / Cloudflare R2 |
 | `PreviewEngine` (web) | canvas + JASSUB | Remotion Player |
 | `Renderer` | `FfmpegRenderer` | `RemotionRenderer` |
 | `TextGen`/`ImageGen`/`VideoGen`/`TTS`/`STT` | адаптери Anthropic, OpenAI, Google + `FakeProvider` | + ElevenLabs |
@@ -267,7 +269,7 @@ type Effect      = { type: 'kenburns' | 'fade' | 'xfade' | 'zoom'; params: Recor
 7. → редактор.
 
 ### 6.2 Бібліотека
-- **Завантаження:** drag & drop будь-де в UI (зокрема в редактор) → presigned PUT напряму в MinIO (multipart для великих файлів) → `POST assets.complete` → задача `asset.process` (ffprobe-метадані, мініатюра, опційно авто-теги vision-моделлю).
+- **Завантаження:** drag & drop будь-де в UI (зокрема в редактор) → presigned PUT напряму в RustFS (multipart для великих файлів) → `POST assets.complete` → задача `asset.process` (ffprobe-метадані, мініатюра, опційно авто-теги vision-моделлю).
 - **Генерація:** промпт + провайдер/модель → задача → asset; параметри в `generations` («згенерувати схожі»).
 - **Пошук:** full-text по title/tags/prompt + trigram для неточних збігів; фільтри: тип, джерело, орієнтація. Пізніше — семантичний пошук (pgvector).
 
@@ -355,7 +357,7 @@ interface STT      { transcribe(req: { audio; language? }): Promise<{ text; word
 - Статистика ручних постів збирається через підключений акаунт з правами на читання (напр. TikTok Display API для власних відео); якщо й це недоступно — ручне введення метрик.
 
 ### 8.4 Організаційні кроки (паралельно з підпроєктами 1–3)
-Подати заявки: аудит TikTok Content Posting API, Meta App Review (Instagram + Facebook), верифікація Google OAuth / аудит YouTube API. Для локальної розробки потрібен HTTPS-тунель (напр. Cloudflare Tunnel) для OAuth-редіректів TikTok/Meta і публічний URL файлів для Instagram (тунель до MinIO або публічний бакет R2 лише для файлів, що публікуються).
+Подати заявки: аудит TikTok Content Posting API, Meta App Review (Instagram + Facebook), верифікація Google OAuth / аудит YouTube API. Для локальної розробки потрібен HTTPS-тунель (напр. Cloudflare Tunnel) для OAuth-редіректів TikTok/Meta і публічний URL файлів для Instagram (тунель до RustFS або публічний бакет R2 лише для файлів, що публікуються).
 
 ---
 
@@ -376,7 +378,7 @@ interface STT      { transcribe(req: { audio; language? }): Promise<{ text; word
 | Рівень | Що | Чим |
 |---|---|---|
 | Unit | `assembleTimeline`, `compileFfmpeg`, генератор ASS, операції таймлайну (трім, розрізання, снепінг), підгонка темпу мов, парсери URL публікацій | Vitest |
-| Інтеграційні | API + Postgres + MinIO у Docker, AI через `FakeProvider` | Vitest + docker compose |
+| Інтеграційні | API + Postgres + RustFS у Docker, AI через `FakeProvider` | Vitest + docker compose |
 | Рендер | справжній FFmpeg на 2–3-секундних фрагментах: тривалість (ffprobe), кольори пікселів у ключових точках; порівняння кадру `drawFrame` (прев'ю) з кадром FFmpeg у тих самих моментах (допуск) | Vitest + ffmpeg |
 | E2E | файл → таймлайн → трім → рендер | Playwright |
 | Живі AI/API | контрактні тести адаптерів зі справжніми ключами, лише вручну (`pnpm test:live`) | Vitest |
@@ -401,20 +403,20 @@ interface STT      { transcribe(req: { audio; language? }): Promise<{ text; word
 
 **Входить:**
 1. Монорепо (pnpm + Turborepo, TypeScript, ESLint/Prettier, Vitest), структура з розділу 3.2.
-2. `docker-compose.yml`: Postgres, MinIO (+ автоматичне створення бакета); `.env.example` з усіма змінними (`DATABASE_URL`, `S3_*`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `QUEUE_DRIVER=inprocess`).
+2. `docker-compose.yml`: Postgres, RustFS (+ автоматичне створення бакета); `.env.example` з усіма змінними (`DATABASE_URL`, `S3_*`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `QUEUE_DRIVER=inprocess`).
 3. `packages/db`: Drizzle-схема для `users`, `user_settings`, `jobs`, `assets`, `generations` (решта таблиць — у своїх підпроєктах), міграції, seed локального користувача.
 4. `packages/shared`: Zod-схема `TimelineDoc` v1, `AppError`, спільні типи.
 5. `packages/jobs`: контракти + `InProcessQueue`/`WorkerRuntime` з відновленням після рестарту; SSE-ендпоінт прогресу; задача `debug.sleep` для перевірки.
-6. `packages/storage`: `BlobStorage` (put/get/delete/presignPut/presignGet) на MinIO.
+6. `packages/storage`: `BlobStorage` (put/get/delete/presignPut/presignGet) на RustFS.
 7. `packages/ai`: інтерфейси можливостей, реєстр, каталог-конфіг, `EnvCredentialStore`, `FakeProvider`; адаптери Anthropic/OpenAI/Google — мінімальний `TextGen` (повні можливості — у підпроєктах 1 і 3).
-8. `apps/api`: Fastify + tRPC, composition root, `SingleUserAuth`, health-check (Postgres + MinIO).
+8. `apps/api`: Fastify + tRPC, composition root, `SingleUserAuth`, health-check (Postgres + RustFS).
 9. `apps/web`: каркас (React, Router, Query, Tailwind, shadcn/ui), навігація по майбутніх розділах (заглушки), сторінка **Налаштування**: провайдери з ключами, вибір моделі за замовчуванням для кожної можливості (зберігається в `user_settings`), кнопка «Тестова задача» з живим прогресом через SSE, кнопка «Перевірити провайдера» (короткий виклик `TextGen`).
 
 **Готово, коли:**
 - `docker compose up -d && pnpm install && pnpm db:migrate && pnpm dev` піднімає web і api.
 - Health-check зелений; на сторінці налаштувань видно лише провайдерів із ключами; вибір моделі за замовчуванням зберігається після перезавантаження.
 - Тестова задача показує прогрес у реальному часі; після рестарту API незавершені задачі коректно відновлюються/позначаються.
-- Unit- та інтеграційні тести (`pnpm test`) проходять, зокрема з `FakeProvider` і MinIO.
+- Unit- та інтеграційні тести (`pnpm test`) проходять, зокрема з `FakeProvider` і RustFS.
 
 ---
 
