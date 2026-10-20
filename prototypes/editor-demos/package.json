@@ -1,0 +1,20 @@
+{
+  "name": "editor-demos",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "vite --port 5199 --strictPort", "build": "tsc --noEmit && vite build" },
+  "dependencies": {
+    "@remotion/player": "4.0.537",
+    "mediabunny": "1.61.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.537"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "typescript": "^5.9",
+    "vite": "^7"
+  }
+}
