@@ -1,9 +1,10 @@
 import PQueue from 'p-queue';
-import { AppError, TERMINAL_STATUSES, type JobEvent, type JobRecord, type JobType } from '@vf/shared';
+import { AppError, TERMINAL_STATUSES, toJobEvent, type JobEvent, type JobRecord, type JobType } from '@vf/shared';
 import { assertSerializablePayload } from './serializable';
 import type { JobDef, JobQueue, JobStore, WorkerRuntime } from './types';
 
 const RESTART_ERROR = 'Перервано перезапуском сервера';
+const STOP_TIMEOUT_MS = 10_000;
 const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -19,8 +20,10 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
   let started = false;
   let shuttingDown = false;
 
-  const emit = (r: JobRecord) => {
-    const e: JobEvent = { jobId: r.id, status: r.status, progress: r.progress, message: r.message, error: r.error };
+  /** null — store відхилив запізнілий запис, подавати нічого */
+  const emit = (r: JobRecord | null) => {
+    if (!r) return;
+    const e = toJobEvent(r);
     for (const l of listeners) l(e);
   };
 
@@ -47,6 +50,8 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
       const def = defs.get(claimed.type)!;
       const ctrl = new AbortController();
       controllers.set(id, ctrl);
+      // cancel(), що прийшов між claim і створенням контролера, лишив лише прапорець у БД
+      if (await store.cancelRequested(id)) ctrl.abort();
       try {
         const result = await def.handler(claimed.payload, {
           jobId: id,
@@ -91,6 +96,8 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
       if (TERMINAL_STATUSES.has(r.status)) return;
       const cancelled = await store.cancelIfQueued(id);
       if (cancelled) return emit(cancelled);
+      // спершу прапорець у БД, потім контролер: execute() перевіряє прапорець після створення контролера
+      await store.requestCancel(id);
       controllers.get(id)?.abort();
     },
     async retry(id) {
@@ -125,7 +132,13 @@ export function createInProcessJobs(store: JobStore): { queue: JobQueue; runtime
       shuttingDown = true;
       for (const q of queues.values()) q.clear();
       for (const c of controllers.values()) c.abort();
-      await Promise.all([...queues.values()].map((q) => q.onIdle()));
+      // обробник, що ігнорує signal, не має блокувати зупинку сервера
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        Promise.all([...queues.values()].map((q) => q.onIdle())),
+        new Promise((r) => (timer = setTimeout(r, STOP_TIMEOUT_MS))),
+      ]);
+      clearTimeout(timer);
     },
   };
 

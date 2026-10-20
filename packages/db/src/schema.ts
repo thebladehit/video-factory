@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   customType,
   index,
@@ -50,6 +51,8 @@ export const jobs = pgTable(
     message: text('message'),
     error: text('error'),
     attempts: integer('attempts').notNull().default(0),
+    /** Прапорець скасування: працює і для задачі, яку саме бере воркер (гонка cancel vs claim) */
+    cancelRequested: boolean('cancel_requested').notNull().default(false),
     result: jsonb('result'),
     createdAt: createdAt(),
     startedAt: timestamp('started_at', { withTimezone: true }),

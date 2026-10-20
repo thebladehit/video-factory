@@ -34,27 +34,48 @@ export function createPgJobStore(db: Db): JobStore {
       const rows = await db
         .update(jobs)
         .set({ status: 'running', startedAt: new Date(), attempts: sql`${jobs.attempts} + 1` })
-        .where(and(eq(jobs.id, id), eq(jobs.status, 'queued')))
+        .where(and(eq(jobs.id, id), eq(jobs.status, 'queued'), eq(jobs.cancelRequested, false)))
+        .returning();
+      if (rows[0]) return toRecord(rows[0]);
+      await db
+        .update(jobs)
+        .set({ status: 'cancelled', finishedAt: new Date() })
+        .where(and(eq(jobs.id, id), eq(jobs.status, 'queued'), eq(jobs.cancelRequested, true)));
+      return null;
+    },
+    async progress(id, pct, message) {
+      const rows = await db
+        .update(jobs)
+        .set({ progress: pct, message })
+        .where(and(eq(jobs.id, id), eq(jobs.status, 'running')))
         .returning();
       return rows[0] ? toRecord(rows[0]) : null;
     },
-    async progress(id, pct, message) {
-      return one(await db.update(jobs).set({ progress: pct, message }).where(eq(jobs.id, id)).returning());
-    },
     async finish(id, status, { result, error }) {
-      return one(
-        await db
-          .update(jobs)
-          .set({
-            status,
-            result: result ?? null,
-            error: error ?? null,
-            finishedAt: new Date(),
-            ...(status === 'done' ? { progress: 100 } : {}),
-          })
-          .where(eq(jobs.id, id))
-          .returning(),
-      );
+      const rows = await db
+        .update(jobs)
+        .set({
+          status,
+          result: result ?? null,
+          error: error ?? null,
+          finishedAt: new Date(),
+          ...(status === 'done' ? { progress: 100 } : {}),
+        })
+        .where(and(eq(jobs.id, id), inArray(jobs.status, ['running', 'queued'])))
+        .returning();
+      return rows[0] ? toRecord(rows[0]) : null;
+    },
+    async requestCancel(id) {
+      const rows = await db
+        .update(jobs)
+        .set({ cancelRequested: true })
+        .where(and(eq(jobs.id, id), inArray(jobs.status, ['running', 'queued'])))
+        .returning();
+      return rows[0] ? toRecord(rows[0]) : null;
+    },
+    async cancelRequested(id) {
+      const rows = await db.select({ c: jobs.cancelRequested }).from(jobs).where(eq(jobs.id, id));
+      return rows[0]?.c ?? false;
     },
     async cancelIfQueued(id) {
       const rows = await db
