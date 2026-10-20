@@ -54,7 +54,7 @@ export function PreviewPane({
   }, [engine, doc.width, doc.height]);
 
   return (
-    <div className="flex min-h-0 flex-col items-center gap-2">
+    <div className="flex min-h-0 min-w-0 flex-col items-center gap-2">
       <div className="flex min-h-0 w-full flex-1 items-center justify-center">
         <div
           ref={box}

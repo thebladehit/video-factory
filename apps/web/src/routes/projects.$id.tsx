@@ -4,6 +4,7 @@ import type { ProjectView } from '@vf/api';
 import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { PreviewPane } from '@/components/editor/PreviewPane';
+import { Timeline } from '@/components/editor/Timeline';
 import { createCanvasPreviewEngine } from '@/editor/preview-engine';
 import { createEditorStore, createUiStore } from '@/editor/store';
 import { useTRPC } from '@/lib/trpc';
@@ -18,7 +19,7 @@ function ProjectPage() {
   return <PreviewOnly project={project.data} />;
 }
 
-// тимчасово (Task 12): лише прев'ю; редактор цілком — Task 14
+// тимчасово (Tasks 12–13): прев'ю й таймлайн; редактор цілком — Task 14
 function PreviewOnly({ project }: { project: ProjectView }) {
   const [store] = useState(() => createEditorStore(project.timeline));
   const [ui] = useState(createUiStore);
@@ -41,16 +42,17 @@ function PreviewOnly({ project }: { project: ProjectView }) {
     ui.getState().set({ playing });
   };
   return (
-    <div className="grid h-[70vh] gap-2">
+    <div className="grid h-[calc(100vh-7rem)] grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_minmax(180px,40%)] gap-2">
       <h1 className="text-xl font-semibold">{project.title}</h1>
       <PreviewPane engine={engine} doc={doc} ui={ui} onTogglePlay={toggle} />
-      <input
-        type="range"
-        min={0}
-        max={7}
-        step={0.01}
-        aria-label="seek"
-        onChange={(e) => engine.seek(Number(e.target.value))}
+      <Timeline
+        store={store}
+        ui={ui}
+        assets={project.assets}
+        onSeek={(t) => engine.seek(t)}
+        onTogglePlay={toggle}
+        onDropAssets={() => {}}
+        onDropFiles={() => {}}
       />
     </div>
   );
