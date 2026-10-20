@@ -33,7 +33,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     );
   }
 
-  const server = Fastify({ logger: !process.env.VITEST, maxParamLength: 5000 });
+  const server = Fastify({ logger: !process.env.VITEST, routerOptions: { maxParamLength: 5000 } });
   const storage = overrides.storage ?? createS3BlobStorage(cfg.s3);
   try {
     await Promise.race([
@@ -56,7 +56,6 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
-  await deps.jobs.runtime.start();
 
   await server.register(cors, { origin: cfg.webOrigin });
   await server.register(fastifyTRPCPlugin, {
@@ -70,6 +69,11 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   return {
     server,
     deps,
+    /**
+     * Запускає воркери й відновлення задач. Викликати лише після успішного listen():
+     * зайнятий порт = вже працює інший екземпляр, і його задачі не можна чіпати.
+     */
+    start: () => deps.jobs.runtime.start(),
     async close() {
       await deps.jobs.runtime.stop();
       await server.close();

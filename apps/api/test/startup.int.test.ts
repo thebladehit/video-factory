@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { createDb } from '@vf/db';
+import { createPgJobStore } from '@vf/jobs';
+import { LOCAL_USER_ID } from '@vf/shared';
 import { createApp, loadConfig } from '../src/index';
 import { testConfig } from './helpers';
 
@@ -17,5 +20,22 @@ describe('startup', () => {
       expect((e as Error).message).toContain('DATABASE_URL');
       expect((e as Error).message).toContain('S3_BUCKET');
     }
+  });
+});
+
+describe('job recovery', () => {
+  it('does not touch running jobs until start() — a second instance that fails to bind must not fail them', async () => {
+    const { db, close } = createDb(process.env.TEST_DATABASE_URL!);
+    const store = createPgJobStore(db);
+    const job = await store.insert({ userId: LOCAL_USER_ID, type: 'debug.sleep', payload: { durationMs: 100, steps: 1 } });
+    await store.claim(job.id);
+
+    const app = await createApp(testConfig());
+    expect((await store.get(job.id))!.status).toBe('running');
+
+    await app.start();
+    expect((await store.get(job.id))!.status).toBe('failed');
+    await app.close();
+    await close();
   });
 });

@@ -16,6 +16,7 @@ afterEach(async () => {
 export async function startApp(patch: Partial<AppConfig> = {}, overrides: Partial<AppDeps> = {}) {
   const app = await createApp(testConfig(patch), overrides);
   opened.push(app);
+  await app.start();
   const caller = appRouter.createCaller({ userId: LOCAL_USER_ID, deps: app.deps });
   return { ...app, caller };
 }
