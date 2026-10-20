@@ -63,6 +63,22 @@ describe('S3BlobStorage', () => {
     expect(res.headers.get('access-control-allow-origin')).toBeTruthy();
   });
 
+  it('allows cross-origin GET of media with range headers exposed (canvas preview, Web Audio)', async () => {
+    const key = `${prefix}/media.bin`;
+    await storage.put(key, new Uint8Array(100), { contentType: 'application/octet-stream' });
+    const url = await storage.presignGet(key);
+    const pre = await fetch(url, {
+      method: 'OPTIONS',
+      headers: { Origin: origin, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'range' },
+    });
+    expect(pre.headers.get('access-control-allow-origin')).toBeTruthy();
+    const res = await fetch(url, { headers: { Origin: origin, Range: 'bytes=0-9' } });
+    expect(res.status).toBe(206);
+    expect(res.headers.get('access-control-allow-origin')).toBeTruthy();
+    const exposed = (res.headers.get('access-control-expose-headers') ?? '').toLowerCase();
+    for (const h of ['content-length', 'content-range', 'accept-ranges']) expect(exposed).toContain(h);
+  });
+
   it('ping fails fast when the endpoint is unreachable', async () => {
     const started = Date.now();
     await expect(createS3BlobStorage({ ...cfg, endpoint: 'http://localhost:1' }).ping()).rejects.toThrow();

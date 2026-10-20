@@ -170,7 +170,8 @@ export function createS3BlobStorage(cfg: S3Config): BlobStorage {
                   AllowedOrigins: corsOrigins,
                   AllowedMethods: ['PUT', 'GET', 'HEAD'],
                   AllowedHeaders: ['*'],
-                  ExposeHeaders: ['ETag'],
+                  // Content-Range/Accept-Ranges — для медіа-елементів прев'ю (Web Audio з чужого origin без CORS дає тишу)
+                  ExposeHeaders: ['ETag', 'Content-Length', 'Content-Range', 'Accept-Ranges'],
                   MaxAgeSeconds: 3600,
                 },
               ],
