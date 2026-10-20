@@ -15,7 +15,8 @@ test('sidebar lists all sections and placeholders name their sub-project', async
     await expect(nav.getByRole('link', { name })).toBeVisible();
   }
   await nav.getByRole('link', { name: 'Бібліотека' }).click();
-  await expect(page.getByText('Скоро: підпроєкт 1')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Бібліотека' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Пошук' })).toBeVisible();
 });
 
 test('default text model persists across reloads', async ({ page }) => {

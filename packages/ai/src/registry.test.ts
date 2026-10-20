@@ -14,7 +14,9 @@ describe('AiRegistry', () => {
   it('marks only providers with keys as available and hides fake', async () => {
     const items = await registry.catalog(u);
     expect(items.filter((i) => i.provider === 'anthropic').every((i) => i.available)).toBe(true);
-    expect(items.filter((i) => i.provider === 'openai' || i.provider === 'google').some((i) => i.available)).toBe(false);
+    expect(items.filter((i) => i.provider === 'openai' || i.provider === 'google').some((i) => i.available)).toBe(
+      false,
+    );
     expect(items.some((i) => i.provider === 'fake')).toBe(false);
   });
 
@@ -33,7 +35,25 @@ describe('AiRegistry', () => {
   it('exposes fake models when AI_FAKE=1', async () => {
     const withFake = createAiRegistry({ credentials: createEnvCredentialStore({ AI_FAKE: '1' }) });
     const fakes = (await withFake.catalog(u)).filter((i) => i.provider === 'fake');
-    expect(fakes.map((f) => f.ref).sort()).toEqual(['fake/image', 'fake/stt', 'fake/text', 'fake/tts']);
+    expect(fakes.map((f) => f.ref).sort()).toEqual(['fake/image', 'fake/stt', 'fake/text', 'fake/tts', 'fake/video']);
     expect(fakes.every((f) => f.available)).toBe(true);
+  });
+
+  it('returns real image adapters for providers with keys', async () => {
+    const reg = createAiRegistry({ credentials: only('openai', 'google') });
+    const openaiImage = CATALOG.find((e) => e.provider === 'openai' && e.capability === 'image')!.ref;
+    const googleImage = CATALOG.find((e) => e.provider === 'google' && e.capability === 'image')!.ref;
+    expect(typeof (await reg.image(u, openaiImage)).generate).toBe('function');
+    expect(typeof (await reg.image(u, googleImage)).generate).toBe('function');
+    await expect(registry.image(u, openaiImage)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' });
+  });
+
+  it('image and video catalog entries declare aspects, and video entries are priced per second', () => {
+    for (const e of CATALOG.filter((x) => x.capability === 'image' || x.capability === 'video')) {
+      expect(e.aspects?.length, e.ref).toBeGreaterThan(0);
+    }
+    for (const e of CATALOG.filter((x) => x.capability === 'video' && x.provider !== 'fake')) {
+      expect(e.pricing?.[0]?.unit, e.ref).toBe('second');
+    }
   });
 });

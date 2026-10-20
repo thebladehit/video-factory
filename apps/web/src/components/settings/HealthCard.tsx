@@ -6,7 +6,7 @@ import { useTRPC } from '@/lib/trpc';
 export function HealthCard() {
   const trpc = useTRPC();
   const { data } = useQuery(trpc.health.check.queryOptions(undefined, { refetchInterval: 10_000 }));
-  const down = data && (data.db === 'down' || data.storage === 'down');
+  const down = data && (data.db === 'down' || data.storage === 'down' || data.media === 'down');
   return (
     <Card>
       <CardHeader>
@@ -22,6 +22,9 @@ export function HealthCard() {
             </Badge>
             <Badge variant={data.storage === 'up' ? 'secondary' : 'destructive'}>
               Сховище: {data.storage === 'up' ? 'працює' : 'недоступне'}
+            </Badge>
+            <Badge variant={data.media === 'up' ? 'secondary' : 'destructive'}>
+              FFmpeg: {data.media === 'up' ? 'працює' : 'недоступний'}
             </Badge>
           </>
         )}

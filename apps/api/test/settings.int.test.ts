@@ -8,7 +8,10 @@ describe('settings', () => {
   let ctx: Awaited<ReturnType<typeof startApp>>;
   beforeEach(async () => {
     ctx = await startApp();
-    await ctx.deps.db.update(userSettings).set({ defaults: {}, channelStyle: '' }).where(eq(userSettings.userId, LOCAL_USER_ID));
+    await ctx.deps.db
+      .update(userSettings)
+      .set({ defaults: {}, channelStyle: '', autoTagUploads: false })
+      .where(eq(userSettings.userId, LOCAL_USER_ID));
   });
 
   it('saves a default model', async () => {
@@ -50,5 +53,19 @@ describe('settings', () => {
     const s = await ctx.caller.settings.get();
     expect(s.defaults.text?.ref).toBe('fake/text');
     expect(s.channelStyle).toBe('x');
+  });
+
+  it('tagger default is validated as a text model', async () => {
+    await expect(ctx.caller.settings.setDefault({ capability: 'tagger', ref: 'fake/image' })).rejects.toMatchObject({
+      cause: { code: 'MODEL_NOT_FOUND' },
+    });
+    await ctx.caller.settings.setDefault({ capability: 'tagger', ref: 'fake/text' });
+    expect((await ctx.caller.settings.get()).defaults.tagger).toEqual({ ref: 'fake/text', available: true });
+  });
+
+  it('autoTagUploads is off by default and persists', async () => {
+    expect((await ctx.caller.settings.get()).autoTagUploads).toBe(false);
+    await ctx.caller.settings.setAutoTag({ enabled: true });
+    expect((await ctx.caller.settings.get()).autoTagUploads).toBe(true);
   });
 });

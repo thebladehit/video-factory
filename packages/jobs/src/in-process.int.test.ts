@@ -184,3 +184,92 @@ describe('InProcessQueue', () => {
     await expect(queue.get(crypto.randomUUID())).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });
+
+describe('InProcessQueue hardening', () => {
+  function setupWith(handler: JobDef['handler']) {
+    ({ queue, runtime } = createInProcessJobs(store));
+    runtime.register({ type: 'debug.sleep', concurrency: 1, handler });
+    events = [];
+    queue.onEvent((e) => events.push(e));
+  }
+
+  it('cancel between claim and handler start ends cancelled', async () => {
+    // вікно гонки: claim уже закомічено в БД (running), а контролер скасування ще не створено
+    let claimedInDb!: () => void;
+    const claimed = new Promise<void>((r) => (claimedInDb = r));
+    const slowClaimStore = {
+      ...store,
+      claim: async (id: string) => {
+        const r = await store.claim(id);
+        claimedInDb();
+        await new Promise((res) => setTimeout(res, 200));
+        return r;
+      },
+    };
+    let seenAborted: boolean | undefined;
+    ({ queue, runtime } = createInProcessJobs(slowClaimStore));
+    runtime.register({
+      type: 'debug.sleep',
+      concurrency: 1,
+      handler: async (_p, ctx) => {
+        seenAborted = ctx.signal.aborted;
+        return { ok: true };
+      },
+    });
+    await runtime.start();
+    const id = await queue.enqueue('debug.sleep', {}, opts);
+    await claimed;
+    await queue.cancel(id);
+    const job = await waitFor(id);
+    expect(job.status).toBe('cancelled');
+    expect(seenAborted).toBe(true);
+  });
+
+  it('cancel of a queued job that is claimed concurrently never runs the handler', async () => {
+    let handlerCalls = 0;
+    setupWith(async () => {
+      handlerCalls++;
+      return { ok: true };
+    });
+    const job = await store.insert({ userId: LOCAL_USER_ID, type: 'debug.sleep', payload: {} });
+    // задача вже «взята» іншим воркером у той момент, коли користувач натиснув «Скасувати»
+    expect(await store.requestCancel(job.id)).not.toBeNull();
+    expect(await store.claim(job.id)).toBeNull();
+    expect((await store.get(job.id))!.status).toBe('cancelled');
+    await runtime.start();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(handlerCalls).toBe(0);
+  });
+
+  it('late progress after cancel does not change status', async () => {
+    const job = await store.insert({ userId: LOCAL_USER_ID, type: 'debug.sleep', payload: {} });
+    await store.claim(job.id);
+    await store.finish(job.id, 'cancelled', {});
+    expect(await store.progress(job.id, 90, 'x')).toBeNull();
+    expect(await store.finish(job.id, 'done', { result: 1 })).toBeNull();
+    const after = (await store.get(job.id))!;
+    expect(after.status).toBe('cancelled');
+    expect(after.progress).not.toBe(90);
+  });
+
+  it('stop() resolves within 10s even if a handler ignores abort', async () => {
+    setupWith(() => new Promise(() => {}));
+    await runtime.start();
+    const id = await queue.enqueue('debug.sleep', {}, opts);
+    await waitFor(id, ['running']);
+    const started = Date.now();
+    await runtime.stop();
+    expect(Date.now() - started).toBeLessThan(10_500);
+    ({ runtime } = createInProcessJobs(store)); // afterEach не має чекати завислий обробник удруге
+  }, 15_000);
+
+  it('events carry userId, type and subject from payload', async () => {
+    setupWith(async () => ({ ok: true }));
+    await runtime.start();
+    const assetId = crypto.randomUUID();
+    const id = await queue.enqueue('debug.sleep', { assetId }, opts);
+    await waitFor(id);
+    const e = events.find((x) => x.jobId === id && x.status === 'done')!;
+    expect(e).toMatchObject({ userId: LOCAL_USER_ID, type: 'debug.sleep', subject: { assetId } });
+  });
+});

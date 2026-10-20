@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   check,
   customType,
   index,
@@ -13,8 +14,8 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { CAPABILITIES, JOB_STATUSES } from '@vf/shared';
-import type { Capability, ModelRef } from '@vf/shared';
+import { ASSET_STATUSES, CAPABILITIES, JOB_STATUSES } from '@vf/shared';
+import type { DefaultSlot, ModelRef } from '@vf/shared';
 
 const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -31,8 +32,10 @@ export const userSettings = pgTable('user_settings', {
   userId: uuid('user_id')
     .primaryKey()
     .references(() => users.id, { onDelete: 'cascade' }),
-  defaults: jsonb('defaults').$type<Partial<Record<Capability, ModelRef>>>().notNull().default({}),
+  defaults: jsonb('defaults').$type<Partial<Record<DefaultSlot, ModelRef>>>().notNull().default({}),
   channelStyle: text('channel_style').notNull().default(''),
+  /** Vision-теги для завантажених файлів (коштує грошей — вмикається свідомо) */
+  autoTagUploads: boolean('auto_tag_uploads').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -50,6 +53,8 @@ export const jobs = pgTable(
     message: text('message'),
     error: text('error'),
     attempts: integer('attempts').notNull().default(0),
+    /** Прапорець скасування: працює і для задачі, яку саме бере воркер (гонка cancel vs claim) */
+    cancelRequested: boolean('cancel_requested').notNull().default(false),
     result: jsonb('result'),
     createdAt: createdAt(),
     startedAt: timestamp('started_at', { withTimezone: true }),
@@ -77,6 +82,12 @@ export const generations = pgTable(
     jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
     error: text('error'),
     costEstimate: numeric('cost_estimate', { precision: 12, scale: 6 }),
+    /** Операція провайдера (відео): з нею задача після рестарту продовжує опитування, а не платить удруге */
+    providerOp: jsonb('provider_op'),
+    assetIds: uuid('asset_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
     createdAt: createdAt(),
   },
   (t) => [check('generations_capability_check', sql`${t.capability} in (${inList(CAPABILITIES)})`)],
@@ -91,6 +102,11 @@ export const assets = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     kind: text('kind', { enum: ['image', 'video', 'audio'] }).notNull(),
     source: text('source', { enum: ['generated', 'uploaded', 'rendered'] }).notNull(),
+    status: text('status', { enum: ASSET_STATUSES }).notNull().default('ready'),
+    error: text('error'),
+    originalName: text('original_name'),
+    /** id незавершеного multipart-завантаження S3 (для скасування й прибирання) */
+    uploadId: text('upload_id'),
     storageKey: text('storage_key').notNull().unique(),
     thumbKey: text('thumb_key'),
     mime: text('mime').notNull(),
@@ -99,7 +115,10 @@ export const assets = pgTable(
     durationMs: integer('duration_ms'),
     sizeBytes: bigint('size_bytes', { mode: 'number' }),
     title: text('title').notNull().default(''),
-    tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+    tags: text('tags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     prompt: text('prompt'),
     language: text('language'),
     generationId: uuid('generation_id').references(() => generations.id, { onDelete: 'set null' }),
@@ -111,9 +130,11 @@ export const assets = pgTable(
   },
   (t) => [
     index('assets_user_created_idx').on(t.userId, t.createdAt),
+    index('assets_user_status_created_idx').on(t.userId, t.status, t.createdAt),
     index('assets_search_idx').using('gin', t.search),
     index('assets_title_trgm_idx').using('gin', t.title.op('gin_trgm_ops')),
     check('assets_kind_check', sql`${t.kind} in ('image', 'video', 'audio')`),
     check('assets_source_check', sql`${t.source} in ('generated', 'uploaded', 'rendered')`),
+    check('assets_status_check', sql`${t.status} in (${inList(ASSET_STATUSES)})`),
   ],
 );

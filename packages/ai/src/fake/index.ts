@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Aspect, ImageGen, STT, TextGen, TTS, Word } from '../types';
+import { titleFromPrompt } from '@vf/shared';
+import { taggerSchema } from '../prompts/tagger';
 import { fakeValueFor } from './fake-object';
 import { solidPng } from './png';
 import { silentWav } from './wav';
@@ -11,7 +13,9 @@ export const fakeText: TextGen = {
   async generateText({ prompt }) {
     return `[fake] ${prompt}`;
   },
-  async generateObject(schema) {
+  async generateObject(schema, { prompt, onUsage }) {
+    onUsage?.({ inputTokens: 0, outputTokens: 0 });
+    if ((schema as unknown) === taggerSchema) return fakeTags(prompt) as never;
     return fakeValueFor(schema);
   },
 };
@@ -50,3 +54,13 @@ export const fakeStt: STT = {
     return { text, words };
   },
 };
+
+const FALLBACK_TAGS = ['fake', 'image', 'test', 'media', 'tag'];
+
+/** Детерміновані теги: перші 5–10 унікальних слів опису (≥ 3 літер), інакше — заглушка. */
+function fakeTags(prompt: string) {
+  const description = prompt.split('\n').slice(1, -1).join(' ') || '';
+  const words = [...new Set(description.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])].slice(0, 10);
+  const tags = [...new Set([...words, ...FALLBACK_TAGS])].slice(0, Math.max(5, words.length));
+  return { title: titleFromPrompt(description || 'Fake-зображення'), tags };
+}

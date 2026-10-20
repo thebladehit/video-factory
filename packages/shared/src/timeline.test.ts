@@ -11,7 +11,15 @@ const validDoc = () => ({
       id: 't1',
       kind: 'video',
       clips: [
-        { id: 'c1', assetId: 'a1', start: 0, duration: 2, in: 0, fit: 'cover', effects: [{ type: 'kenburns', params: {} }] },
+        {
+          id: 'c1',
+          assetId: 'a1',
+          start: 0,
+          duration: 2,
+          in: 0,
+          fit: 'cover',
+          effects: [{ type: 'kenburns', params: {} }],
+        },
       ],
     },
   ],

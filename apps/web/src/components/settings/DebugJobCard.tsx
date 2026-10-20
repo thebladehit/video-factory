@@ -81,7 +81,9 @@ export function DebugJobCard() {
         {event && (
           <div className="grid gap-2">
             <div className="flex items-center gap-3">
-              <Badge variant={event.status === 'failed' ? 'destructive' : 'secondary'}>{STATUS_LABELS[event.status]}</Badge>
+              <Badge variant={event.status === 'failed' ? 'destructive' : 'secondary'}>
+                {STATUS_LABELS[event.status]}
+              </Badge>
               <span className="text-sm tabular-nums">{Math.round(event.progress)}%</span>
               {event.message && <span className="text-sm text-muted-foreground">{event.message}</span>}
             </div>

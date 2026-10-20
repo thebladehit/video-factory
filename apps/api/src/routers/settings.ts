@@ -1,8 +1,11 @@
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { userSettings } from '@vf/db';
-import { AppError, CAPABILITIES, type Capability, type ModelRef } from '@vf/shared';
+import { AppError, DEFAULT_SLOTS, type DefaultSlot, type ModelRef } from '@vf/shared';
 import { procedure, router } from '../trpc';
+
+/** Модель для тегів — текстова */
+const capabilityOf = (slot: DefaultSlot) => (slot === 'tagger' ? 'text' : slot);
 
 const modelRef = z.string().regex(/^[a-z]+\/.+$/) as unknown as z.ZodType<ModelRef>;
 
@@ -11,21 +14,21 @@ export const settingsRouter = router({
     const [row] = await ctx.deps.db.select().from(userSettings).where(eq(userSettings.userId, ctx.userId));
     const catalog = await ctx.deps.ai.catalog(ctx.userId);
     const defaults = Object.fromEntries(
-      CAPABILITIES.map((cap) => {
-        const ref = row?.defaults[cap];
-        if (!ref) return [cap, null];
-        const available = catalog.some((i) => i.ref === ref && i.capability === cap && i.available);
-        return [cap, { ref, available }];
+      DEFAULT_SLOTS.map((slot) => {
+        const ref = row?.defaults[slot];
+        if (!ref) return [slot, null];
+        const available = catalog.some((i) => i.ref === ref && i.capability === capabilityOf(slot) && i.available);
+        return [slot, { ref, available }];
       }),
-    ) as Record<Capability, { ref: ModelRef; available: boolean } | null>;
-    return { defaults, channelStyle: row?.channelStyle ?? '' };
+    ) as Record<DefaultSlot, { ref: ModelRef; available: boolean } | null>;
+    return { defaults, channelStyle: row?.channelStyle ?? '', autoTagUploads: row?.autoTagUploads ?? false };
   }),
 
   setDefault: procedure
-    .input(z.object({ capability: z.enum(CAPABILITIES), ref: modelRef }))
+    .input(z.object({ capability: z.enum(DEFAULT_SLOTS), ref: modelRef }))
     .mutation(async ({ ctx, input }) => {
       const entry = (await ctx.deps.ai.catalog(ctx.userId)).find(
-        (i) => i.ref === input.ref && i.capability === input.capability,
+        (i) => i.ref === input.ref && i.capability === capabilityOf(input.capability),
       );
       if (!entry) throw new AppError('MODEL_NOT_FOUND', `Модель ${input.ref} не підходить для «${input.capability}»`);
       if (!entry.available) throw new AppError('MODEL_UNAVAILABLE', `Немає ключа для провайдера ${entry.provider}`);
@@ -44,5 +47,15 @@ export const settingsRouter = router({
       .insert(userSettings)
       .values({ userId: ctx.userId, channelStyle: input.text })
       .onConflictDoUpdate({ target: userSettings.userId, set: { channelStyle: input.text, updatedAt: new Date() } });
+  }),
+
+  setAutoTag: procedure.input(z.object({ enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
+    await ctx.deps.db
+      .insert(userSettings)
+      .values({ userId: ctx.userId, autoTagUploads: input.enabled })
+      .onConflictDoUpdate({
+        target: userSettings.userId,
+        set: { autoTagUploads: input.enabled, updatedAt: new Date() },
+      });
   }),
 });

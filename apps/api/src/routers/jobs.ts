@@ -1,15 +1,8 @@
 import { z } from 'zod';
-import { AppError, TERMINAL_STATUSES, type JobEvent, type JobRecord } from '@vf/shared';
+import { AppError, TERMINAL_STATUSES, toJobEvent, type JobEvent, type JobRecord } from '@vf/shared';
 import { procedure, router, type Context } from '../trpc';
 
 const byId = z.object({ id: z.string() });
-const toEvent = (r: JobRecord): JobEvent => ({
-  jobId: r.id,
-  status: r.status,
-  progress: r.progress,
-  message: r.message,
-  error: r.error,
-});
 
 /** Задачі іншого користувача поводяться як неіснуючі. */
 async function ownJob(ctx: Context, id: string): Promise<JobRecord> {
@@ -18,35 +11,52 @@ async function ownJob(ctx: Context, id: string): Promise<JobRecord> {
   return job;
 }
 
-async function* jobEvents(ctx: Context, id: string, signal: AbortSignal | undefined): AsyncGenerator<JobEvent> {
+/**
+ * Потік подій черги, що пройшли фільтр, до abort або поки `stop(e)` не поверне true.
+ * Один abort-listener на підписку (а не на кожне очікування).
+ */
+async function* eventStream(
+  ctx: Context,
+  filter: (e: JobEvent) => boolean,
+  signal: AbortSignal | undefined,
+  start?: () => Promise<{ snapshot: JobEvent; done: boolean }>,
+): AsyncGenerator<JobEvent> {
   const buffer: JobEvent[] = [];
   let wake: (() => void) | null = null;
   const off = ctx.deps.jobs.queue.onEvent((e) => {
-    if (e.jobId !== id) return;
+    if (!filter(e)) return;
     buffer.push(e);
     wake?.();
   });
+  const onAbort = () => wake?.();
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
-    const snapshot = toEvent(await ctx.deps.jobs.queue.get(id));
-    yield snapshot;
-    if (TERMINAL_STATUSES.has(snapshot.status)) return;
-    let lastProgress = snapshot.progress;
+    let lastProgress = -1;
+    let single = false;
+    if (start) {
+      single = true;
+      const { snapshot, done } = await start();
+      yield snapshot;
+      if (done) return;
+      lastProgress = snapshot.progress;
+    }
     while (!signal?.aborted) {
       for (let e = buffer.shift(); e; e = buffer.shift()) {
         const terminal = TERMINAL_STATUSES.has(e.status);
         // події, що прийшли до знімка, можуть бути старішими за нього
-        if (!terminal && e.progress < lastProgress) continue;
+        if (single && !terminal && e.progress < lastProgress) continue;
         lastProgress = e.progress;
         yield e;
-        if (terminal) return;
+        if (single && terminal) return;
       }
       await new Promise<void>((resolve) => {
         wake = resolve;
-        signal?.addEventListener('abort', () => resolve(), { once: true });
+        if (signal?.aborted) resolve();
       });
       wake = null;
     }
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     off();
   }
 }
@@ -74,6 +84,17 @@ export const jobsRouter = router({
   events: procedure.input(byId).subscription(async ({ ctx, input, signal }) => {
     // перевірка до старту потоку — помилка доходить до клієнта як звичайний NOT_FOUND
     await ownJob(ctx, input.id);
-    return jobEvents(ctx, input.id, signal);
+    return eventStream(
+      ctx,
+      (e) => e.jobId === input.id,
+      signal,
+      async () => {
+        const snapshot = toJobEvent(await ctx.deps.jobs.queue.get(input.id));
+        return { snapshot, done: TERMINAL_STATUSES.has(snapshot.status) };
+      },
+    );
   }),
+
+  /** Усі події задач поточного користувача — одна підписка на застосунок (бібліотека, завантаження). */
+  feed: procedure.subscription(({ ctx, signal }) => eventStream(ctx, (e) => e.userId === ctx.userId, signal)),
 });

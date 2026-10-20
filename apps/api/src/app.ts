@@ -4,18 +4,37 @@ import Fastify from 'fastify';
 import { createAiRegistry, createEnvCredentialStore, type AiRegistry } from '@vf/ai';
 import { sql } from 'drizzle-orm';
 import { createDb, seed, type Db } from '@vf/db';
-import { createInProcessJobs, createPgJobStore, type JobQueue, type WorkerRuntime } from '@vf/jobs';
+import {
+  createInProcessJobs,
+  createIntervalScheduler,
+  createPgJobStore,
+  type JobQueue,
+  type WorkerRuntime,
+} from '@vf/jobs';
 import { AppError } from '@vf/shared';
-import { createS3BlobStorage, type BlobStorage } from '@vf/storage';
+import { checkTools, type MediaTools } from '@vf/media';
+import { createLazyBucket, createS3BlobStorage, type BlobStorage } from '@vf/storage';
 import { singleUserAuth, type AuthProvider } from './auth/single-user';
 import type { AppConfig } from './config';
 import { debugSleep } from './jobs/debug-sleep';
+import { cleanupStaleUploads } from './modules/assets/cleanup';
+import { assetProcessJob } from './modules/assets/process-job';
+import { reconcileAfterRestart } from './modules/recovery';
+import { assetsTagJob } from './modules/assets/tag-job';
+import { imageGenerateJob } from './modules/generate/image-job';
+import { videoGenerateJob } from './modules/generate/video-job';
+import { tagAfterProcess } from './modules/assets/tagger';
 import { appRouter, type AppRouter } from './routers';
 
 export interface AppDeps {
   db: Db;
   dbPing: () => Promise<void>;
   storage: BlobStorage;
+  /** Бакет і CORS створюються при першій потребі (якщо на старті S3 був недоступний) */
+  bucket: { ensure(): Promise<void> };
+  media: MediaTools;
+  /** ffmpeg/ffprobe доступні (кеш 30 с) */
+  mediaPing: () => Promise<boolean>;
   jobs: { queue: JobQueue; runtime: WorkerRuntime };
   ai: AiRegistry;
   auth: AuthProvider;
@@ -43,9 +62,17 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
 
   const server = Fastify({ logger: !process.env.VITEST, routerOptions: { maxParamLength: 5000 } });
   const storage = overrides.storage ?? createS3BlobStorage(cfg.s3);
+  const bucket = createLazyBucket(storage, { corsOrigins: [cfg.webOrigin] });
+  const media: MediaTools = { ffmpegPath: cfg.ffmpegPath, ffprobePath: cfg.ffprobePath };
+  let mediaCheck: { at: number; ok: Promise<boolean> } | null = null;
+  const mediaPing = () => {
+    if (!mediaCheck || Date.now() - mediaCheck.at > 30_000) mediaCheck = { at: Date.now(), ok: checkTools(media) };
+    return mediaCheck.ok;
+  };
+  if (!(await mediaPing())) server.log.warn('FFmpeg/ffprobe недоступні — обробка медіа не працюватиме');
   try {
     await Promise.race([
-      storage.ensureBucket({ corsOrigins: [cfg.webOrigin] }),
+      bucket.ensure(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
     ]);
   } catch (e) {
@@ -56,14 +83,25 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     db: dbHandle.db,
     dbPing: dbHandle.ping,
     storage,
+    bucket,
+    media,
+    mediaPing,
     ai:
       overrides.ai ??
-      createAiRegistry({ credentials: createEnvCredentialStore({ ...process.env, AI_FAKE: cfg.aiFake ? '1' : '' }) }),
+      createAiRegistry({
+        credentials: createEnvCredentialStore({ ...process.env, AI_FAKE: cfg.aiFake ? '1' : '' }),
+        media: { ffmpegPath: cfg.ffmpegPath, ffprobePath: cfg.ffprobePath },
+      }),
     jobs: overrides.jobs ?? createInProcessJobs(createPgJobStore(dbHandle.db)),
     auth: overrides.auth ?? singleUserAuth,
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
+  deps.jobs.runtime.register(assetProcessJob(deps, tagAfterProcess));
+  deps.jobs.runtime.register(assetsTagJob(deps));
+  deps.jobs.runtime.register(imageGenerateJob(deps));
+  deps.jobs.runtime.register(videoGenerateJob(deps, { pollMs: cfg.videoPollMs, timeoutMs: cfg.videoTimeoutMs }));
+  const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
 
   await server.register(cors, { origin: cfg.webOrigin });
   await server.register(fastifyTRPCPlugin, {
@@ -74,6 +112,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     } satisfies FastifyTRPCPluginOptions<AppRouter>['trpcOptions'],
   });
 
+  let closed = false;
   return {
     server,
     deps,
@@ -81,8 +120,17 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
      * Запускає воркери й відновлення задач. Викликати лише після успішного listen():
      * зайнятий порт = вже працює інший екземпляр, і його задачі не можна чіпати.
      */
-    start: () => deps.jobs.runtime.start(),
+    async start() {
+      await deps.jobs.runtime.start();
+      await reconcileAfterRestart(deps);
+      scheduler.every('assets.cleanup', 3_600_000, async () => void (await cleanupStaleUploads(deps)), {
+        runOnStart: true,
+      });
+    },
     async close() {
+      if (closed) return;
+      closed = true;
+      scheduler.stop();
       await deps.jobs.runtime.stop();
       await server.close();
       await dbHandle.close();

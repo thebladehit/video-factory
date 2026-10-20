@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { users } from '@vf/db';
 import type { JobEvent } from '@vf/shared';
 import { appRouter } from '../src/index';
 import { startApp } from './helpers';
@@ -62,5 +64,39 @@ describe('jobs', () => {
     await expect(other.jobs.events({ id: jobId })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect((await caller.jobs.get({ id: jobId })).status).not.toBe('cancelled');
     await caller.jobs.cancel({ id: jobId });
+  });
+
+  it('feed streams only own events', async () => {
+    const { caller, deps } = await startApp();
+    const [stranger] = await deps.db.insert(users).values({ name: 'Інший' }).returning();
+    const other = appRouter.createCaller({ userId: stranger!.id, deps });
+    const feed = await caller.jobs.feed();
+    const seen: JobEvent[] = [];
+    const reading = (async () => {
+      for await (const e of feed) {
+        seen.push(e);
+        if (e.status === 'done') break;
+      }
+    })();
+    await new Promise((r) => setTimeout(r, 50));
+    const foreign = await other.jobs.enqueueDebug({ durationMs: 100, steps: 1 });
+    await new Promise((r) => setTimeout(r, 300));
+    const { jobId } = await caller.jobs.enqueueDebug({ durationMs: 100, steps: 1 });
+    await reading;
+    expect(seen.every((e) => e.jobId === jobId)).toBe(true);
+    expect(seen.some((e) => e.jobId === foreign.jobId)).toBe(false);
+    expect(seen.at(-1)).toMatchObject({ jobId, status: 'done', type: 'debug.sleep' });
+    await deps.db.delete(users).where(eq(users.id, stranger!.id));
+  });
+
+  it('error responses carry no stack trace', async () => {
+    const { server } = await startApp();
+    const res = await server.inject({
+      method: 'GET',
+      url: `/trpc/jobs.get?input=${encodeURIComponent(JSON.stringify({ id: crypto.randomUUID() }))}`,
+    });
+    const body = res.json();
+    expect(body.error.data.appCode).toBe('NOT_FOUND');
+    expect(body.error.data).not.toHaveProperty('stack');
   });
 });

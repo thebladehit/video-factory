@@ -3,9 +3,12 @@ import { CATALOG, type CatalogEntry } from './catalog';
 import type { CredentialStore } from './credentials';
 import { fakeImage, fakeStt, fakeText, fakeTts } from './fake';
 import { anthropicText } from './providers/anthropic';
-import { googleText } from './providers/google';
-import { openaiText } from './providers/openai';
-import type { ImageGen, STT, TextGen, TTS } from './types';
+import { googleImage, googleText } from './providers/google';
+import { openaiImage, openaiText } from './providers/openai';
+import { createFakeVideo } from './fake/video';
+import { createGeminiOmniVideoGen } from './providers/google-omni';
+import type { ImageGen, STT, TextGen, TTS, VideoGen } from './types';
+import type { MediaTools } from '@vf/media';
 
 export interface CatalogItem extends CatalogEntry {
   available: boolean;
@@ -15,9 +18,16 @@ export interface AiRegistry {
   catalog(userId: string): Promise<CatalogItem[]>;
   text(userId: string, ref: ModelRef): Promise<TextGen>;
   image(userId: string, ref: ModelRef): Promise<ImageGen>;
+  video(userId: string, ref: ModelRef): Promise<VideoGen>;
   tts(userId: string, ref: ModelRef): Promise<TTS>;
   stt(userId: string, ref: ModelRef): Promise<STT>;
 }
+
+const IMAGE_FACTORIES: Partial<Record<ProviderId, (key: string, model: string, entry: CatalogEntry) => ImageGen>> = {
+  openai: openaiImage,
+  google: googleImage,
+  fake: () => fakeImage,
+};
 
 const TEXT_FACTORIES: Partial<Record<ProviderId, (key: string, model: string) => TextGen>> = {
   anthropic: anthropicText,
@@ -29,12 +39,16 @@ const TEXT_FACTORIES: Partial<Record<ProviderId, (key: string, model: string) =>
 export function createAiRegistry(deps: {
   credentials: CredentialStore;
   catalog?: readonly CatalogEntry[];
+  /** ffmpeg для fake-відео; без нього fake/video недоступна */
+  media?: MediaTools;
 }): AiRegistry {
   const catalog = deps.catalog ?? CATALOG;
+  const fakeVideo = deps.media ? createFakeVideo(deps.media) : null;
 
   async function resolve(userId: string, ref: ModelRef, capability: Capability) {
     const entry = catalog.find((e) => e.ref === ref && e.capability === capability);
-    if (!entry) throw new AppError('MODEL_NOT_FOUND', `Модель ${ref} не знайдено для «${capability}»`, { ref, capability });
+    if (!entry)
+      throw new AppError('MODEL_NOT_FOUND', `Модель ${ref} не знайдено для «${capability}»`, { ref, capability });
     const key = await deps.credentials.get(userId, entry.provider);
     if (!key) throw new AppError('MODEL_UNAVAILABLE', `Немає ключа для провайдера ${entry.provider}`, { ref });
     return { entry, key, model: ref.slice(entry.provider.length + 1) };
@@ -43,7 +57,9 @@ export function createAiRegistry(deps: {
   const fakeOnly = async <T>(userId: string, ref: ModelRef, capability: Capability, impl: T): Promise<T> => {
     const { entry } = await resolve(userId, ref, capability);
     if (entry.provider !== 'fake') {
-      throw new AppError('MODEL_UNAVAILABLE', `Адаптер ${entry.provider} для «${capability}» ще не підключено`, { ref });
+      throw new AppError('MODEL_UNAVAILABLE', `Адаптер ${entry.provider} для «${capability}» ще не підключено`, {
+        ref,
+      });
     }
     return impl;
   };
@@ -60,7 +76,22 @@ export function createAiRegistry(deps: {
       const { entry, key, model } = await resolve(userId, ref, 'text');
       return TEXT_FACTORIES[entry.provider]!(key, model);
     },
-    image: (userId, ref) => fakeOnly(userId, ref, 'image', fakeImage),
+    async image(userId, ref) {
+      const { entry, key, model } = await resolve(userId, ref, 'image');
+      const factory = IMAGE_FACTORIES[entry.provider];
+      if (!factory)
+        throw new AppError('MODEL_UNAVAILABLE', `Генерацію фото для ${entry.provider} не підключено`, { ref });
+      return factory(key, model, entry);
+    },
+    async video(userId, ref) {
+      const { entry, key, model } = await resolve(userId, ref, 'video');
+      if (entry.provider === 'fake') {
+        if (!fakeVideo) throw new AppError('MODEL_UNAVAILABLE', 'Fake-відео потребує ffmpeg', { ref });
+        return fakeVideo;
+      }
+      if (entry.provider === 'google') return createGeminiOmniVideoGen({ apiKey: key, model });
+      throw new AppError('MODEL_UNAVAILABLE', `Генерацію відео для ${entry.provider} не підключено`, { ref });
+    },
     tts: (userId, ref) => fakeOnly(userId, ref, 'tts', fakeTts),
     stt: (userId, ref) => fakeOnly(userId, ref, 'stt', fakeStt),
   };

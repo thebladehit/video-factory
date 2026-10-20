@@ -11,9 +11,13 @@ export function ChannelStyle() {
   const settings = useQuery(trpc.settings.get.queryOptions());
   const [text, setText] = useState('');
   const save = useMutation(trpc.settings.setChannelStyle.mutationOptions());
+  const [loaded, setLoaded] = useState(false);
+  // лише перше завантаження: пізніший refetch не має перезаписати те, що користувач уже ввів
   useEffect(() => {
-    if (settings.data) setText(settings.data.channelStyle);
-  }, [settings.data]);
+    if (!settings.data || loaded) return;
+    setText(settings.data.channelStyle);
+    setLoaded(true);
+  }, [settings.data, loaded]);
 
   return (
     <Card>
@@ -28,6 +32,7 @@ export function ChannelStyle() {
           id="channel-style"
           value={text}
           maxLength={4000}
+          disabled={!loaded}
           placeholder="Тон, аудиторія, заборонені теми — додається до промптів сценарію"
           onChange={(e) => {
             setText(e.target.value);

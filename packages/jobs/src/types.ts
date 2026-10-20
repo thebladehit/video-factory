@@ -31,10 +31,22 @@ export interface WorkerRuntime {
 
 export interface JobStore {
   insert(row: { userId: string; type: JobType; payload: unknown }): Promise<JobRecord>;
-  /** queued → running атомарно; null, якщо задача вже не queued */
+  /**
+   * queued → running атомарно; null, якщо задача вже не queued.
+   * Задачу з прапорцем скасування не бере, а переводить у cancelled.
+   */
   claim(id: string): Promise<JobRecord | null>;
-  progress(id: string, pct: number, message: string | null): Promise<JobRecord>;
-  finish(id: string, status: 'done' | 'failed' | 'cancelled', fields: { result?: unknown; error?: string }): Promise<JobRecord>;
+  /** Лише для running; null — задача вже не виконується (запізнілий прогрес ігнорується) */
+  progress(id: string, pct: number, message: string | null): Promise<JobRecord | null>;
+  /** Лише з running|queued; null — задача вже завершена */
+  finish(
+    id: string,
+    status: 'done' | 'failed' | 'cancelled',
+    fields: { result?: unknown; error?: string },
+  ): Promise<JobRecord | null>;
+  /** Ставить прапорець скасування для queued|running; null — задача вже завершена */
+  requestCancel(id: string): Promise<JobRecord | null>;
+  cancelRequested(id: string): Promise<boolean>;
   /** queued → cancelled атомарно; null, якщо задача вже не queued */
   cancelIfQueued(id: string): Promise<JobRecord | null>;
   get(id: string): Promise<JobRecord | null>;

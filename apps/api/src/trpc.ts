@@ -24,7 +24,10 @@ const CODE_MAP: Record<ErrorCode, TRPC_ERROR_CODE_KEY> = {
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
     const cause = isAppError(error.cause) ? error.cause : null;
-    return { ...shape, data: { ...shape.data, appCode: cause?.code ?? null, details: cause?.details ?? null } };
+    // stack trace клієнту не віддаємо
+    const data: Partial<typeof shape.data> = { ...shape.data };
+    delete data.stack;
+    return { ...shape, data: { ...data, appCode: cause?.code ?? null, details: cause?.details ?? null } };
   },
 });
 
