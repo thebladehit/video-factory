@@ -5,3 +5,6 @@ dist/
 !.env.example
 .DS_Store
 .turbo/
+.superpowers/
+apps/web/test-results/
+apps/web/playwright-report/
