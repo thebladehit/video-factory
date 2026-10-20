@@ -86,4 +86,15 @@ describe('jobs', () => {
     expect(seen.some((e) => e.jobId === foreign.jobId)).toBe(false);
     expect(seen.at(-1)).toMatchObject({ jobId, status: 'done', type: 'debug.sleep' });
   });
+
+  it('error responses carry no stack trace', async () => {
+    const { server } = await startApp();
+    const res = await server.inject({
+      method: 'GET',
+      url: `/trpc/jobs.get?input=${encodeURIComponent(JSON.stringify({ id: crypto.randomUUID() }))}`,
+    });
+    const body = res.json();
+    expect(body.error.data.appCode).toBe('NOT_FOUND');
+    expect(body.error.data).not.toHaveProperty('stack');
+  });
 });
