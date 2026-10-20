@@ -202,3 +202,31 @@ test('render does not start when the save before it fails', async ({ page }) => 
   await page.waitForTimeout(1000);
   await expect(page.getByTestId('render-item')).toHaveCount(0);
 });
+
+test('a slider released outside itself still ends its undo step', async ({ page }) => {
+  const name = `gest${uid()}`;
+  await page.goto('/library');
+  await page.getByTestId('file-input').setInputFiles([{ name: `${name}.png`, mimeType: 'image/png', buffer: PNG }]);
+  await expect(page.getByTestId('asset-grid').getByRole('button', { name, exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await newProject(page, `Gesture ${uid()}`);
+  const panel = page.getByTestId('library-panel');
+  await panel.getByPlaceholder('Пошук у бібліотеці').fill(name);
+  await panel.getByRole('button', { name: `Додати «${name}» під плейхед` }).click({ force: true });
+  await videoClip(page).click();
+  const slider = page.getByTestId('inspector').getByTestId('kb-to-scale');
+  const box = (await slider.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.9, box.y + box.height / 2);
+  await page.mouse.move(box.x + box.width * 0.9, box.y + 300); // відпускаємо далеко від повзунка
+  await page.mouse.up();
+  const after = await slider.inputValue();
+  expect(Number(after)).toBeGreaterThan(1.15);
+  // наступна зміна — окремий крок історії: undo прибирає лише її
+  await page.getByRole('radio', { name: '16:9' }).click();
+  await page.getByRole('button', { name: 'Скасувати', exact: true }).click();
+  await expect(page.getByRole('radio', { name: '9:16' })).toHaveAttribute('data-state', 'on');
+  await expect(slider).toHaveValue(after);
+});
