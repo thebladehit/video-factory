@@ -4,13 +4,21 @@ import Fastify from 'fastify';
 import { createAiRegistry, createEnvCredentialStore, type AiRegistry } from '@vf/ai';
 import { sql } from 'drizzle-orm';
 import { createDb, seed, type Db } from '@vf/db';
-import { createInProcessJobs, createPgJobStore, type JobQueue, type WorkerRuntime } from '@vf/jobs';
+import {
+  createInProcessJobs,
+  createIntervalScheduler,
+  createPgJobStore,
+  type JobQueue,
+  type WorkerRuntime,
+} from '@vf/jobs';
 import { AppError } from '@vf/shared';
 import { checkTools, type MediaTools } from '@vf/media';
 import { createLazyBucket, createS3BlobStorage, type BlobStorage } from '@vf/storage';
 import { singleUserAuth, type AuthProvider } from './auth/single-user';
 import type { AppConfig } from './config';
 import { debugSleep } from './jobs/debug-sleep';
+import { cleanupStaleUploads } from './modules/assets/cleanup';
+import { assetProcessJob } from './modules/assets/process-job';
 import { appRouter, type AppRouter } from './routers';
 
 export interface AppDeps {
@@ -84,7 +92,8 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
-  deps.jobs.runtime.register({ type: 'asset.process', concurrency: 2, handler: async () => ({}) });
+  deps.jobs.runtime.register(assetProcessJob(deps));
+  const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
 
   await server.register(cors, { origin: cfg.webOrigin });
   await server.register(fastifyTRPCPlugin, {
@@ -102,8 +111,14 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
      * Запускає воркери й відновлення задач. Викликати лише після успішного listen():
      * зайнятий порт = вже працює інший екземпляр, і його задачі не можна чіпати.
      */
-    start: () => deps.jobs.runtime.start(),
+    async start() {
+      await deps.jobs.runtime.start();
+      scheduler.every('assets.cleanup', 3_600_000, async () => void (await cleanupStaleUploads(deps)), {
+        runOnStart: true,
+      });
+    },
     async close() {
+      scheduler.stop();
       await deps.jobs.runtime.stop();
       await server.close();
       await dbHandle.close();

@@ -121,3 +121,15 @@ export async function abortUpload(deps: AppDeps, userId: string, assetId: string
   await deps.storage.delete(row.storageKey);
   await deps.db.delete(assets).where(eq(assets.id, row.id));
 }
+
+/** «Повторити» для файлу з помилкою обробки */
+export async function retryProcess(deps: AppDeps, userId: string, assetId: string): Promise<{ jobId: string }> {
+  const row = await ownAsset(deps, userId, assetId);
+  if (row.status !== 'failed')
+    throw new AppError('CONFLICT', 'Повторити можна лише файл з помилкою', { status: row.status });
+  await deps.db
+    .update(assets)
+    .set({ status: 'processing', error: null })
+    .where(and(eq(assets.id, row.id), eq(assets.status, 'failed')));
+  return { jobId: await deps.jobs.queue.enqueue('asset.process', { assetId: row.id }, { userId }) };
+}

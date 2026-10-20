@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { procedure, router } from '../../trpc';
-import { abortUpload, completeUpload, createUpload, listUploadedParts, signParts } from './service';
+import { abortUpload, completeUpload, createUpload, listUploadedParts, retryProcess, signParts } from './service';
 
 const assetId = z.object({ assetId: z.string() });
 
@@ -23,6 +23,10 @@ export const assetsRouter = router({
       }),
     )
     .mutation(({ ctx, input }) => completeUpload(ctx.deps, ctx.userId, input)),
+
+  retryProcess: procedure
+    .input(z.object({ id: z.string() }))
+    .mutation(({ ctx, input }) => retryProcess(ctx.deps, ctx.userId, input.id)),
 
   abort: procedure.input(assetId).mutation(({ ctx, input }) => abortUpload(ctx.deps, ctx.userId, input.assetId)),
 });
