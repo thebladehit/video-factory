@@ -11,7 +11,13 @@ import { assetKeys, isAppError } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import type { AssetRow } from './service';
 
-/** Звук файлу: чи є аудіопотік і, якщо є, піки хвилі у сховищі. */
+const unreadable = (e: unknown) =>
+  (e instanceof MediaToolError && e.reason === 'exit') || (isAppError(e) && e.code === 'VALIDATION');
+
+/**
+ * Звук файлу: чи є аудіопотік і, якщо є, піки хвилі у сховищі.
+ * Нечитабельний звук — `hasAudio: false` (файл лишається придатним, аналіз не повторюється при кожному старті).
+ */
 export async function analyzeAsset(
   deps: AppDeps,
   row: Pick<AssetRow, 'id' | 'userId' | 'kind'>,
@@ -19,9 +25,15 @@ export async function analyzeAsset(
   signal: AbortSignal,
 ): Promise<{ hasAudio: boolean; peaksKey: string | null }> {
   if (row.kind === 'image') return { hasAudio: false, peaksKey: null };
-  const meta = await probe(deps.media, local, { signal });
-  if (!meta.hasAudio) return { hasAudio: false, peaksKey: null };
-  const data = await peaks(deps.media, local, { signal });
+  let data: Uint8Array;
+  try {
+    const meta = await probe(deps.media, local, { signal });
+    if (!meta.hasAudio) return { hasAudio: false, peaksKey: null };
+    data = await peaks(deps.media, local, { signal });
+  } catch (e) {
+    if (unreadable(e)) return { hasAudio: false, peaksKey: null };
+    throw e;
+  }
   const peaksKey = assetKeys.peaks(row.userId, row.id);
   await deps.storage.put(peaksKey, data, { contentType: 'application/octet-stream' });
   return { hasAudio: true, peaksKey };
@@ -48,13 +60,7 @@ export function assetAnalyzeJob(deps: AppDeps): JobDef<{ assetId: string }, { as
         if (obj) {
           const local = join(dir, 'original');
           await pipeline(obj.body, createWriteStream(local));
-          try {
-            result = await analyzeAsset(deps, row, local, ctx.signal);
-          } catch (e) {
-            // нечитабельний звук — не аналізуємо знову при кожному старті
-            if (!(e instanceof MediaToolError && e.reason === 'exit') && !(isAppError(e) && e.code === 'VALIDATION'))
-              throw e;
-          }
+          result = await analyzeAsset(deps, row, local, ctx.signal);
         }
         const [updated] = await deps.db
           .update(assets)

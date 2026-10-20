@@ -92,3 +92,20 @@ describe('audio analysis', () => {
     expect([...Buffer.concat(await obj.body.toArray())]).toEqual([7]);
   });
 });
+
+describe('audio analysis failures', () => {
+  it('a broken audio track does not fail the file: ready with has_audio false', async () => {
+    const { chmod, mkdtemp, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'vf-nopeaks-'));
+    const bin = join(dir, 'ffmpeg');
+    // ffmpeg, що падає саме на витягуванні піків (f32le), як на пошкодженому аудіопотоці
+    await writeFile(bin, '#!/bin/sh\ncase "$*" in *f32le*) echo "broken audio" >&2; exit 1;; esac\nexec ffmpeg "$@"\n');
+    await chmod(bin, 0o755);
+    const { caller, deps } = await startApp({ ffmpegPath: bin });
+    const id = await upload(caller, 'broken.mp4', 'video/mp4', await toneMp4Bytes(1));
+    const a = await waitForAsset(deps, id, ['ready', 'failed']);
+    expect(a).toMatchObject({ status: 'ready', hasAudio: false, peaksKey: null, error: null });
+  });
+});
