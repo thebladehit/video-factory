@@ -5,6 +5,12 @@ export interface AppConfig {
   databaseUrl: string;
   s3: S3Config;
   apiPort: number;
+  /** У контейнері — 0.0.0.0, локально — 127.0.0.1 */
+  apiHost: string;
+  /** Адреса S3 для браузера: presigned URL підписуються на неї (у Docker відрізняється від S3_ENDPOINT) */
+  s3PublicEndpoint: string;
+  ffmpegPath: string;
+  ffprobePath: string;
   webOrigin: string;
   queueDriver: 'inprocess';
   aiFake: boolean;
@@ -33,6 +39,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
       forcePathStyle: env.S3_FORCE_PATH_STYLE !== 'false',
     },
     apiPort: Number(env.API_PORT || 3001),
+    apiHost: env.API_HOST || '127.0.0.1',
+    s3PublicEndpoint: env.S3_PUBLIC_ENDPOINT || env.S3_ENDPOINT!,
+    ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
+    ffprobePath: env.FFPROBE_PATH || 'ffprobe',
     webOrigin: env.WEB_ORIGIN || 'http://localhost:5173',
     queueDriver: 'inprocess',
     aiFake: env.AI_FAKE === '1',

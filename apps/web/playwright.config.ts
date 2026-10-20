@@ -7,6 +7,7 @@ const WEB_PORT = '5174';
 
 export default defineConfig({
   testDir: './e2e',
+  globalTeardown: './e2e/teardown.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,
@@ -14,16 +15,12 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: [
     {
-      command: 'pnpm --filter @vf/api exec tsx src/main.ts',
+      // API у Docker (сервіс api-e2e: тестова БД vf_test, бакет vf-media-test, AI_FAKE=1); потрібен `docker compose up -d`
+      command: 'docker compose --profile e2e up --build api-e2e',
+      cwd: '../..',
       url: `http://localhost:${API_PORT}/trpc/health.check`,
-      env: {
-        AI_FAKE: '1',
-        DATABASE_URL: process.env.TEST_DATABASE_URL!,
-        API_PORT,
-        WEB_ORIGIN: `http://localhost:${WEB_PORT}`,
-      },
       reuseExistingServer: false,
-      timeout: 60_000,
+      timeout: 180_000,
     },
     {
       command: `pnpm --filter @vf/web exec vite --port ${WEB_PORT} --strictPort`,

@@ -28,6 +28,65 @@ services:
     volumes:
       - s3data:/data
 
+  # API у контейнері: тут є ffmpeg/ffprobe. Сирці змонтовані — tsx watch підхоплює зміни.
+  # node_modules — в іменованих томах (Linux-бінарники не конфліктують з macOS на хості).
+  # Новий пакет у packages/ = новий рядок тому nm-* тут і в volumes унизу.
+  api:
+    build: { context: ., dockerfile: docker/api.Dockerfile }
+    env_file: .env
+    environment: &api-env
+      DATABASE_URL: postgres://vf:vf@postgres:5432/vf
+      TEST_DATABASE_URL: postgres://vf:vf@postgres:5432/vf_test
+      S3_ENDPOINT: http://rustfs:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      API_HOST: 0.0.0.0
+    ports:
+      - '3001:3001'
+    volumes: &api-volumes
+      - .:/app
+      - pnpm-store:/pnpm-store
+      - nm-root:/app/node_modules
+      - nm-api:/app/apps/api/node_modules
+      - nm-web:/app/apps/web/node_modules
+      - nm-shared:/app/packages/shared/node_modules
+      - nm-db:/app/packages/db/node_modules
+      - nm-jobs:/app/packages/jobs/node_modules
+      - nm-storage:/app/packages/storage/node_modules
+      - nm-ai:/app/packages/ai/node_modules
+      - nm-media:/app/packages/media/node_modules
+    depends_on: &api-deps
+      postgres: { condition: service_healthy }
+      rustfs: { condition: service_started }
+
+  # API для e2e (Playwright запускає його сам): тестова БД, окремий бакет і порт
+  api-e2e:
+    profiles: [e2e]
+    build: { context: ., dockerfile: docker/api.Dockerfile }
+    env_file: .env
+    environment:
+      <<: *api-env
+      DATABASE_URL: postgres://vf:vf@postgres:5432/vf_test
+      S3_BUCKET: vf-media-test
+      API_PORT: '3101'
+      WEB_ORIGIN: http://localhost:5174
+      AI_FAKE: '1'
+      SKIP_INSTALL: '1'
+    ports:
+      - '3101:3101'
+    volumes: *api-volumes
+    depends_on: *api-deps
+    command: ['pnpm', '--filter', '@vf/api', 'exec', 'tsx', 'src/main.ts']
+
 volumes:
   pgdata:
   s3data:
+  pnpm-store:
+  nm-root:
+  nm-api:
+  nm-web:
+  nm-shared:
+  nm-db:
+  nm-jobs:
+  nm-storage:
+  nm-ai:
+  nm-media:

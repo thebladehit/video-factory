@@ -6,7 +6,7 @@ try {
   const cfg = loadConfig(process.env);
   const app = await createApp(cfg);
   try {
-    await app.server.listen({ port: cfg.apiPort, host: '127.0.0.1' });
+    await app.server.listen({ port: cfg.apiPort, host: cfg.apiHost });
   } catch (e) {
     await app.close();
     if ((e as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw e;

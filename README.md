@@ -16,16 +16,14 @@
 
 ```bash
 cp .env.example .env
-docker compose up -d
-pnpm install
-pnpm db:migrate
-pnpm db:seed
-pnpm dev
+docker compose up -d --build   # Postgres, RustFS і API (з ffmpeg); міграції застосовуються автоматично
+pnpm install                   # залежності для web на хості
+pnpm dev                       # web (Vite) на хості
 ```
 
 Відкрийте http://localhost:5173 → «Налаштування».
 
-- API: http://localhost:3001 (tRPC на `/trpc`)
+- API працює в контейнері `api` (http://localhost:3001, tRPC на `/trpc`): сирці змонтовані, зміни підхоплюються без перезбирання. Логи — `docker compose logs -f api`. Після зміни `pnpm-lock.yaml` залежності в контейнері оновлюються самі при наступному старті (`docker compose restart api`).
 - Консоль сховища RustFS: http://localhost:9001 (логін і пароль — `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` з `.env`)
 
 ## AI-ключі
@@ -43,12 +41,14 @@ GOOGLE_API_KEY=...   # лише платний ключ Gemini
 ## Тести
 
 ```bash
-pnpm test                    # unit + інтеграційні (потрібен docker compose up -d)
+pnpm test                    # unit + інтеграційні — у контейнері api (там ffmpeg), потрібен docker compose up -d
 pnpm test:unit               # лише unit
 pnpm test:live               # справжні виклики AI-провайдерів з ключами з .env
-pnpm --filter @vf/web e2e    # Playwright (сам піднімає API і веб)
+pnpm --filter @vf/web e2e    # Playwright на хості; API — контейнер api-e2e (тестова БД, порт 3101)
 pnpm typecheck && pnpm lint
 ```
+
+Будь-яку vitest-команду можна виконати в контейнері так: `docker compose run --rm api pnpm vt <фільтр>`.
 
 Перед першим e2e: `pnpm --filter @vf/web exec playwright install chromium`.
 
@@ -65,6 +65,8 @@ packages/ai     каталог моделей, реєстр провайдері
 ```
 
 ## Примітки
+
+- **Новий пакет у `packages/`** → додайте рядок тому `node_modules` у `volumes` сервісу `api` (і в список томів унизу) у `docker-compose.yml` (інакше в контейнері його залежності змішаються з macOS-версіями з хоста).
 
 - **S3 локально — RustFS**, не MinIO: MinIO з жовтня 2025 не публікує Docker-образи. Запасний варіант — SeaweedFS (`weed server -s3`), бо код працює через інтерфейс `BlobStorage`.
 - Черга задач зараз виконується в процесі API, а її стан зберігається в Postgres. Після перезапуску незавершені задачі позначаються «Перервано перезапуском сервера», а ті, що чекали в черзі, виконуються.
