@@ -2,6 +2,7 @@ import type { TimelineDoc } from '@vf/shared';
 import { audioPlan, docDuration, drawFrame, easeAlpha, evaluate, type AudioItem, type Layer } from '@vf/timeline';
 import { AudioGraph } from './audio-graph';
 import { MediaCache } from './media-cache';
+import { videoTarget } from './video-sync';
 import { isPresent, type AnyAsset } from './types';
 
 export interface PreviewEngine {
@@ -72,13 +73,14 @@ export function createCanvasPreviewEngine(): PreviewEngine {
       if (!isPresent(a)) continue;
       active.add(l.clipId);
       const v = cache.video(l.clipId, l.assetId, a.url);
-      if (playing) {
-        if (Math.abs(v.currentTime - l.sourceTime) > DRIFT) v.currentTime = l.sourceTime;
+      const target = videoTarget(l.sourceTime, v.duration, doc?.fps ?? 30);
+      if (playing && !target.hold) {
+        if (Math.abs(v.currentTime - target.time) > DRIFT) v.currentTime = target.time;
         if (v.paused) void v.play().catch(() => {});
       } else {
         if (!v.paused) v.pause();
         // пів кадру: браузер ставить currentTime на кадр, точний збіг не гарантований
-        if (Math.abs(v.currentTime - l.sourceTime) > 1 / 60) v.currentTime = l.sourceTime;
+        if (Math.abs(v.currentTime - target.time) > 1 / 60) v.currentTime = target.time;
       }
     }
     for (const [clipId, v] of cache.allVideos()) if (!active.has(clipId) && !v.paused) v.pause();
