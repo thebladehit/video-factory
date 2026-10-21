@@ -43,7 +43,7 @@ const URL_TTL_SEC = 3600;
 export interface VoiceLineView {
   id: string;
   text: string;
-  origin: 'manual' | 'stt' | 'translated';
+  origin: 'manual' | 'stt' | 'translated' | 'script';
   state: LineState;
   audioUrl?: string;
   durationMs?: number;

@@ -13,7 +13,11 @@ export type JobType =
   | 'asset.analyze'
   | 'voice.transcribe'
   | 'voice.translate'
-  | 'voice.synthesize';
+  | 'voice.synthesize'
+  | 'pipeline.script'
+  | 'pipeline.scene'
+  | 'pipeline.visual'
+  | 'pipeline.assemble';
 
 export interface JobRecord {
   id: string;
@@ -38,6 +42,7 @@ export interface JobSubject {
   renderId?: string;
   projectId?: string;
   lineId?: string;
+  sceneId?: string;
 }
 
 export interface JobEvent {
@@ -59,6 +64,7 @@ export function jobSubject(payload: unknown): JobSubject {
   if (typeof p.renderId === 'string') subject.renderId = p.renderId;
   if (typeof p.projectId === 'string') subject.projectId = p.projectId;
   if (typeof p.lineId === 'string') subject.lineId = p.lineId;
+  if (typeof p.sceneId === 'string') subject.sceneId = p.sceneId;
   return subject;
 }
 
