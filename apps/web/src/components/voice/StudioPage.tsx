@@ -27,6 +27,7 @@ import { useDocSession } from '@/editor/use-doc-session';
 import { trpcClient, useTRPC } from '@/lib/trpc';
 import { formatUsd } from '@/voice/cost';
 import { planPaste } from '@/voice/paste-text';
+import { transcribeInput } from '@/voice/transcribe-input';
 import { useVoice } from '@/voice/use-voice';
 import { CaptionsPanel, DEFAULT_STYLE_ID } from './CaptionsPanel';
 import { LanguageBar } from './LanguageBar';
@@ -213,9 +214,18 @@ function Studio({ project }: { project: ProjectView }) {
   const sttHint = 'Немає ключа для розпізнавання мови (OpenAI або Google) — додайте його в «Налаштуваннях»';
   const textHint = 'Немає ключа текстової моделі для перекладу — додайте його в «Налаштуваннях»';
 
+  const voiceChoice = (view.voice.languages[lang]?.voice ?? null) as VoiceValue | null;
+  const defaultVoice = (settings.data?.voices[lang] ?? null) as VoiceValue | null;
+  // без голосу мови (у проєкті чи за замовчуванням) озвучка впала б з помилкою — кнопки вимкнені з підказкою
+  const hasVoice = !!(voiceChoice ?? defaultVoice) || !settings.data;
+  const voiceHint = `Виберіть голос для мови «${languageInfo(lang).name}» (ліворуч, «Голос мови ${lang.toUpperCase()}»)`;
+  const canVoice = hasTts && hasVoice;
+
   // підказки видимі завжди: `title` на вимкненій кнопці не показується (pointer-events: none)
   const hints = catalog.data
-    ? [!hasTts && ttsHint, !hasStt && sttHint, !hasText && textHint].filter((h): h is string => !!h)
+    ? [!hasTts && ttsHint, hasTts && !hasVoice && voiceHint, !hasStt && sttHint, !hasText && textHint].filter(
+        (h): h is string => !!h,
+      )
     : [];
   const baseHasText = view.segments.some((s) => view.lines[s.id]?.[view.base]?.text.trim());
   const hasContent = view.segments.length > 0;
@@ -224,8 +234,6 @@ function Studio({ project }: { project: ProjectView }) {
     Object.values(byLang).some((l) => l.state === 'queued' || l.state === 'running'),
   );
   const total = docDuration(session.doc);
-  const voiceChoice = (view.voice.languages[lang]?.voice ?? null) as VoiceValue | null;
-  const defaultVoice = (settings.data?.voices[lang] ?? null) as VoiceValue | null;
   const captionsCfg = view.voice.languages[lang]?.captions ?? { enabled: false, styleId: DEFAULT_STYLE_ID };
   const renderDisabled =
     session.saveState === 'conflict' ? 'Розв’яжіть конфлікт версій' : total <= 0 ? 'У відео немає що рендерити' : null;
@@ -397,7 +405,7 @@ function Studio({ project }: { project: ProjectView }) {
               onClick={() =>
                 hasContent && baseHasText
                   ? setConfirmTranscribe(true)
-                  : void afterSave(() => transcribe.mutate({ projectId, language: view.base }))
+                  : void afterSave(() => transcribe.mutate(transcribeInput(view)))
               }
             >
               <Mic /> Розпізнати мову оригіналу
@@ -423,8 +431,10 @@ function Studio({ project }: { project: ProjectView }) {
             <Button
               size="sm"
               data-testid="voice-all"
-              disabled={!hasTts || synthesize.isPending || !estimate?.chars}
-              title={hasTts ? (estimate?.chars ? undefined : 'Немає текстів для озвучки') : ttsHint}
+              disabled={!canVoice || synthesize.isPending || !estimate?.chars}
+              title={
+                !hasTts ? ttsHint : !hasVoice ? voiceHint : estimate?.chars ? undefined : 'Немає текстів для озвучки'
+              }
               onClick={() => void afterSave(() => synthesize.mutate({ projectId, language: lang }))}
             >
               <Volume2 /> Озвучити все{estimate?.chars ? ` ≈ ${formatUsd(estimate.usd)}` : ''}
@@ -442,10 +452,14 @@ function Studio({ project }: { project: ProjectView }) {
             <SegmentTable
               view={view}
               lang={lang}
-              canVoice={hasTts}
+              canVoice={canVoice}
+              canTranslate={hasText && !translate.isPending}
               onSaveText={(segmentId, language, text) => setText.mutate({ projectId, segmentId, language, text })}
               onSynthesize={(segmentId) =>
                 void afterSave(() => synthesize.mutate({ projectId, language: lang, segmentIds: [segmentId] }))
+              }
+              onTranslate={(segmentId) =>
+                void afterSave(() => translate.mutate({ projectId, language: lang, segmentIds: [segmentId] }))
               }
             />
           </div>
@@ -482,7 +496,7 @@ function Studio({ project }: { project: ProjectView }) {
             <AlertDialogAction
               onClick={() => {
                 setConfirmTranscribe(false);
-                void afterSave(() => transcribe.mutate({ projectId, language: view.base }));
+                void afterSave(() => transcribe.mutate(transcribeInput(view)));
               }}
             >
               Замінити

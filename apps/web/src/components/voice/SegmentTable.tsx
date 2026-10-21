@@ -6,14 +6,18 @@ export function SegmentTable({
   view,
   lang,
   canVoice,
+  canTranslate,
   onSaveText,
   onSynthesize,
+  onTranslate,
 }: {
   view: VoiceView;
   lang: string;
   canVoice: boolean;
+  canTranslate: boolean;
   onSaveText(segmentId: string, language: string, text: string): void;
   onSynthesize(segmentId: string): void;
+  onTranslate(segmentId: string): void;
 }) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
@@ -65,9 +69,11 @@ export function SegmentTable({
           fit={fits.get(s.id)}
           playing={playing === s.id}
           canVoice={canVoice}
+          canTranslate={canTranslate}
           onSaveText={(language, text) => onSaveText(s.id, language, text)}
           onPlay={(url) => play(s.id, url)}
           onSynthesize={() => onSynthesize(s.id)}
+          onTranslate={() => onTranslate(s.id)}
         />
       ))}
     </div>

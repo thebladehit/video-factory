@@ -64,9 +64,11 @@ export function SegmentRow({
   fit,
   playing,
   canVoice,
+  canTranslate,
   onSaveText,
   onPlay,
   onSynthesize,
+  onTranslate,
 }: {
   index: number;
   segment: Segment;
@@ -77,9 +79,11 @@ export function SegmentRow({
   fit?: SegmentFit;
   playing: boolean;
   canVoice: boolean;
+  canTranslate: boolean;
   onSaveText(language: string, text: string): void;
   onPlay(url: string | null): void;
   onSynthesize(): void;
+  onTranslate(): void;
 }) {
   const showLang = lang !== base;
   // озвучка рядка вибраної мови (для базової — її власний рядок)
@@ -89,6 +93,8 @@ export function SegmentRow({
   const hasText = !!voiced?.text.trim();
   const url = voiced?.audioUrl ?? null;
   const canListen = !!url && (state === 'ready' || state === 'stale');
+  // базовий текст змінено після перекладу: переозвучка не допоможе — спершу новий переклад цього сегмента
+  const retranslate = showLang && !!line?.translationStale;
 
   return (
     <div
@@ -135,10 +141,10 @@ export function SegmentRow({
             size="icon"
             variant="ghost"
             className="size-7"
-            disabled={!hasText || busy || !canVoice}
-            title="Переозвучити"
-            aria-label="Переозвучити"
-            onClick={onSynthesize}
+            disabled={!hasText || busy || (retranslate ? !canTranslate : !canVoice)}
+            title={retranslate ? 'Оновити переклад' : 'Переозвучити'}
+            aria-label={retranslate ? 'Оновити переклад' : 'Переозвучити'}
+            onClick={retranslate ? onTranslate : onSynthesize}
           >
             {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           </Button>
@@ -148,6 +154,11 @@ export function SegmentRow({
           </span>
         </div>
         {voiced?.audioDeleted && <span className="text-amber-600">озвучку видалено</span>}
+        {retranslate && (
+          <span data-testid="translation-stale" className="text-amber-600">
+            переклад застарів — «Оновити переклад»
+          </span>
+        )}
         {state === 'failed' && (
           <div className="grid gap-1">
             {voiced?.error && (
