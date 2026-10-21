@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { CATALOG, createAiRegistry, createEnvCredentialStore, taggerPrompt, taggerSchema } from '../index';
+import {
+  CATALOG,
+  buildScriptPrompt,
+  createAiRegistry,
+  createEnvCredentialStore,
+  scenePlan,
+  scriptSchema,
+  taggerPrompt,
+  taggerSchema,
+  validateScript,
+} from '../index';
 
 // Справжні виклики API. Запуск лише вручну: pnpm test:live
 const registry = createAiRegistry({ credentials: createEnvCredentialStore(process.env) });
@@ -123,4 +133,28 @@ describe('live speech providers', () => {
     ).transcribe({ audio: audio.bytes, mime: audio.mime });
     expect(res.segments.length).toBeGreaterThanOrEqual(1);
   }, 120_000);
+});
+
+describe('live script generation', () => {
+  it.each(textModels.filter((e) => e.cheap).map((e) => [e.ref, e] as const))(
+    '%s script returns a valid object within ±30 % of the word budget',
+    async (_ref, entry) => {
+      if (!(await available(entry.ref))) return;
+      const plan = scenePlan('9:16', 45);
+      const { system, prompt } = buildScriptPrompt({
+        topic: 'Чому небо блакитне',
+        format: '9:16',
+        targetSec: 45,
+        language: 'uk',
+        channelStyle: '',
+        style: '',
+      });
+      const script = await (await registry.text('live', entry.ref)).generateObject(scriptSchema, { system, prompt });
+      expect(validateScript(script, plan)).toEqual([]);
+      const words = script.scenes.reduce((n, s) => n + s.narration.split(/\s+/).filter(Boolean).length, 0);
+      expect(words).toBeGreaterThan(plan.words * 0.7);
+      expect(words).toBeLessThan(plan.words * 1.3);
+    },
+    120_000,
+  );
 });

@@ -7,6 +7,14 @@ import { probe } from '@vf/media';
 import { createAiRegistry, createEnvCredentialStore } from '../index';
 import { taggerPrompt, taggerSchema } from '../prompts/tagger';
 import { buildTranslatePrompt, translateSchema } from '../prompts/translate';
+import {
+  buildOutlinePrompt,
+  buildScenePrompt,
+  buildScriptPrompt,
+  outlineSchema,
+  sceneSchema,
+  scriptSchema,
+} from '../prompts/script';
 
 const registry = createAiRegistry({
   credentials: createEnvCredentialStore({ AI_FAKE: '1' }),
@@ -114,5 +122,55 @@ describe('fake provider', () => {
     expect(v.tags).toEqual(expect.arrayContaining(['рудий', 'кіт', 'космосі']));
     expect(v.tags.length).toBeGreaterThanOrEqual(5);
     expect(taggerSchema.parse(v)).toEqual(v);
+  });
+});
+
+describe('fake script objects', () => {
+  it('script returns N scenes from the prompt marker', async () => {
+    const t = await registry.text(u, 'fake/text');
+    const { system, prompt } = buildScriptPrompt({
+      topic: 'Чому небо блакитне вдень',
+      format: '9:16',
+      targetSec: 45,
+      language: 'uk',
+      channelStyle: '',
+      style: '',
+    });
+    const res = await t.generateObject(scriptSchema, { system, prompt });
+    expect(res.scenes).toHaveLength(9);
+    expect(res.scenes[0]!.narration).toMatch(/^Сцена 1\. /);
+    expect(res.scenes[2]!.visualPrompt).toBe('scene 3 Чому небо блакитне вдень');
+    expect(res.scenes[0]!.keywords.length).toBeGreaterThan(0);
+  });
+
+  it('outline covers targetSec; scene gets a new-version prefix', async () => {
+    const t = await registry.text(u, 'fake/text');
+    const o = buildOutlinePrompt({
+      topic: 'Історія Риму',
+      targetSec: 900,
+      language: 'uk',
+      channelStyle: '',
+      style: '',
+    });
+    const outline = await t.generateObject(outlineSchema, o);
+    expect(outline.sections.reduce((a, s) => a + s.sec, 0)).toBe(900);
+    const s = buildScenePrompt({
+      topic: 'Історія Риму',
+      format: '9:16',
+      language: 'uk',
+      channelStyle: '',
+      style: '',
+      current: 'Старий текст',
+    });
+    const res = await t.generateObject(sceneSchema, s);
+    expect(res.narration.startsWith('Нова версія.')).toBe(true);
+  });
+
+  it('image with FAIL in prompt rejects with PROVIDER_ERROR', async () => {
+    const img = await registry.image(u, 'fake/image');
+    await expect(img.generate({ prompt: 'кіт FAIL', aspect: '9:16', n: 1 })).rejects.toMatchObject({
+      code: 'PROVIDER_ERROR',
+      message: 'Fake: відмова',
+    });
   });
 });
