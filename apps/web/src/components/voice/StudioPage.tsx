@@ -299,7 +299,7 @@ function Studio({ project }: { project: ProjectView }) {
                 </SelectContent>
               </Select>
             </div>
-            <div className="h-72 shrink-0">
+            <div className="h-72 shrink-0 [&>div]:h-full">
               <StudioPreview projectId={projectId} language={lang} engine={engine} ui={previewUi} draft={draft} />
             </div>
           </section>
