@@ -1,17 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import type { CaptionStyle } from '@vf/captions';
+import { useEffect, useMemo, useRef } from 'react';
 import { PreviewPane } from '@/components/editor/PreviewPane';
-import { createCanvasPreviewEngine } from '@/editor/preview-engine';
-import { createUiStore } from '@/editor/store';
+import type { PreviewEngine } from '@/editor/preview-engine';
+import type { UiStore } from '@/editor/store';
 import { useTRPC } from '@/lib/trpc';
+import { draftSubtitles } from '@/voice/draft-ass';
 import { useLocalized } from '@/voice/use-voice';
 
-/** Прев'ю мови: `voice.localized` (документ, озвучка, ASS) у тому самому рушії, що й редактор. */
-export function StudioPreview({ projectId, language }: { projectId: string; language: string }) {
+/**
+ * Прев'ю мови: `voice.localized` (документ, озвучка, ASS) у тому самому рушії, що й редактор.
+ * `draft` — стиль із редактора стилю: ASS перебудовується з ним (живе прев'ю на поточному кадрі).
+ */
+export function StudioPreview({
+  projectId,
+  language,
+  engine,
+  ui,
+  draft,
+}: {
+  projectId: string;
+  language: string;
+  engine: PreviewEngine;
+  ui: UiStore;
+  draft: CaptionStyle | null;
+}) {
   const trpc = useTRPC();
   const qc = useQueryClient();
-  const [engine] = useState(createCanvasPreviewEngine);
-  const [ui] = useState(createUiStore);
   const localized = useLocalized(projectId, language);
   const data = localized.data;
 
@@ -24,20 +39,32 @@ export function StudioPreview({ projectId, language }: { projectId: string; lang
     applied.current = sig;
     engine.setDoc(data.timeline, data.assets);
   }, [engine, data]);
-  useEffect(() => engine.setSubtitles(data?.subtitles ?? null), [engine, data?.subtitles]);
+
+  const drafted = useMemo(
+    () => (data && draft ? draftSubtitles(data.timeline, data.transcripts, draft) : null),
+    [data, draft],
+  );
+  const ass = draft ? (drafted?.ass ?? null) : (data?.subtitles ?? null);
+  useEffect(() => engine.setSubtitles(ass), [engine, ass]);
+
+  // редактор стилю відкрито: показати кадр, де субтитри є
+  const hasDraft = draft !== null;
+  const firstStart = drafted?.firstStart ?? null;
+  const seeked = useRef(false);
+  useEffect(() => {
+    if (!hasDraft) seeked.current = false;
+    else if (!seeked.current && firstStart !== null) {
+      seeked.current = true;
+      engine.pause();
+      ui.getState().set({ playing: false });
+      engine.seek(firstStart + 0.05);
+    }
+  }, [engine, ui, hasDraft, firstStart]);
 
   useEffect(() => {
-    const offs = [
-      engine.onTime((t) => ui.getState().set({ playhead: t })),
-      engine.onEnded(() => ui.getState().set({ playing: false })),
-      // протухли підписані URL — нові разом із документом
-      engine.onRefresh(() => void qc.invalidateQueries({ queryKey: trpc.voice.localized.pathKey() })),
-    ];
-    return () => {
-      offs.forEach((off) => off());
-      engine.destroy();
-    };
-  }, [engine, ui, qc, trpc]);
+    // протухли підписані URL — нові разом із документом
+    return engine.onRefresh(() => void qc.invalidateQueries({ queryKey: trpc.voice.localized.pathKey() }));
+  }, [engine, qc, trpc]);
 
   // зміна мови: документ інший — зупинити
   useEffect(() => {

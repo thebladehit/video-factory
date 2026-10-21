@@ -93,6 +93,10 @@ describe('voice.localized', () => {
     expect(l.subtitles).toMatch(/\[Events\]/);
     expect(l.subtitles).toMatch(/hello/i);
     expect(l.subtitles).toMatch(/six/i);
+    // слова транскриптів для чорнового прев'ю стилю: кожен кліп субтитрів має свої
+    const clips = l.timeline.tracks.flatMap((t) => (t.kind === 'captions' ? t.clips : []));
+    expect(clips).toHaveLength(2);
+    for (const c of clips) expect(l.transcripts[c.transcriptId]?.words.length).toBeGreaterThan(0);
   }, 60_000);
 
   it('a language without voice-over → the base document, no subtitles', async () => {

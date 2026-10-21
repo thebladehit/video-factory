@@ -13,6 +13,8 @@ export interface Localized {
   timeline: TimelineDoc;
   /** ASS з доріжок `captions` документа; `null` — субтитрів немає */
   subtitles: string | null;
+  /** Слова транскриптів доріжок `captions` — клієнт перебудовує ASS з чорновим стилем (живе прев'ю редактора стилю) */
+  transcripts: Record<string, TranscriptWords>;
   fits: SegmentFit[];
   /** Сегменти з текстом мови, чия озвучка не готова (не озвучено, застаріла, помилка, у роботі), і сегменти з базовим текстом без перекладу */
   notReady: string[];
@@ -20,7 +22,7 @@ export interface Localized {
   separated: boolean;
 }
 
-interface Resolved extends Omit<Localized, 'subtitles'> {
+interface Resolved extends Omit<Localized, 'subtitles' | 'transcripts'> {
   project: ProjectRow;
   /** Версія документа: базового проєкту або відокремленої мови */
   version: number;
@@ -172,6 +174,7 @@ export async function buildLocalized(
     version: r.version,
     timeline: r.timeline,
     subtitles: assOf(r),
+    transcripts: r.captionData.transcripts,
     fits: r.fits,
     notReady: r.notReady,
     separated: r.separated,
@@ -186,12 +189,13 @@ export async function getLocalized(
 ): Promise<{
   timeline: TimelineDoc;
   subtitles: string | null;
+  transcripts: Record<string, TranscriptWords>;
   fits: SegmentFit[];
   assets: Record<string, EditorAsset>;
 }> {
   const l = await buildLocalized(deps, userId, input.projectId, input.language);
   const assets = await editorAssets(deps, userId, timelineAssetIds(l.timeline));
-  return { timeline: l.timeline, subtitles: l.subtitles, fits: l.fits, assets };
+  return { timeline: l.timeline, subtitles: l.subtitles, transcripts: l.transcripts, fits: l.fits, assets };
 }
 
 /** Відокремити мову: поточний документ мови стає її власною копією (версія 1). Повторно — без змін. */

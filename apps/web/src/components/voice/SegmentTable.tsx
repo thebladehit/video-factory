@@ -41,7 +41,7 @@ export function SegmentTable({
   if (!view.segments.length)
     return (
       <p data-testid="no-segments" className="py-6 text-center text-sm text-muted-foreground">
-        Сегментів ще немає — розпізнайте мову оригіналу.
+        Сегментів ще немає — розпізнайте мову оригіналу або вставте текст.
       </p>
     );
   const fits = new Map((view.fits[lang] ?? []).map((f) => [f.segmentId, f]));
