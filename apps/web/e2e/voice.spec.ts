@@ -94,7 +94,7 @@ interface Localized {
   fits: { base: number; target: number }[];
   subtitles: string | null;
 }
-const docEnd = (l: Localized) =>
+const docEnd = (l: Pick<Localized, 'timeline'>) =>
   Math.max(
     ...l.timeline.tracks.filter((t) => t.kind !== 'captions').flatMap((t) => t.clips.map((c) => c.start + c.duration)),
   );
@@ -153,20 +153,42 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
     })
     .toBeTruthy()
     .then(() => trpc<Localized>(page, 'voice.localized', { projectId, language: 'en' }));
-  const first = /^Dialogue: 0,(\d+):(\d+):(\d+)\.(\d+),/m.exec(en.subtitles!)!;
-  const firstWord = +first[1]! * 3600 + +first[2]! * 60 + +first[3]! + +first[4]! / 100;
+  const dialogues = [
+    ...en.subtitles!.matchAll(/^Dialogue: 0,(\d+):(\d+):(\d+)\.(\d+),(\d+):(\d+):(\d+)\.(\d+),/gm),
+  ].map((m) => ({
+    start: +m[1]! * 3600 + +m[2]! * 60 + +m[3]! + +m[4]! / 100,
+    end: +m[5]! * 3600 + +m[6]! * 60 + +m[7]! + +m[8]! / 100,
+  }));
+  const firstWord = dialogues[0]!.start;
   expect(firstWord).toBeGreaterThan(0);
+  const playhead = async () => {
+    const m = /(\d+):(\d+\.\d+) \//.exec((await page.getByTestId('timecode').textContent()) ?? '')!;
+    return +m[1]! * 60 + +m[2]!;
+  };
   // перезавантаження — плейхед на 0 (перемикач мови час не скидає)
   await page.reload();
   await page.locator('[data-testid=language-chip][data-lang=en] button').first().click();
   await expect(page.getByTestId('captions-enabled')).toBeChecked();
   await expect(page.getByTestId('timecode')).toContainText('0:00.00 /');
   await expect(page.getByTestId('captions-canvas')).toBeAttached({ timeout: 30_000 });
-  await page.waitForTimeout(1500);
-  expect(await captionPixels(page)).toBe(0); // t = 0, слів ще немає
   await page.getByRole('button', { name: 'Відтворити' }).click();
-  await expect.poll(() => captionPixels(page), { timeout: 20_000, intervals: [100] }).toBeGreaterThan(50);
-  await page.getByRole('button', { name: 'Пауза' }).click();
+  // слова з'являються на canvas саме там, де перше слово в ASS (−0,25…+0,5 с: годинник таймкоду й кадр JASSUB не синхронні до кадру)
+  let seenAt = -1;
+  await expect
+    .poll(
+      async () => {
+        const px = await captionPixels(page);
+        if (px > 50) seenAt = await playhead();
+        return px;
+      },
+      { timeout: 20_000, intervals: [50] },
+    )
+    .toBeGreaterThan(50);
+  expect(seenAt).toBeGreaterThanOrEqual(firstWord - 0.25);
+  expect(seenAt).toBeLessThan(firstWord + 0.5);
+  // (перші пікселі з'явилися не раніше слова — тобто до слова canvas був порожній, а не просто нічого не малював:
+  // опитування йде кожні 50 мс з самого старту відтворення, останнє слово закінчується вже за кінцем відео)
+  await page.getByRole('button', { name: /Пауза|Відтворити/ }).click();
 
   // рендер UK і EN (чернетка) → два MP4 різної тривалості = fits ±1 кадр
   const renders = await renderDraft(page, projectId, 2);
@@ -176,6 +198,7 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
     return r!.output!.durationMs! / 1000;
   };
   const uk = await trpc<Localized>(page, 'voice.localized', { projectId, language: 'uk' });
+  const base = await trpc<Pick<Localized, 'timeline'>>(page, 'projects.get', { id: projectId });
   const durUk = dur('uk');
   const durEn = dur('en');
   expect(Math.abs(durUk - durEn)).toBeGreaterThan(0.2);
@@ -184,10 +207,10 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
     [en, durEn],
   ] as const) {
     // база + Σ(цільова − базова довжина сегментів) = довжина мовної версії (проміжки між сегментами лишаються)
-    const baseEnd = 7;
+    const baseEnd = docEnd(base);
     const viaFits = baseEnd + l.fits.reduce((s, f) => s + (f.target - f.base), 0);
-    expect(Math.abs(d - viaFits)).toBeLessThanOrEqual(FRAME + 0.02);
-    expect(Math.abs(d - docEnd(l))).toBeLessThanOrEqual(FRAME + 0.02);
+    expect(Math.abs(d - viaFits)).toBeLessThanOrEqual(FRAME + 0.005);
+    expect(Math.abs(d - docEnd(l))).toBeLessThanOrEqual(FRAME + 0.005);
   }
 
   // обидва MP4 — у бібліотеці
@@ -220,11 +243,11 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
 
   await page.getByTestId('separate').click();
   await expect(page.getByTestId('language-banner')).toContainText('відокремлена');
+  const saveDone = page.waitForResponse((r) => r.url().includes('projects.save') && r.ok(), { timeout: 15_000 });
   await dragBy(page, clip.getByTestId('clip-handle-r'), -40);
   const edited = Number(await clip.getAttribute('data-duration'));
   expect(edited).toBeLessThan(before - 0.2);
-  await page.waitForTimeout(1700);
-  await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved', { timeout: 10_000 });
+  await saveDone;
   const saved = await trpc<{ timeline: { tracks: { kind: string; clips: { duration: number }[] }[] } }>(
     page,
     'projects.get',
@@ -253,7 +276,7 @@ test('silent video: paste text (3 paragraphs) → voice → render', async ({ pa
   expect(renders[0]).toMatchObject({ language: 'uk', output: { status: 'ready' } });
   const uk = await trpc<Localized>(page, 'voice.localized', { projectId, language: 'uk' });
   expect(uk.fits).toHaveLength(3);
-  expect(Math.abs(renders[0]!.output!.durationMs! / 1000 - docEnd(uk))).toBeLessThanOrEqual(FRAME + 0.02);
+  expect(Math.abs(renders[0]!.output!.durationMs! / 1000 - docEnd(uk))).toBeLessThanOrEqual(FRAME + 0.005);
 });
 
 async function dragBy(page: Page, handle: Locator, dx: number) {
