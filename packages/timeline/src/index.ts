@@ -6,3 +6,4 @@ export * from './evaluate';
 export * from './draw';
 export { evalExpr } from './expr-eval';
 export * from './segments';
+export * from './localize';

@@ -116,7 +116,7 @@ function freeStart(desired: number, members: Member[], fps: number): number {
 const TRACK_RANK: Record<string, number> = { video: 0, original: 1, music: 2, voiceover: 3, sfx: 4, captions: 5 };
 const rank = (t: Track) => TRACK_RANK[t.kind === 'audio' ? t.role : t.kind] ?? 9;
 
-function insertTrack(doc: TimelineDoc, track: Track): TimelineDoc {
+export function insertTrack(doc: TimelineDoc, track: Track): TimelineDoc {
   const r = rank(track);
   let idx = 0;
   doc.tracks.forEach((t, i) => {
@@ -371,7 +371,7 @@ function shiftEnvelope(env: Envelope, cut: number): Envelope {
 }
 
 /** Огинаюча лівої частини: точки після `cut` відкидаються, на `cut` — інтерпольована. */
-function cutEnvelope(env: Envelope, cut: number): Envelope {
+export function cutEnvelope(env: Envelope, cut: number): Envelope {
   const i = env.findIndex((p) => p.t > cut + EPS);
   if (i < 0) return env;
   const kept = env.slice(0, i);
