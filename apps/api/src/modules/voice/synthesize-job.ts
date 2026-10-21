@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { alignWords, estimateWords } from '@vf/captions';
 import { assets, projects, transcripts, voiceLines } from '@vf/db';
 import type { JobDef } from '@vf/jobs';
@@ -64,12 +64,12 @@ async function wordTimings(
       });
       if (r.words?.length) return { words: alignWords(req.text, r.words), timing: 'aligned' };
     } catch (e) {
-      await finishGeneration(
-        deps,
-        genId,
-        isCancelled(e, req.signal) ? { status: 'cancelled' } : { status: 'failed', error: (e as Error).message },
-      );
-      throw e;
+      if (isCancelled(e, req.signal)) {
+        await finishGeneration(deps, genId, { status: 'cancelled' });
+        throw e;
+      }
+      // помилка whisper не має губити вже оплачену озвучку — мітки оцінюються (4.1)
+      await finishGeneration(deps, genId, { status: 'failed', error: (e as Error).message });
     }
   }
   let speech: { startMs: number; endMs: number }[] = [];
@@ -92,27 +92,40 @@ export function synthesizeJob(deps: AppDeps): JobDef<{ lineId: string }, { asset
     type: 'voice.synthesize',
     concurrency: 3,
     async handler({ lineId }, ctx) {
+      if (ctx.signal.aborted) throw new DOMException('Скасовано', 'AbortError');
+      // атомарно забираємо рядок: його задача в черзі, або рядок вільний (повтор задачі);
+      // рядок «в роботі» іншої задачі чи в черзі для іншої — не наш
       const [line] = await deps.db
-        .select()
-        .from(voiceLines)
-        .where(and(eq(voiceLines.id, lineId), eq(voiceLines.userId, ctx.userId)));
+        .update(voiceLines)
+        .set({ status: 'running', jobId: ctx.jobId, error: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(voiceLines.id, lineId),
+            eq(voiceLines.userId, ctx.userId),
+            or(
+              and(eq(voiceLines.status, 'queued'), or(isNull(voiceLines.jobId), eq(voiceLines.jobId, ctx.jobId))),
+              inArray(voiceLines.status, ['empty', 'failed', 'ready']),
+            ),
+          ),
+        )
+        .returning();
       if (!line) return { assetId: null };
+      const setLine = (patch: Partial<typeof voiceLines.$inferInsert>) =>
+        deps.db
+          .update(voiceLines)
+          .set({ ...patch, updatedAt: new Date() })
+          .where(and(eq(voiceLines.id, lineId), eq(voiceLines.jobId, ctx.jobId)));
       const [p] = await deps.db
         .select()
         .from(projects)
         .where(and(eq(projects.id, line.projectId), eq(projects.userId, line.userId)));
       if (!p) return { assetId: null };
-      const setLine = (patch: Partial<typeof voiceLines.$inferInsert>) =>
-        deps.db
-          .update(voiceLines)
-          .set({ ...patch, updatedAt: new Date() })
-          .where(eq(voiceLines.id, lineId));
 
-      // знімок на старті задачі
+      // знімок на старті задачі (текст — з рядка в момент захоплення)
       const text = line.text;
       const voice: VoiceChoice | null = await voiceForLanguage(deps, line.userId, p, line.language);
       if (!text.trim()) {
-        await setLine({ status: 'empty', error: null });
+        await setLine({ status: 'empty' });
         return { assetId: null };
       }
       if (!voice) {
@@ -127,12 +140,11 @@ export function synthesizeJob(deps: AppDeps): JobDef<{ lineId: string }, { asset
           .from(assets)
           .where(eq(assets.id, line.audioAssetId));
         if (a?.status === 'ready') {
-          await setLine({ status: 'ready', error: null });
+          await setLine({ status: 'ready' });
           return { assetId: line.audioAssetId };
         }
       }
 
-      await setLine({ status: 'running', error: null });
       const dir = await mkdtemp(join(tmpdir(), 'vf-tts-'));
       let genId: string | null = null;
       let uploadedKey: string | null = null;
@@ -220,7 +232,7 @@ export function synthesizeJob(deps: AppDeps): JobDef<{ lineId: string }, { asset
               error: null,
               updatedAt: new Date(),
             })
-            .where(eq(voiceLines.id, lineId));
+            .where(and(eq(voiceLines.id, lineId), eq(voiceLines.jobId, ctx.jobId)));
         });
         uploadedKey = null; // об'єкт тепер належить asset
         await finishGeneration(deps, gid, {

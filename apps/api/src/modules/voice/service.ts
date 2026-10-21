@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { estimateCost, type CatalogItem } from '@vf/ai';
 import { PRESETS, captionStyleSchema, type CaptionStyle } from '@vf/captions';
 import { assets, captionStyles, projects, transcripts, userSettings, voiceLines } from '@vf/db';
@@ -521,17 +521,14 @@ export async function enqueueSynthesize(
   const rows = (await deps.db.select().from(voiceLines).where(eq(voiceLines.projectId, p.id))).filter(
     (r) => segIds.has(r.segmentId) && (!wanted || wanted.has(r.segmentId)),
   );
-  const baseText = new Map(rows.filter((r) => r.language === p.baseLanguage).map((r) => [r.segmentId, r.text]));
   const voices = new Map<string, VoiceChoice | null>();
   for (const lang of languages) voices.set(lang, await voiceForLanguage(deps, userId, p, lang));
 
   const todo = rows.filter((r) => {
     if (!languages.includes(r.language) || !r.text.trim()) return false;
-    const state = lineState(
-      r,
-      r.language === p.baseLanguage ? undefined : baseText.get(r.segmentId),
-      voices.get(r.language),
-    );
+    // без базового тексту: «застарілий переклад» (лише source_hash) озвучка не виправляє —
+    // потрібен новий переклад, а задача була б порожньою (voiced_hash збігається)
+    const state = lineState(r, undefined, voices.get(r.language));
     if (state === 'queued' || state === 'running') return false;
     return wanted ? true : state === 'empty' || state === 'failed' || state === 'stale';
   });
@@ -549,13 +546,19 @@ export async function enqueueSynthesize(
 
   const jobIds: string[] = [];
   for (const r of todo) {
-    // спершу «в черзі», потім задача: обробник може встигнути поставити «в роботі»
+    // атомарно «в черзі» (паралельний запит, що вже поставив рядок, виграє), потім задача;
+    // обробник сам запише свій job_id, коли забере рядок
+    const [won] = await deps.db
+      .update(voiceLines)
+      .set({ status: 'queued', jobId: null, error: null, updatedAt: new Date() })
+      .where(and(eq(voiceLines.id, r.id), notInArray(voiceLines.status, ['queued', 'running'])))
+      .returning({ id: voiceLines.id });
+    if (!won) continue;
+    const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: r.id }, { userId });
     await deps.db
       .update(voiceLines)
-      .set({ status: 'queued', error: null, updatedAt: new Date() })
-      .where(eq(voiceLines.id, r.id));
-    const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: r.id }, { userId });
-    await deps.db.update(voiceLines).set({ jobId }).where(eq(voiceLines.id, r.id));
+      .set({ jobId })
+      .where(and(eq(voiceLines.id, r.id), eq(voiceLines.status, 'queued'), isNull(voiceLines.jobId)));
     jobIds.push(jobId);
   }
   return { jobIds };

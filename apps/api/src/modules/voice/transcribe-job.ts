@@ -73,11 +73,11 @@ const LANGUAGE_NAMES: Record<string, string> = {
   kazakh: 'kk',
 };
 
-/** Мова від STT (код або англійська назва) → код із конфігу мов; null — невідома. */
+/** Мова від STT (код, BCP-47 з регіоном або англійська назва) → код із конфігу мов; null — невідома. */
 export function languageCode(raw: string | undefined): string | null {
   if (!raw) return null;
   const v = raw.trim().toLowerCase();
-  const code = LANGUAGE_NAMES[v] ?? v;
+  const code = LANGUAGE_NAMES[v] ?? v.split(/[-_]/)[0]!;
   return LANGUAGES.some((l) => l.code === code) ? code : null;
 }
 
@@ -194,7 +194,16 @@ export function transcribeJob(deps: AppDeps): JobDef<{ projectId: string; langua
         const speech = sanitizeSegments(stitchParts(parts), T);
         const { segments, texts } = segmentsFromSpeech(speech, T, doc.fps);
         if (!Object.keys(texts).length) throw new Error('Мовлення не розпізнано');
-        const lang = language ?? languageCode(detected) ?? p.baseLanguage;
+        let lang = language ?? p.baseLanguage;
+        if (!language && detected) {
+          const code = languageCode(detected);
+          // не зберігаємо чужу мову під кодом базової
+          if (!code)
+            throw new AppError('VALIDATION', `Мова «${detected}» не підтримується — виберіть мову вручну`, {
+              detected,
+            });
+          lang = code;
+        }
 
         await ctx.progress(95, 'Зберігаю сегменти');
         await deps.db.transaction(async (tx) => {

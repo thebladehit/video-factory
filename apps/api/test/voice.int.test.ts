@@ -16,8 +16,8 @@ import { RESTART_ERROR } from '@vf/jobs';
 import { LOCAL_USER_ID, type VoiceChoice } from '@vf/shared';
 import { appRouter } from '../src/index';
 import { textHash, voicedHash } from '../src/modules/voice/stale';
-import { synthesizeJob } from '../src/modules/voice/synthesize-job';
-import { chunkRanges, sanitizeSegments, stitchParts } from '../src/modules/voice/transcribe-job';
+import { releaseCancelledLines, synthesizeJob } from '../src/modules/voice/synthesize-job';
+import { chunkRanges, languageCode, sanitizeSegments, stitchParts } from '../src/modules/voice/transcribe-job';
 import { tools, toneMp4Bytes, upload, waitForAsset } from './assets-helpers';
 import { startApp } from './helpers';
 
@@ -640,6 +640,15 @@ const waitJobs = (s: Started, ids: string[]) =>
     return rows.length === ids.length && rows.every((j) => ['done', 'failed', 'cancelled'].includes(j.status)) && rows;
   });
 
+/** Контекст обробника з наявним рядком `jobs` (job_id рядка — зовнішній ключ). */
+async function jobCtx(s: Started, signal = new AbortController().signal) {
+  const [j] = await s.deps.db
+    .insert(jobs)
+    .values({ userId: LOCAL_USER_ID, type: 'voice.synthesize', payload: {}, status: 'running' })
+    .returning();
+  return { jobId: j!.id, userId: LOCAL_USER_ID, progress: async () => {}, signal };
+}
+
 async function textProject(s: Started, texts: Record<string, string>, language = 'uk') {
   const projectId = await voiceProject(s);
   await s.caller.voice.setVoice({ projectId, language, voice: VOICE });
@@ -684,12 +693,7 @@ describe('voice.synthesize', () => {
     const projectId = await textProject(s, { s1: 'Один два' });
     await waitJobs(s, (await s.caller.voice.synthesize({ projectId })).jobIds);
     const line = await lineOf(s, projectId, 's1', 'uk');
-    const ctx = {
-      jobId: randomUUID(),
-      userId: LOCAL_USER_ID,
-      progress: async () => {},
-      signal: new AbortController().signal,
-    };
+    const ctx = await jobCtx(s);
     expect(await synthesizeJob(s.deps).handler({ lineId: line.id }, ctx)).toEqual({ assetId: line.audioAssetId });
     expect(await lineOf(s, projectId, 's1', 'uk')).toMatchObject({ status: 'ready', audioAssetId: line.audioAssetId });
     const gens = (await s.deps.db.select().from(generations).where(eq(generations.capability, 'tts'))).filter(
@@ -838,6 +842,106 @@ describe('voice.synthesize', () => {
     await waitFor(async () => (await lineOf(s, projectId, 's1', 'uk')).status === 'empty');
     expect((await lineOf(s, projectId, 's1', 'uk')).error).toBeNull();
   }, 30_000);
+
+  it('two concurrent «Озвучити все» → one job, one TTS call, one asset', async () => {
+    let calls = 0;
+    const s = await startApp({}, { ai: hookedAi({ before: () => void calls++ }) });
+    const projectId = await textProject(s, { s1: 'Паралельно' });
+    const [a, b] = await Promise.all([
+      s.caller.voice.synthesize({ projectId }),
+      s.caller.voice.synthesize({ projectId }),
+    ]);
+    const ids = [...a.jobIds, ...b.jobIds];
+    expect(ids).toHaveLength(1);
+    await waitJobs(s, ids);
+    expect(calls).toBe(1);
+    const line = await lineOf(s, projectId, 's1', 'uk');
+    expect(line).toMatchObject({ status: 'ready', jobId: ids[0] });
+  }, 30_000);
+
+  it('two handlers for the same line at once → only one claims it and synthesises', async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const s = await startApp(
+      {},
+      {
+        ai: hookedAi({
+          before: async () => {
+            calls++;
+            await gate;
+          },
+        }),
+      },
+    );
+    const projectId = await textProject(s, { s1: 'Двічі' });
+    const line = await lineOf(s, projectId, 's1', 'uk');
+    const job = synthesizeJob(s.deps);
+    const first = job.handler({ lineId: line.id }, await jobCtx(s));
+    await waitFor(async () => calls === 1);
+    expect(await job.handler({ lineId: line.id }, await jobCtx(s))).toEqual({ assetId: null });
+    release();
+    expect((await first).assetId).toBeTruthy();
+    expect(calls).toBe(1);
+  }, 30_000);
+
+  it('a job cancelled before it starts leaves no line stuck in «running»', async () => {
+    const s = await startApp({}, { ai: hookedAi({}) });
+    const projectId = await textProject(s, { s1: 'Скасовано' });
+    const line = await lineOf(s, projectId, 's1', 'uk');
+    const ctrl = new AbortController();
+    const ctx = await jobCtx(s, ctrl.signal);
+    await s.deps.db.update(voiceLines).set({ status: 'queued', jobId: ctx.jobId }).where(eq(voiceLines.id, line.id));
+    ctrl.abort();
+    await expect(synthesizeJob(s.deps).handler({ lineId: line.id }, ctx)).rejects.toThrow();
+    expect((await lineOf(s, projectId, 's1', 'uk')).status).toBe('queued');
+    await releaseCancelledLines(s.deps, [line.id], ctx.jobId);
+    expect((await lineOf(s, projectId, 's1', 'uk')).status).toBe('empty');
+  }, 30_000);
+
+  it('a retried job (new job id) can take a failed line', async () => {
+    const s = await startApp({}, { ai: hookedAi({}) });
+    const projectId = await textProject(s, { s1: 'Повтор' });
+    const line = await lineOf(s, projectId, 's1', 'uk');
+    await s.deps.db.update(voiceLines).set({ status: 'failed', error: 'x' }).where(eq(voiceLines.id, line.id));
+    const ctx = await jobCtx(s);
+    expect((await synthesizeJob(s.deps).handler({ lineId: line.id }, ctx)).assetId).toBeTruthy();
+    expect(await lineOf(s, projectId, 's1', 'uk')).toMatchObject({ status: 'ready', jobId: ctx.jobId, error: null });
+  }, 30_000);
+
+  it('whisper error → falls back to estimated words, the paid audio is kept', async () => {
+    const whisper: STT = {
+      async transcribe() {
+        throw new Error('whisper недоступний');
+      },
+    };
+    const s = await startApp({}, { ai: hookedAi({ words: false, whisper }) });
+    const projectId = await textProject(s, { s1: 'Слова без міток' });
+    const { jobIds } = await s.caller.voice.synthesize({ projectId });
+    expect((await waitJobs(s, jobIds))[0]!.status).toBe('done');
+    const v = (await s.caller.voice.get({ projectId })).lines.s1!.uk!;
+    expect(v).toMatchObject({ state: 'ready', timing: 'estimated' });
+    expect(v.words).toHaveLength(3);
+    const gens = await s.deps.db.select().from(generations).where(eq(generations.jobId, jobIds[0]!));
+    expect(gens.find((g) => g.capability === 'stt')).toMatchObject({ status: 'failed', error: 'whisper недоступний' });
+    expect(gens.find((g) => g.capability === 'tts')).toMatchObject({ status: 'done' });
+  }, 30_000);
+
+  it('a line stale only by translation (source_hash) is not picked by «Озвучити все»', async () => {
+    const s = await startApp({}, { ai: hookedAi({}) });
+    const projectId = await textProject(s, { s1: 'Привіт' });
+    await s.caller.voice.setVoice({ projectId, language: 'en', voice: VOICE });
+    await readyLine(s, projectId, {
+      segmentId: 's1',
+      language: 'en',
+      text: 'Hello',
+      textOrigin: 'translated',
+      sourceHash: textHash('Привіт'),
+    });
+    await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'uk', text: 'Вітаю' });
+    expect((await s.caller.voice.get({ projectId })).lines.s1!.en!.state).toBe('stale');
+    expect((await s.caller.voice.synthesize({ projectId, language: 'en' })).jobIds).toEqual([]);
+  }, 30_000);
 });
 
 describe('voice.translate', () => {
@@ -970,6 +1074,31 @@ describe('voice.transcribe', () => {
     );
     expect(Object.values(v2.lines).flatMap((l) => Object.values(l))).toHaveLength(texts.length);
   }, 60_000);
+
+  it('an unsupported detected language → VALIDATION, the project is unchanged', async () => {
+    const base = fakeAi();
+    const ai: AiRegistry = {
+      ...base,
+      async stt(userId, ref) {
+        const inner = await base.stt(userId, ref);
+        return { transcribe: async (req) => ({ ...(await inner.transcribe(req)), language: 'japanese' }) };
+      },
+    };
+    const s = await startApp({}, { ai });
+    const projectId = await videoProject(s);
+    const before = await s.caller.projects.get({ id: projectId });
+    const { jobId } = await s.caller.voice.transcribe({ projectId });
+    const [job] = await waitJobs(s, [jobId]);
+    expect(job).toMatchObject({ status: 'failed', error: 'Мова «japanese» не підтримується — виберіть мову вручну' });
+    expect((await s.caller.projects.get({ id: projectId })).version).toBe(before.version);
+  }, 60_000);
+
+  it('languageCode maps whisper names and strips BCP-47 regions', () => {
+    expect(languageCode('english')).toBe('en');
+    expect(languageCode('uk-UA')).toBe('uk');
+    expect(languageCode('pt_BR')).toBe('pt');
+    expect(languageCode('japanese')).toBeNull();
+  });
 
   it('a project without sound → VALIDATION «У відео немає звуку»', async () => {
     const s = await startApp();
