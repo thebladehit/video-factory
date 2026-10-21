@@ -1,0 +1,17 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+YCbCr Matrix: None
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Shorts,Montserrat,110,&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,5,60,60,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.50,0:00:03.00,Shorts,,0,0,0,,{\t(0,60,\fscx115\fscy115)\t(60,120,\fscx100\fscy100)}ПРИВІТ, ЇЖАЧКУ!
+Dialogue: 0,0:00:03.20,0:00:06.00,Shorts,,0,0,0,,{\kf50}ЦЕ {\kf60}КАРАОКЕ {\kf80}ПО {\kf100}СЛОВАХ
+Dialogue: 0,0:00:06.50,0:00:09.50,Shorts,,0,0,0,,{\t(0,60,\fscx115\fscy115)\t(60,120,\fscx100\fscy100)\kf40}ҐАНОК {\kf70}ШЕПОЧЕ: {\kf90}«ЩЕ!»

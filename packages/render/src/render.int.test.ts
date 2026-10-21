@@ -1,20 +1,31 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MediaToolError, probe, run, synthAudio, synthImage, synthVideo, type MediaTools } from '@vf/media';
-import { emptyTimeline, type Effect, type MediaClip, type TimelineDoc, type VideoFormat } from '@vf/shared';
+import { toAss } from '@vf/captions';
+import {
+  DEFAULT_ORIGINAL,
+  emptyTimeline,
+  type Effect,
+  type MediaClip,
+  type TimelineDoc,
+  type VideoFormat,
+} from '@vf/shared';
 import {
   addClip,
   docDuration,
   drawFrame,
   evaluate,
+  localize,
   removeEffect,
   setEffect,
   setTransition,
   setVolume,
   type AssetInfo,
+  type VoiceTake,
 } from '@vf/timeline';
 import { compileFfmpeg, createFfmpegRenderer, type CompileInput, type Preset, type SourceInfo } from './index';
 
@@ -533,5 +544,230 @@ describe('FfmpegRenderer', () => {
     expect(Math.abs((await durationOf(out)) - 6)).toBeLessThanOrEqual(0.05);
     expect(near(await rgbAt(out, 0.1), BLUE)).toBe(true);
     expect(near(await rgbAt(out, 0.3), RED)).toBe(true);
+  }, 120_000);
+});
+
+// ---------- мовна версія: документ від `localize` ----------
+
+describe('language render (localize → compileFfmpeg)', () => {
+  const FONTS = fileURLToPath(new URL('../../captions/fonts', import.meta.url));
+  const original = { ...DEFAULT_ORIGINAL };
+  const takeOf = (segmentId: string, assetId: string, durationSec: number): VoiceTake => ({
+    segmentId,
+    assetId,
+    durationSec,
+    transcriptId: `tr-${segmentId}`,
+  });
+  /** Рівень сірого в центрі кожного кадру лічильника: кадр N має рівень 10 + 4N. */
+  let levels: number[] = [];
+
+  /** Середній рівень сірого квадрата 8×8 у точці (fx, fy) кадру `index`. */
+  async function grayAt(path: string, index: number, fx = 0.5, fy = 0.5): Promise<number> {
+    const meta = await probe(tools, path);
+    const x = Math.floor(meta.width! * fx) - 4;
+    const y = Math.floor(meta.height! * fy) - 4;
+    const { stdout } = await run(tools.ffmpegPath, [
+      '-v',
+      'error',
+      '-i',
+      path,
+      '-vf',
+      `select=eq(n\\,${index}),crop=8:8:${x}:${y}`,
+      '-vsync',
+      '0',
+      '-frames:v',
+      '1',
+      '-f',
+      'rawvideo',
+      '-pix_fmt',
+      'gray',
+      'pipe:1',
+    ]);
+    expect(stdout.length).toBe(64);
+    return [...stdout].reduce((a, b) => a + b, 0) / 64;
+  }
+  /** Номер кадру лічильника, найближчого за рівнем. */
+  const counterFrame = (level: number) =>
+    levels.reduce((best, l, k) => (Math.abs(l - level) < Math.abs(levels[best]! - level) ? k : best), 0);
+
+  /** RMS (dB) звуку нижче 800 Гц — тон оригіналу 440 Гц без голосу 3 кГц. */
+  async function lowRms(path: string, from: number, dur: number): Promise<number> {
+    const { stderr } = await run(tools.ffmpegPath, [
+      '-v',
+      'info',
+      '-ss',
+      String(from),
+      '-t',
+      String(dur),
+      '-i',
+      path,
+      '-vn',
+      '-af',
+      'lowpass=f=800,lowpass=f=800,lowpass=f=800,volumedetect',
+      '-f',
+      'null',
+      '-',
+    ]);
+    const m = /mean_volume: (-?[\d.]+) dB/.exec(stderr);
+    if (!m) throw new Error(`no volumedetect in: ${stderr.slice(-300)}`);
+    return Number(m[1]);
+  }
+
+  beforeAll(async () => {
+    // лічильник: 2 с, 30 кадр/с, кадр N — сірий 10 + 4N; звук — тон 440 Гц
+    const path = file('counter.mp4');
+    await run(tools.ffmpegPath, [
+      '-v',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      `color=c=black:s=160x90:r=30:d=2,format=gray,geq=lum='min(255,10+4*N)'`,
+      '-f',
+      'lavfi',
+      '-i',
+      'aevalsrc=0.5*sin(2*PI*440*t):s=48000:d=2',
+      '-c:v',
+      'libx264',
+      '-crf',
+      '10',
+      '-pix_fmt',
+      'yuv420p',
+      '-preset',
+      'ultrafast',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      '-shortest',
+      path,
+    ]);
+    const p = await probe(tools, path);
+    fixtures.set('counter', {
+      path,
+      kind: 'video',
+      width: p.width,
+      height: p.height,
+      hasAudio: p.hasAudio,
+      audioChannels: p.audioChannels,
+    });
+    const frames = await grayFrames(path, p.width!, p.height!);
+    levels = frames.map((f) => f[45 * p.width! + 80]!);
+    expect(levels).toHaveLength(60);
+    await tone('voice1', 3000, 1);
+    await tone('voice3', 3000, 3);
+    await image('photo', '#ff0000');
+  }, 60_000);
+
+  it('speed 0.8 + hold, duration, ducking of the original', async () => {
+    let base = put(emptyTimeline('9:16'), asset('counter', { durationSec: 2 }), 0).doc;
+    base = { ...base, segments: [{ id: 's1', start: 0, end: 1 }] };
+    const { doc, fits } = localize(base, {
+      language: 'en',
+      takes: [takeOf('s1', 'voice1', 1)],
+      original,
+      captions: null,
+    });
+    // T = 0.15 + 1 + 0.35 = 1.5; s = clamp(1/1.5) = 0.8; 1 с джерела за 1.25 с (на сітці кадрів — 38 кадрів)
+    // + стоп-кадр до 1.5 с
+    expect(fits[0]).toMatchObject({ speed: 0.8, used: 1 });
+    expect(fits[0]!.hold).toBeCloseTo(1.5 - 38 / 30, 6);
+    const out = await renderDoc(doc, 'draft', 'lang-speed');
+    expect(Math.abs((await durationOf(out)) - docDuration(doc))).toBeLessThanOrEqual(1 / 30 + 0.001);
+    expect(docDuration(doc)).toBeCloseTo(2.5, 6);
+
+    // середина сповільненої частини: 0.6 с мови = 0.48 с джерела = кадр 14.4
+    expect(Math.abs(counterFrame(await grayAt(out, 18)) - 14)).toBeLessThanOrEqual(1);
+    // після сегмента темп 1: 2.0 с мови = 1.5 с джерела = кадр 45
+    expect(Math.abs(counterFrame(await grayAt(out, 60)) - 45)).toBeLessThanOrEqual(1);
+    // стоп-кадр [1.25, 1.5): усі кадри однакові — останній кадр використаної частини (~ кадр 30)
+    const held = await Promise.all([38, 40, 42, 44].map((i) => grayAt(out, i)));
+    expect(Math.max(...held) - Math.min(...held)).toBeLessThanOrEqual(2);
+    expect(Math.abs(counterFrame(held[0]!) - 30)).toBeLessThanOrEqual(1);
+
+    // голос [0.15, 1.15): оригінал 0.08 замість 0.25 (рампи по 0.2 с поза вимірюваними вікнами)
+    const under = await lowRms(out, 0.3, 0.7);
+    const outside = await lowRms(out, 1.6, 0.8);
+    const ratio = 10 ** ((under - outside) / 20);
+    expect(Math.abs(ratio - 0.08 / 0.25)).toBeLessThanOrEqual(0.2 * (0.08 / 0.25));
+  }, 120_000);
+
+  it('ASS subtitles (preset:classic) appear in the lower third only while the word is on', async () => {
+    let doc: TimelineDoc = emptyTimeline('9:16');
+    doc = {
+      ...doc,
+      tracks: [
+        {
+          id: 'vo',
+          kind: 'audio',
+          role: 'voiceover',
+          language: 'en',
+          clips: [{ id: 'vo1', assetId: 'voice3', start: 0, duration: 2, in: 0, volume: 1 }],
+        },
+        {
+          id: 'cap',
+          kind: 'captions',
+          language: 'en',
+          clips: [{ id: 'cc1', audioClipId: 'vo1', transcriptId: 'tr', styleId: 'preset:classic' }],
+        },
+      ],
+    };
+    const subtitles = toAss({
+      doc,
+      transcripts: { tr: { words: [{ text: 'Привіт', startMs: 1000, endMs: 1500 }] } },
+      styles: {},
+    });
+    await renderer.render(
+      {
+        doc,
+        preset: 'draft',
+        sources: fixtures,
+        filterScriptPath: file('subs-graph.txt'),
+        outPath: file('subs.mp4'),
+        subtitles,
+        fontsDir: FONTS,
+      },
+      { signal: new AbortController().signal, onProgress: () => {}, timeoutMs: 120_000 },
+    );
+    const out = file('subs.mp4');
+    const W = 720;
+    const H = 1280;
+    const third = Math.floor((H * 2) / 3) * W;
+    const max = (a: Uint8Array) => a.reduce((m, v) => Math.max(m, v), 0);
+    const on = await grayFrame(out, 36, W, H); // 1.2 с
+    const off = await grayFrame(out, 15, W, H); // 0.5 с
+    expect(max(on.subarray(third))).toBeGreaterThan(100);
+    expect(max(on.subarray(0, third))).toBeLessThan(20);
+    expect(max(off)).toBeLessThan(20);
+  }, 120_000);
+
+  it('Review Focus 5: 1-frame segment with 3 s voice and a photo-only segment render with the expected duration', async () => {
+    let base = put(emptyTimeline('9:16'), asset('counter', { durationSec: 2 }), 0).doc;
+    base = put(base, asset('photo'), 2).doc; // фото [2, 7)
+    base = {
+      ...base,
+      segments: [
+        { id: 's1', start: 0, end: 1 / 30 },
+        { id: 's2', start: 2, end: 4 },
+      ],
+    };
+    const { doc, fits, map } = localize(base, {
+      language: 'en',
+      takes: [takeOf('s1', 'voice3', 3), takeOf('s2', 'voice1', 1)],
+      original,
+      captions: null,
+    });
+    // 1 кадр джерела + довгий стоп-кадр; фото прискорене (speed ігнорується — просто показ)
+    expect(fits[0]).toMatchObject({ speed: 0.8 });
+    expect(fits[0]!.hold).toBeGreaterThan(3);
+    expect(fits[1]!.speed).toBe(1.25);
+    const out = await renderDoc(doc, 'draft', 'lang-rf5');
+    expect(Math.abs((await durationOf(out)) - docDuration(doc))).toBeLessThanOrEqual(1 / 30 + 0.001);
+    // стоп-кадр першого сегмента — кадр 0 лічильника
+    expect(counterFrame(await grayAt(out, Math.round(map(0) * 30) + 45))).toBeLessThanOrEqual(1);
+    // фото видно всередині свого сегмента мови
+    const mid = (map(2) + map(4 - 1e-3)) / 2;
+    expect(near(await rgbAt(out, mid), RED)).toBe(true);
   }, 120_000);
 });

@@ -41,8 +41,11 @@ async function dropFile(page: Page, file: { name: string; type: string; bytes: B
 async function addFromPanel(page: Page, name: string) {
   const panel = page.getByTestId('library-panel');
   await panel.getByPlaceholder('Пошук у бібліотеці').fill(name);
-  await expect(panel.getByTestId('library-item')).toHaveCount(1);
-  const item = panel.getByTestId('library-item').first();
+  // пошук з debounce: список спершу повний, потім відфільтрований (і нечіткий збіг може дати зайві картки) —
+  // чекаємо саме картку з точною назвою, а не кількість
+  const addButton = () => page.getByRole('button', { name: `Додати «${name}» під плейхед` });
+  const item = panel.getByTestId('library-item').filter({ has: addButton() });
+  await expect(item).toHaveCount(1);
   await item.hover();
   await item.getByRole('button', { name: `Додати «${name}» під плейхед` }).click();
   await expect(page.getByTestId('track-video').locator('[data-clip-id]').first()).toBeVisible();

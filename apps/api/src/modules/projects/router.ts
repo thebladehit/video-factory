@@ -21,12 +21,21 @@ export const projectsRouter = router({
   create: procedure
     .input(z.object({ title, format }))
     .mutation(({ ctx, input }) => createProject(ctx.deps, ctx.userId, input)),
-  get: procedure.input(byId).query(({ ctx, input }) => getProject(ctx.deps, ctx.userId, input.id)),
+  get: procedure
+    .input(z.object({ id: z.string(), language: z.string().optional() }))
+    .query(({ ctx, input }) => getProject(ctx.deps, ctx.userId, input.id, input.language)),
   assets: procedure
     .input(z.object({ ids: z.array(z.string()).max(1000) }))
     .query(({ ctx, input }) => editorAssets(ctx.deps, ctx.userId, input.ids)),
   save: procedure
-    .input(z.object({ id: z.string(), timeline: z.unknown(), baseVersion: z.number().int().min(1) }))
+    .input(
+      z.object({
+        id: z.string(),
+        language: z.string().optional(),
+        timeline: z.unknown(),
+        baseVersion: z.number().int().min(1),
+      }),
+    )
     .mutation(({ ctx, input }) => saveProject(ctx.deps, ctx.userId, input)),
   rename: procedure
     .input(z.object({ id: z.string(), title }))

@@ -1,8 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { ComingSoon } from '@/components/ComingSoon';
+import { createFileRoute, Outlet } from '@tanstack/react-router';
 
-export const Route = createFileRoute('/voice')({
-  component: () => (
-    <ComingSoon title="Студія озвучки" subproject={3} about="Озвучка готових відео кількома мовами з субтитрами." />
-  ),
-});
+// батьківський маршрут: список — `voice.index`, студія — `voice.$id`
+export const Route = createFileRoute('/voice')({ component: Outlet });

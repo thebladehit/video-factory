@@ -1,11 +1,20 @@
 import { AppError, type MediaClip, type TimelineDoc } from '@vf/shared';
 import { audioPlan, docDuration, num } from '@vf/timeline';
-import { audioChain } from './compile-audio';
+import { audioMix, sourceSpan } from './compile-audio';
 import { clipChain } from './compile-video';
 import type { CompileInput, Compiled, Preset, Size } from './types';
 
 const DRAFT_LONG_SIDE = 1280;
 const even = (v: number) => Math.max(2, Math.round(v / 2) * 2);
+
+/** Шлях у значенні опції фільтра: у лапках (`:` і `,` не ріжуть), лапки в шляху не підтримуються. */
+export function filterPath(path: string): string {
+  if (path.includes("'")) throw new AppError('VALIDATION', 'Недопустимий шлях до файлу субтитрів', { path });
+  return `'${path}'`;
+}
+
+const subtitlesFilter = (path: string, fontsDir?: string) =>
+  `subtitles=f=${filterPath(path)}${fontsDir ? `:fontsdir=${filterPath(fontsDir)}` : ''}`;
 
 /** `final` — розмір документа; `draft` — довша сторона 1280, обидві сторони парні. */
 export function outputSize(doc: TimelineDoc, preset: Preset): Size {
@@ -57,27 +66,22 @@ export function compileFfmpeg(input: CompileInput): Compiled {
   visual.forEach(({ clip, src }, i) => {
     if (src.kind === 'image')
       args.push('-loop', '1', '-framerate', String(fps), '-t', num(clip.duration), '-i', src.path);
-    else args.push('-ss', num(clip.in), '-t', num(clip.duration), '-i', src.path);
+    else args.push('-ss', num(clip.in), '-t', num(sourceSpan(clip, clip.speed ?? 1)), '-i', src.path);
     const { chain, overlay } = clipChain(clip, n++, `v${i}`, src, canvas, fps);
     graph.push(chain, `[${last}][v${i}]${overlay}[o${i}]`);
     last = `o${i}`;
   });
-  graph.push(`[${last}]${ss > 1 ? `scale=${width}:${height}:flags=area,` : ''}format=yuv420p[vout]`);
+  // субтитри — останнім фільтром, після повернення до розміру виходу: libass масштабує PlayRes сам
+  const tail = [
+    ...(ss > 1 ? [`scale=${width}:${height}:flags=area`] : []),
+    ...(input.subtitlesPath ? [subtitlesFilter(input.subtitlesPath, input.fontsDir)] : []),
+    'format=yuv420p',
+  ];
+  graph.push(`[${last}]${tail.join(',')}[vout]`);
 
-  // звук відео без аудіопотоку — тиша, а не «Stream specifier ':a' matches no streams»
-  const sounds = audioPlan(doc).filter((a) => sources.get(a.assetId)?.hasAudio);
-  const silence = `anullsrc=r=48000:cl=stereo,atrim=duration=${num(T)}`;
-  if (!sounds.length) graph.push(`${silence}[aout]`);
-  else {
-    sounds.forEach((item, i) => {
-      args.push('-ss', num(item.in), '-t', num(item.duration), '-i', sources.get(item.assetId)!.path);
-      graph.push(audioChain(item, n++, `a${i}`, sources.get(item.assetId)!.audioChannels));
-    });
-    graph.push(`${silence}[asil]`);
-    graph.push(
-      `[asil]${sounds.map((_, i) => `[a${i}]`).join('')}amix=inputs=${sounds.length + 1}:normalize=0:duration=first[aout]`,
-    );
-  }
+  const mix = audioMix(doc, audioPlan(doc), sources, T, n);
+  args.push(...mix.args);
+  graph.push(...mix.graph);
 
   return {
     args: [

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { probe } from '@vf/media';
 import { createAiRegistry, createEnvCredentialStore } from '../index';
 import { taggerPrompt, taggerSchema } from '../prompts/tagger';
+import { buildTranslatePrompt, translateSchema } from '../prompts/translate';
 
 const registry = createAiRegistry({
   credentials: createEnvCredentialStore({ AI_FAKE: '1' }),
@@ -40,21 +41,54 @@ describe('fake provider', () => {
     expect(file).toMatchObject({ mime: 'image/png', width: 540, height: 960 });
   });
 
-  it('tts returns one monotonic word timing per word', async () => {
+  it('tts returns a silent WAV of 0.4 s per word with exact word timings', async () => {
     const tts = await registry.tts(u, 'fake/tts');
-    const { audio, words } = await tts.synthesize({ text: 'один два три', voiceId: 'v', language: 'uk' });
-    expect(words).toHaveLength(3);
-    expect(words![0]!.startMs).toBe(0);
-    expect(words![1]!.startMs).toBeGreaterThan(words![0]!.startMs);
-    expect(words![2]!.startMs).toBeGreaterThan(words![1]!.startMs);
+    const { audio, words } = await tts.synthesize({ text: 'один два три', voiceId: 'fake-voice', language: 'uk' });
+    expect(words).toEqual([
+      { text: 'один', startMs: 0, endMs: 400 },
+      { text: 'два', startMs: 400, endMs: 800 },
+      { text: 'три', startMs: 800, endMs: 1200 },
+    ]);
     expect(audio.mime).toBe('audio/wav');
-    expect(audio.durationMs).toBe(words![2]!.endMs);
+    expect(audio.durationMs).toBe(1200);
+    expect(Buffer.from(audio.bytes).toString('ascii', 0, 4)).toBe('RIFF');
   });
 
-  it('stt words compose its text', async () => {
+  it('stt returns three fixed phrases with segments and words', async () => {
     const stt = await registry.stt(u, 'fake/stt');
-    const { text, words } = await stt.transcribe({ audio: new Uint8Array(10), mime: 'audio/wav' });
-    expect(words.map((w) => w.text).join(' ')).toBe(text);
+    const { text, segments, words } = await stt.transcribe({ audio: new Uint8Array(10), mime: 'audio/wav' });
+    expect(segments.map((s) => [s.start, s.end])).toEqual([
+      [0, 1.2],
+      [2, 3.5],
+      [4, 5.5],
+    ]);
+    expect(text).toBe(segments.map((s) => s.text).join(' '));
+    expect(words!.map((w) => w.text).join(' ')).toBe(text);
+    for (const [i, w] of words!.entries()) {
+      expect(w.endMs).toBeGreaterThan(w.startMs);
+      if (i) expect(w.startMs).toBeGreaterThanOrEqual(words![i - 1]!.endMs);
+    }
+    expect(words![0]!.startMs).toBe(0);
+    expect(words!.at(-1)!.endMs).toBe(5500);
+  });
+
+  it('fake generateObject(translateSchema) prefixes each item with the target language', async () => {
+    const t = await registry.text(u, 'fake/text');
+    const { prompt } = buildTranslatePrompt({
+      from: 'uk',
+      to: 'en',
+      items: [
+        { id: 'a', text: 'Привіт' },
+        { id: 'b', text: 'Світ' },
+      ],
+    });
+    const v = await t.generateObject(translateSchema, { prompt });
+    expect(v).toEqual({
+      items: [
+        { id: 'a', text: '[en] Привіт' },
+        { id: 'b', text: '[en] Світ' },
+      ],
+    });
   });
 
   it('fake video completes after two polls', async () => {

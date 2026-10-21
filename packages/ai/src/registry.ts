@@ -6,6 +6,10 @@ import { anthropicText } from './providers/anthropic';
 import { googleImage, googleText } from './providers/google';
 import { openaiImage, openaiText } from './providers/openai';
 import { createFakeVideo } from './fake/video';
+import { createGeminiStt } from './providers/gemini-stt';
+import { createGeminiTts } from './providers/google-speech';
+import { createOpenAiTts } from './providers/openai-speech';
+import { createWhisperStt } from './providers/whisper';
 import { createGeminiOmniVideoGen } from './providers/google-omni';
 import type { ImageGen, STT, TextGen, TTS, VideoGen } from './types';
 import type { MediaTools } from '@vf/media';
@@ -36,6 +40,18 @@ const TEXT_FACTORIES: Partial<Record<ProviderId, (key: string, model: string) =>
   fake: () => fakeText,
 };
 
+const TTS_FACTORIES: Partial<Record<ProviderId, (key: string, model: string) => TTS>> = {
+  openai: (apiKey, model) => createOpenAiTts({ apiKey, model }),
+  google: (apiKey, model) => createGeminiTts({ apiKey, model }),
+  fake: () => fakeTts,
+};
+
+const STT_FACTORIES: Partial<Record<ProviderId, (key: string, model: string) => STT>> = {
+  openai: (apiKey, model) => createWhisperStt({ apiKey, model }),
+  google: (apiKey, model) => createGeminiStt(googleText(apiKey, model)),
+  fake: () => fakeStt,
+};
+
 export function createAiRegistry(deps: {
   credentials: CredentialStore;
   catalog?: readonly CatalogEntry[];
@@ -53,16 +69,6 @@ export function createAiRegistry(deps: {
     if (!key) throw new AppError('MODEL_UNAVAILABLE', `Немає ключа для провайдера ${entry.provider}`, { ref });
     return { entry, key, model: ref.slice(entry.provider.length + 1) };
   }
-
-  const fakeOnly = async <T>(userId: string, ref: ModelRef, capability: Capability, impl: T): Promise<T> => {
-    const { entry } = await resolve(userId, ref, capability);
-    if (entry.provider !== 'fake') {
-      throw new AppError('MODEL_UNAVAILABLE', `Адаптер ${entry.provider} для «${capability}» ще не підключено`, {
-        ref,
-      });
-    }
-    return impl;
-  };
 
   return {
     async catalog(userId) {
@@ -92,7 +98,18 @@ export function createAiRegistry(deps: {
       if (entry.provider === 'google') return createGeminiOmniVideoGen({ apiKey: key, model });
       throw new AppError('MODEL_UNAVAILABLE', `Генерацію відео для ${entry.provider} не підключено`, { ref });
     },
-    tts: (userId, ref) => fakeOnly(userId, ref, 'tts', fakeTts),
-    stt: (userId, ref) => fakeOnly(userId, ref, 'stt', fakeStt),
+    async tts(userId, ref) {
+      const { entry, key, model } = await resolve(userId, ref, 'tts');
+      const factory = TTS_FACTORIES[entry.provider];
+      if (!factory) throw new AppError('MODEL_UNAVAILABLE', `Озвучку для ${entry.provider} не підключено`, { ref });
+      return factory(key, model);
+    },
+    async stt(userId, ref) {
+      const { entry, key, model } = await resolve(userId, ref, 'stt');
+      const factory = STT_FACTORIES[entry.provider];
+      if (!factory)
+        throw new AppError('MODEL_UNAVAILABLE', `Розпізнавання для ${entry.provider} не підключено`, { ref });
+      return factory(key, model);
+    },
   };
 }

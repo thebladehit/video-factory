@@ -24,6 +24,9 @@ describe('estimateCost', () => {
     ]);
     expect(estimateCost(entry, { inputTokens: 1000, outputTokens: 200 })).toBeCloseTo((1000 * 0.1 + 200 * 0.5) / 1e6);
   });
+  it('minutes: usd × durationSec / 60', () => {
+    expect(estimateCost(e([{ unit: 'minute', usd: 0.015 }]), { durationSec: 120 })).toBeCloseTo(0.03);
+  });
   it('null without pricing', () => {
     expect(estimateCost(e(undefined), { images: 1 })).toBeNull();
   });

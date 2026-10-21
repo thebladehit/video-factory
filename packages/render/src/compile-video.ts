@@ -57,11 +57,17 @@ export function clipChain(
   const D = num(clip.duration);
   const tf = transformFilter(clip.effects, src, out, clip.fit, clip.duration, clip.start);
   const { fadeIn, fadeOut } = clipFades(clip.effects);
+  // фото: `speed`/`hold` не діють — кадр просто показується всю тривалість кліпу
+  const speed = src.kind === 'video' ? (clip.speed ?? 1) : 1;
+  const hold = src.kind === 'video' ? (clip.hold ?? 0) : 0;
+  const play = num(clip.duration - hold);
   const steps = [
-    'setpts=PTS-STARTPTS',
+    speed !== 1 ? `setpts=(PTS-STARTPTS)/${num(speed)}` : 'setpts=PTS-STARTPTS',
     `fps=${fps}`,
     // джерело трохи коротше за durationMs → тримаємо останній кадр, а не чорне
-    ...(src.kind === 'video' ? [`tpad=stop_mode=clone:stop_duration=${D}`] : []),
+    ...(src.kind === 'video' ? [`tpad=stop_mode=clone:stop_duration=${play}`] : []),
+    // стоп-кадр: останній кадр використаної частини до кінця кліпу
+    ...(hold > 0 ? [`trim=duration=${play}`, `tpad=stop_mode=clone:stop_duration=${num(hold)}`] : []),
     `trim=duration=${D}`,
     `scale=w='${tf.w}':h='${tf.h}':eval=frame:flags=bicubic`,
     'format=yuva444p',

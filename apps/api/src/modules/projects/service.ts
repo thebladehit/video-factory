@@ -1,5 +1,5 @@
 import { and, arrayContains, desc, eq, inArray, isNotNull } from 'drizzle-orm';
-import { assets, projects, renders } from '@vf/db';
+import { assets, projectLanguageTimelines, projects, renders } from '@vf/db';
 import { AppError, emptyTimeline, normalizeDoc, type MediaClip, type TimelineDoc, type VideoFormat } from '@vf/shared';
 import { docDuration } from '@vf/timeline';
 import type { AppDeps } from '../../app';
@@ -48,7 +48,7 @@ export function timelineAssetIds(doc: TimelineDoc): string[] {
 const formatOf = (doc: TimelineDoc): VideoFormat => (doc.width < doc.height ? '9:16' : '16:9');
 
 /** Перший за часом кліп нижньої відео-доріжки, що має файл. */
-function firstVisualAsset(doc: TimelineDoc): string | null {
+export function firstVisualAsset(doc: TimelineDoc): string | null {
   let best: MediaClip | null = null;
   for (const t of doc.tracks)
     if (t.kind === 'video') for (const c of t.clips) if (!best || c.start < best.start) best = c;
@@ -123,25 +123,69 @@ export async function createProject(deps: AppDeps, userId: string, input: { titl
   return { id: row!.id };
 }
 
-export async function getProject(deps: AppDeps, userId: string, id: string): Promise<ProjectView> {
+/** Проєкт або (з `language`) відокремлена мовна версія його документа — зі своєю версією. */
+export async function getProject(deps: AppDeps, userId: string, id: string, language?: string): Promise<ProjectView> {
   const p = await ownProject(deps, userId, id);
-  const timeline = normalizeDoc(p.timeline);
+  let raw: unknown = p.timeline;
+  let version = p.timelineVersion;
+  if (language !== undefined) {
+    const row = await languageRow(deps, p.id, language);
+    raw = row.timeline;
+    version = row.timelineVersion;
+  }
+  const timeline = normalizeDoc(raw);
   const ids = [
     ...new Set(timeline.tracks.flatMap((t) => (t.kind === 'captions' ? [] : t.clips.map((c) => c.assetId)))),
   ];
   const list = await editorAssets(deps, userId, ids);
   await ensureAnalyzed(deps, userId, list);
-  return { id: p.id, title: p.title, format: p.format, timeline, version: p.timelineVersion, assets: list };
+  return { id: p.id, title: p.title, format: p.format, timeline, version, assets: list };
 }
 
-/** Оптимістичне збереження: пише лише поверх `baseVersion`, інакше CONFLICT. */
+const notSeparated = () => new AppError('NOT_FOUND', 'Мовну версію не відокремлено');
+
+/** Відокремлена мовна версія документа (`null` — мова не відокремлена). */
+export async function languageTimeline(deps: AppDeps, projectId: string, language: string) {
+  const [row] = await deps.db
+    .select()
+    .from(projectLanguageTimelines)
+    .where(and(eq(projectLanguageTimelines.projectId, projectId), eq(projectLanguageTimelines.language, language)));
+  return row ?? null;
+}
+
+async function languageRow(deps: AppDeps, projectId: string, language: string) {
+  const row = await languageTimeline(deps, projectId, language);
+  if (!row) throw notSeparated();
+  return row;
+}
+
+const conflict = () => new AppError('CONFLICT', 'Проєкт змінено в іншій вкладці');
+
+/** Оптимістичне збереження: пише лише поверх `baseVersion`, інакше CONFLICT. З `language` — відокремлена мова. */
 export async function saveProject(
   deps: AppDeps,
   userId: string,
-  input: { id: string; timeline: unknown; baseVersion: number },
+  input: { id: string; language?: string; timeline: unknown; baseVersion: number },
 ): Promise<{ version: number }> {
   const doc = normalizeDoc(input.timeline);
   if (!isUuid(input.id)) throw notFound();
+  if (input.language !== undefined) {
+    const p = await ownProject(deps, userId, input.id);
+    const [row] = await deps.db
+      .update(projectLanguageTimelines)
+      .set({ timeline: doc, timelineVersion: input.baseVersion + 1, updatedAt: new Date() })
+      .where(
+        and(
+          eq(projectLanguageTimelines.projectId, p.id),
+          eq(projectLanguageTimelines.language, input.language),
+          eq(projectLanguageTimelines.timelineVersion, input.baseVersion),
+        ),
+      )
+      .returning({ version: projectLanguageTimelines.timelineVersion });
+    if (row) return { version: row.version };
+    await languageRow(deps, p.id, input.language);
+    throw conflict();
+  }
   const [row] = await deps.db
     .update(projects)
     .set({
@@ -156,7 +200,7 @@ export async function saveProject(
     .returning({ version: projects.timelineVersion });
   if (row) return { version: row.version };
   await ownProject(deps, userId, input.id);
-  throw new AppError('CONFLICT', 'Проєкт змінено в іншій вкладці');
+  throw conflict();
 }
 
 export async function renameProject(

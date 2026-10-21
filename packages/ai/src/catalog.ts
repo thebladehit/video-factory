@@ -6,9 +6,11 @@ export interface CatalogEntry {
   provider: ProviderId;
   capability: Capability;
   label: string;
-  pricing?: { unit: '1M_tokens_in' | '1M_tokens_out' | 'image' | 'second' | '1K_chars'; usd: number }[];
+  pricing?: { unit: '1M_tokens_in' | '1M_tokens_out' | 'image' | 'second' | 'minute' | '1K_chars'; usd: number }[];
   rateLimitPerMin?: number;
   wordTimestamps?: boolean;
+  /** tts: статичний список голосів (API списку голосів у провайдерів немає) */
+  voices?: { id: string; name: string }[];
   /** image/video: підтримувані формати кадру */
   aspects?: Aspect[];
   /** image: моделі, що приймають розмір, а не співвідношення сторін */
@@ -43,6 +45,55 @@ const tokens = (inUsd: number, outUsd: number): CatalogEntry['pricing'] => [
 ];
 const perImage = (usd: number): CatalogEntry['pricing'] => [{ unit: 'image', usd }];
 const perSecond = (usd: number): CatalogEntry['pricing'] => [{ unit: 'second', usd }];
+const perMinute = (usd: number): CatalogEntry['pricing'] => [{ unit: 'minute', usd }];
+const voices = (...names: string[]) => names.map((n) => ({ id: n, name: n }));
+const OPENAI_VOICES = voices(
+  'alloy',
+  'ash',
+  'ballad',
+  'coral',
+  'echo',
+  'fable',
+  'nova',
+  'onyx',
+  'sage',
+  'shimmer',
+  'verse',
+  'marin',
+  'cedar',
+);
+const GEMINI_VOICES = voices(
+  'Zephyr',
+  'Puck',
+  'Charon',
+  'Kore',
+  'Fenrir',
+  'Leda',
+  'Orus',
+  'Aoede',
+  'Callirrhoe',
+  'Autonoe',
+  'Enceladus',
+  'Iapetus',
+  'Umbriel',
+  'Algieba',
+  'Despina',
+  'Erinome',
+  'Algenib',
+  'Rasalgethi',
+  'Laomedeia',
+  'Achernar',
+  'Alnilam',
+  'Schedar',
+  'Gacrux',
+  'Pulcherrima',
+  'Achird',
+  'Zubenelgenubi',
+  'Vindemiatrix',
+  'Sadachbia',
+  'Sadaltager',
+  'Sulafat',
+);
 const ALL_ASPECTS: Aspect[] = ['9:16', '16:9', '1:1'];
 const OPENAI_SIZES = { '9:16': '1024x1536', '16:9': '1536x1024', '1:1': '1024x1024' } as const;
 
@@ -99,9 +150,26 @@ export const CATALOG: readonly CatalogEntry[] = [
     durationRange: [3, 10],
   }),
 
+  entry('openai/gpt-4o-mini-tts', 'tts', 'GPT-4o mini TTS', { pricing: perMinute(0.015), voices: OPENAI_VOICES }),
+  entry('google/gemini-3.8-flash-tts', 'tts', 'Gemini 3.8 Flash TTS', {
+    pricing: perMinute(0.0135),
+    voices: GEMINI_VOICES,
+  }),
+  entry('google/gemini-3.8-flash-lite-tts', 'tts', 'Gemini 3.8 Flash Lite TTS', {
+    pricing: perMinute(0.009),
+    voices: GEMINI_VOICES,
+  }),
+  entry('openai/whisper-1', 'stt', 'Whisper', { pricing: perMinute(0.006), wordTimestamps: true }),
+  // Gemini як STT: аудіо ≈ 32 токени/с за ціною вводу ($0.75/1M) ≈ $0.0015/хв; лише сегменти
+  entry('google/gemini-3.8-flash', 'stt', 'Gemini 3.8 Flash (розпізнавання)', { pricing: perMinute(0.0015) }),
+
   entry('fake/text', 'text', 'Fake · текст', { pricing: tokens(0, 0), vision: true, cheap: true }),
   entry('fake/image', 'image', 'Fake · зображення', { pricing: perImage(0), aspects: ALL_ASPECTS, maxN: 4 }),
   entry('fake/video', 'video', 'Fake · відео', { pricing: perSecond(0), aspects: ALL_ASPECTS, durations: [2] }),
-  entry('fake/tts', 'tts', 'Fake · озвучка', { wordTimestamps: true }),
-  entry('fake/stt', 'stt', 'Fake · розпізнавання', { wordTimestamps: true }),
+  entry('fake/tts', 'tts', 'Fake · озвучка', {
+    pricing: perMinute(0),
+    voices: voices('fake-voice'),
+    wordTimestamps: true,
+  }),
+  entry('fake/stt', 'stt', 'Fake · розпізнавання', { pricing: perMinute(0), wordTimestamps: true }),
 ];

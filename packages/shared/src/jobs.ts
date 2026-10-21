@@ -4,7 +4,16 @@ export const TERMINAL_STATUSES: ReadonlySet<JobStatus> = new Set(['done', 'faile
 
 /** Розширюється в наступних підпроєктах. */
 export type JobType =
-  'debug.sleep' | 'asset.process' | 'image.generate' | 'video.generate' | 'assets.tag' | 'render' | 'asset.analyze';
+  | 'debug.sleep'
+  | 'asset.process'
+  | 'image.generate'
+  | 'video.generate'
+  | 'assets.tag'
+  | 'render'
+  | 'asset.analyze'
+  | 'voice.transcribe'
+  | 'voice.translate'
+  | 'voice.synthesize';
 
 export interface JobRecord {
   id: string;
@@ -28,6 +37,7 @@ export interface JobSubject {
   generationId?: string;
   renderId?: string;
   projectId?: string;
+  lineId?: string;
 }
 
 export interface JobEvent {
@@ -48,6 +58,7 @@ export function jobSubject(payload: unknown): JobSubject {
   if (typeof p.generationId === 'string') subject.generationId = p.generationId;
   if (typeof p.renderId === 'string') subject.renderId = p.renderId;
   if (typeof p.projectId === 'string') subject.projectId = p.projectId;
+  if (typeof p.lineId === 'string') subject.lineId = p.lineId;
   return subject;
 }
 

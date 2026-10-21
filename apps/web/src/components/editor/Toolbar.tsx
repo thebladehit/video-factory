@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { VideoFormat } from '@vf/shared';
 import { setFormat } from '@vf/timeline';
-import { ArrowLeft, Check, CloudOff, Loader2, Redo2, Undo2 } from 'lucide-react';
+import { ArrowLeft, Check, CloudOff, Loader2, Mic, Redo2, Undo2 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,8 @@ export function Toolbar({
   store,
   saveState,
   onRetrySave,
+  modeSwitch,
+  readOnly = false,
   children,
 }: {
   projectId: string;
@@ -48,6 +50,9 @@ export function Toolbar({
   store: EditorStore;
   saveState: SaveState;
   onRetrySave(): void;
+  /** Перемикач режимів («Монтаж» / мови) */
+  modeSwitch?: ReactNode;
+  readOnly?: boolean;
   children?: ReactNode;
 }) {
   const trpc = useTRPC();
@@ -107,11 +112,13 @@ export function Toolbar({
         variant="outline"
         size="sm"
         value={format}
+        disabled={readOnly}
         onValueChange={(v) => v && store.getState().apply((d) => setFormat(d, v as VideoFormat))}
       >
         <ToggleGroupItem value="9:16">9:16</ToggleGroupItem>
         <ToggleGroupItem value="16:9">16:9</ToggleGroupItem>
       </ToggleGroup>
+      {modeSwitch}
       <Button
         variant="ghost"
         size="icon"
@@ -140,7 +147,14 @@ export function Toolbar({
       >
         {SAVE_LABEL[saveState]}
       </button>
-      <div className="ml-auto">{children}</div>
+      <div className="ml-auto flex items-center gap-2">
+        <Button asChild variant="outline" data-testid="open-voice">
+          <Link to="/voice/$id" params={{ id: projectId }}>
+            <Mic /> Озвучка
+          </Link>
+        </Button>
+        {children}
+      </div>
     </div>
   );
 }

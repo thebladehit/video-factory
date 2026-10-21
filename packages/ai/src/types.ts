@@ -1,11 +1,7 @@
-import type { ProviderId } from '@vf/shared';
+import type { ProviderId, Word } from '@vf/shared';
 import type { z } from 'zod';
 
-export interface Word {
-  text: string;
-  startMs: number;
-  endMs: number;
-}
+export type { Word };
 
 export interface GeneratedFile {
   bytes: Uint8Array;
@@ -56,14 +52,32 @@ export interface VideoGen {
   poll(ref: OpRef, opts?: { signal?: AbortSignal }): Promise<OpStatus | GeneratedFile[]>;
 }
 
+/** Максимум символів на один рядок озвучки (більше — VALIDATION, «розділіть сегмент») */
+export const TTS_MAX_CHARS = 1500;
+
 export interface TTS {
-  listVoices(language?: string): Promise<{ id: string; name: string; language: string }[]>;
-  synthesize(req: { text: string; voiceId: string; language: string; speed?: number }): Promise<{
-    audio: GeneratedFile;
-    words?: Word[];
-  }>;
+  synthesize(req: {
+    text: string;
+    voiceId: string;
+    language: string;
+    instructions?: string;
+    signal?: AbortSignal;
+  }): Promise<{ audio: GeneratedFile; words?: Word[] }>;
+}
+
+/** Фраза розпізнавання; час у секундах */
+export interface SttSegment {
+  start: number;
+  end: number;
+  text: string;
 }
 
 export interface STT {
-  transcribe(req: { audio: Uint8Array; mime: string; language?: string }): Promise<{ text: string; words: Word[] }>;
+  transcribe(req: {
+    audio: Uint8Array;
+    mime: string;
+    language?: string;
+    prompt?: string;
+    signal?: AbortSignal;
+  }): Promise<{ text: string; language?: string; segments: SttSegment[]; words?: Word[] }>;
 }

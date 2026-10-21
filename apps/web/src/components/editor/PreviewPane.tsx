@@ -58,7 +58,7 @@ export function PreviewPane({
       <div className="flex min-h-0 w-full flex-1 items-center justify-center">
         <div
           ref={box}
-          className="max-h-full max-w-full bg-black shadow"
+          className="relative max-h-full max-w-full bg-black shadow"
           style={{
             aspectRatio: `${doc.width} / ${doc.height}`,
             height: doc.height > doc.width ? '100%' : undefined,

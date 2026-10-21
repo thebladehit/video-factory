@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { AutoTagToggle } from '@/components/settings/AutoTagToggle';
 import { ChannelStyle } from '@/components/settings/ChannelStyle';
 import { DebugJobCard } from '@/components/settings/DebugJobCard';
+import { DefaultVoices } from '@/components/settings/DefaultVoices';
 import { HealthCard } from '@/components/settings/HealthCard';
 import { ModelDefaults } from '@/components/settings/ModelDefaults';
 
@@ -11,6 +12,7 @@ export const Route = createFileRoute('/settings')({
       <h1 className="text-2xl font-semibold">Налаштування</h1>
       <HealthCard />
       <ModelDefaults />
+      <DefaultVoices />
       <AutoTagToggle />
       <ChannelStyle />
       <DebugJobCard />

@@ -1,0 +1,17 @@
+{
+  "name": "@vf/captions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fonts/*": "./fonts/*"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@vf/shared": "workspace:*",
+    "zod": "^4.6"
+  }
+}

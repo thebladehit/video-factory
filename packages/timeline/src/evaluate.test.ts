@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyTimeline, type TimelineDoc } from '@vf/shared';
 import { addClip, setEffect, setTransition, setVolume, trimEnd, type AssetInfo } from './ops';
-import { audioPlan, evaluate } from './evaluate';
+import { audioPlan, evaluate, sourceTimeAt } from './evaluate';
 
 let n = 0;
 const ids = () => `id${++n}`;
@@ -87,6 +87,9 @@ describe('audioPlan', () => {
       volume: 0.5,
       fadeIn: 0,
       fadeOut: 0,
+      speed: 1,
+      hold: 0,
+      envelope: [],
     });
   });
 
@@ -101,5 +104,52 @@ describe('audioPlan', () => {
       tracks: s.doc.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => ({ ...c, fadeIn: 1, fadeOut: 2 })) })),
     } as TimelineDoc;
     expect(audioPlan(doc)[0]).toMatchObject({ fadeIn: 1, fadeOut: 2, volume: 1, duration: 8 });
+  });
+});
+
+describe('clip speed / hold', () => {
+  const clip = { start: 2, duration: 5, in: 1 };
+  it('sourceTimeAt without speed/hold = in + (t - start)', () => {
+    expect(sourceTimeAt(clip, 3)).toBeCloseTo(2, 9);
+  });
+  it('speed 0.8 scales source progress', () => {
+    expect(sourceTimeAt({ ...clip, speed: 0.8 }, 4)).toBeCloseTo(1 + 2 * 0.8, 9);
+  });
+  it('hold freezes on the last source frame', () => {
+    const c = { ...clip, speed: 0.8, hold: 0.5 };
+    const last = 1 + 4.5 * 0.8;
+    expect(sourceTimeAt(c, 6.5)).toBeCloseTo(last, 9);
+    expect(sourceTimeAt(c, 6.9)).toBeCloseTo(last, 9);
+  });
+  it('evaluate uses sourceTimeAt', () => {
+    const a = addClip(
+      emptyTimeline('9:16'),
+      { id: 'V', kind: 'video', durationSec: 10, hasAudio: false },
+      { at: 0 },
+      ids,
+    );
+    const doc = {
+      ...a.doc,
+      tracks: a.doc.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => ({ ...c, speed: 1.25, hold: 1 })) })),
+    } as TimelineDoc;
+    expect(evaluate(doc, 2, kinds)[0]!.sourceTime).toBeCloseTo(2.5, 9);
+    expect(evaluate(doc, 4.5, kinds)[0]!.sourceTime).toBeCloseTo(4.5 * 1.25, 9);
+    expect(evaluate(doc, 9.5, kinds)[0]!.sourceTime).toBeCloseTo(9 * 1.25, 9);
+  });
+  it('audioPlan defaults and carries speed/hold/envelope', () => {
+    const m = addClip(emptyTimeline('9:16'), { id: 'M', kind: 'audio', durationSec: 4 }, { at: 0 }, ids);
+    expect(audioPlan(m.doc)[0]).toMatchObject({ speed: 1, hold: 0, envelope: [] });
+    const env = [
+      { t: 0, gain: 1 },
+      { t: 1, gain: 0.08 },
+    ];
+    const doc = {
+      ...m.doc,
+      tracks: m.doc.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => ({ ...c, speed: 1.1, hold: 0.5, envelope: env })),
+      })),
+    } as TimelineDoc;
+    expect(audioPlan(doc)[0]).toMatchObject({ speed: 1.1, hold: 0.5, envelope: env });
   });
 });

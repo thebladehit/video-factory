@@ -1,7 +1,8 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { assets, generations, jobs, renders } from '@vf/db';
+import { assets, generations, jobs, renders, voiceLines } from '@vf/db';
 import { RESTART_ERROR } from '@vf/jobs';
 import type { AppDeps } from '../app';
+import { releaseCancelledLines } from './voice/synthesize-job';
 
 /** Чи є жива (queued/running) задача цього типу для сутності. */
 export async function hasLiveJob(deps: AppDeps, type: string, key: 'assetId' | 'generationId', id: string) {
@@ -17,7 +18,8 @@ export async function hasLiveJob(deps: AppDeps, type: string, key: 'assetId' | '
  * Після старту: черга позначила перервані задачі «failed (рестарт)», а доменні рядки лишились «в роботі».
  * Обробники ідемпотентні, тож просто ставимо задачі знову: asset.process — для processing без живої задачі,
  * asset.analyze — для ready-відео/аудіо без аналізу звуку,
- * генерації — для перерваних рестартом (відео продовжить опитування збереженої операції, не платячи вдруге).
+ * генерації — для перерваних рестартом (відео продовжить опитування збереженої операції, не платячи вдруге);
+ * рядки озвучки з перерваною задачею — «failed» з поясненням.
  */
 export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
   const stuckAssets = await deps.db.select().from(assets).where(eq(assets.status, 'processing'));
@@ -58,6 +60,27 @@ export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
           : { status: 'failed', error: r.error ?? RESTART_ERROR, finishedAt: new Date() },
       )
       .where(eq(renders.id, r.id));
+
+  // рядок озвучки, чия задача перервана рестартом (або зникла), — failed; скасована — звільняється
+  const stuckLines = await deps.db
+    .select({ id: voiceLines.id, jobStatus: jobs.status, error: jobs.error })
+    .from(voiceLines)
+    .leftJoin(jobs, eq(jobs.id, voiceLines.jobId))
+    .where(
+      and(
+        inArray(voiceLines.status, ['queued', 'running']),
+        or(isNull(jobs.id), inArray(jobs.status, ['failed', 'cancelled'])),
+      ),
+    );
+  await releaseCancelledLines(
+    deps,
+    stuckLines.filter((l) => l.jobStatus === 'cancelled').map((l) => l.id),
+  );
+  for (const l of stuckLines.filter((x) => x.jobStatus !== 'cancelled'))
+    await deps.db
+      .update(voiceLines)
+      .set({ status: 'failed', error: l.error ?? RESTART_ERROR, updatedAt: new Date() })
+      .where(eq(voiceLines.id, l.id));
 
   const interrupted = await deps.db
     .select({ g: generations })

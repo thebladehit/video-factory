@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { emptyTimeline, type TimelineDoc } from '@vf/shared';
+import {
+  emptyTimeline,
+  type AudioClip,
+  type AudioRole,
+  type MediaClip,
+  type TimelineDoc,
+  type Track,
+} from '@vf/shared';
 import { addClip, coverRect, evalExpr, setEffect, setTransition, setVolume, type AssetInfo } from '@vf/timeline';
-import { compileFfmpeg, outputSize, transformFilter, type SourceInfo } from './index';
+import { compileAudioOnly, compileFfmpeg, envelopeExpr, outputSize, transformFilter, type SourceInfo } from './index';
 
 let n = 0;
 const ids = () => `c${++n}`;
@@ -238,4 +245,202 @@ describe('transformFilter', () => {
         expect(evalExpr(tf.y, { t: local + 2, overlay_w: w, overlay_h: h })).toBeCloseTo(r.y, 6);
       }
     });
+});
+
+describe('speed / hold / envelope / subtitles (language docs from localize)', () => {
+  const vclip = (extra: Partial<MediaClip>): MediaClip => ({
+    id: 'v1',
+    assetId: 'V',
+    start: 0,
+    duration: 2,
+    in: 1,
+    fit: 'cover',
+    effects: [],
+    ...extra,
+  });
+  const aclip = (extra: Partial<AudioClip>): AudioClip => ({
+    id: 'a1',
+    assetId: 'A',
+    start: 0.5,
+    duration: 2,
+    in: 1,
+    volume: 1,
+    ...extra,
+  });
+  const docOf = (tracks: Track[]): TimelineDoc => ({ ...emptyTimeline('9:16'), tracks });
+  const vtrack = (...clips: MediaClip[]): Track => ({ id: 'tv', kind: 'video', clips });
+  const atrack = (role: AudioRole, ...clips: AudioClip[]): Track => ({ id: `t-${role}`, kind: 'audio', role, clips });
+  const chainOf = (g: string, input: string) => g.split(';\n').find((l) => l.startsWith(`[${input}]`))!;
+
+  it('video speed 0.8 → -t = (duration − hold) × speed, setpts=(PTS-STARTPTS)/0.8; hold → tpad clone', () => {
+    const doc = docOf([vtrack(vclip({ speed: 0.8, hold: 0.5 }))]);
+    const c = compile(doc, [src('V', 'video', { hasAudio: false })]);
+    expect(inputs(c.args)[0]).toEqual(['-ss', '1', '-t', '1.2', '-i', '/w/V']);
+    const chain = chainOf(c.filterScript, '0:v');
+    expect(chain).toMatch(/^\[0:v\]setpts=\(PTS-STARTPTS\)\/0\.8,fps=30,/);
+    // 1.5 с відтворення, потім 0.5 с останнього кадру, разом — тривалість кліпу
+    expect(chain).toMatch(/trim=duration=1\.5,tpad=stop_mode=clone:stop_duration=0\.5,trim=duration=2,/);
+  });
+
+  it('speed 1 and no hold keep the plain chain', () => {
+    const c = compile(docOf([vtrack(vclip({}))]), [src('V', 'video', { hasAudio: false })]);
+    expect(inputs(c.args)[0]).toEqual(['-ss', '1', '-t', '2', '-i', '/w/V']);
+    expect(chainOf(c.filterScript, '0:v')).toMatch(
+      /^\[0:v\]setpts=PTS-STARTPTS,fps=30,tpad=stop_mode=clone:stop_duration=2,trim=duration=2,/,
+    );
+  });
+
+  it('photo ignores speed/hold: it is simply shown for the whole clip', () => {
+    const doc = docOf([vtrack(vclip({ assetId: 'P', speed: 1.25, hold: 0.7 }))]);
+    const c = compile(doc, [src('P', 'image')]);
+    expect(inputs(c.args)[0]).toEqual(['-loop', '1', '-framerate', '30', '-t', '2', '-i', '/w/P']);
+    const chain = chainOf(c.filterScript, '0:v');
+    expect(chain).toMatch(/^\[0:v\]setpts=PTS-STARTPTS,fps=30,trim=duration=2,/);
+    expect(chain).not.toContain('tpad');
+  });
+
+  it('original audio speed 1.25 → atempo=1.25, hold → apad=pad_dur, -t = (duration − hold) × speed', () => {
+    const doc = docOf([atrack('original', aclip({ speed: 1.25, hold: 0.4 }))]);
+    const c = compile(doc, [src('A', 'audio')]);
+    expect(inputs(c.args)[0]).toEqual(['-ss', '1', '-t', '2', '-i', '/w/A']);
+    expect(chainOf(c.filterScript, '0:a')).toMatch(
+      /asetpts=PTS-STARTPTS,atrim=duration=2,atempo=1\.25,apad=pad_dur=0\.4,atrim=duration=2,volume=1,.*adelay=500:all=1/,
+    );
+  });
+
+  it('own sound of a video clip with speed also gets atempo', () => {
+    const doc = docOf([vtrack(vclip({ speed: 0.8, volume: 1 }))]);
+    const c = compile(doc, [src('V', 'video')]);
+    expect(c.filterScript).toMatch(/\[1:a\][^;]*atempo=0\.8/);
+  });
+
+  it('voiceover never gets atempo (voice is never sped up)', () => {
+    const doc = docOf([
+      atrack('voiceover', aclip({ speed: 1.25, hold: 0.3 })),
+      atrack('original', aclip({ id: 'a2', assetId: 'B' })),
+    ]);
+    const c = compile(doc, [src('A', 'audio'), src('B', 'audio')]);
+    expect(c.filterScript).not.toContain('atempo');
+    expect(inputs(c.args)[0]).toEqual(['-ss', '1', '-t', '1.7', '-i', '/w/A']);
+    expect(chainOf(c.filterScript, '0:a')).toContain('apad=pad_dur=0.3');
+  });
+
+  it("envelope → volume='…':eval=frame equal to linear interpolation × volume", () => {
+    const envelope = [
+      { t: 0, gain: 1 },
+      { t: 0.3, gain: 1 },
+      { t: 0.5, gain: 0.32 },
+      { t: 1.5, gain: 0.32 },
+      { t: 1.7, gain: 1 },
+    ];
+    const doc = docOf([atrack('original', aclip({ volume: 0.25, envelope }))]);
+    const g = compile(doc, [src('A', 'audio')]).filterScript;
+    const m = /volume='([^']+)':eval=frame/.exec(chainOf(g, '0:a'));
+    expect(m).not.toBeNull();
+    const lin = (t: number) => {
+      if (t <= envelope[0]!.t) return envelope[0]!.gain;
+      for (let i = 1; i < envelope.length; i++) {
+        const a = envelope[i - 1]!;
+        const b = envelope[i]!;
+        if (t <= b.t) return a.gain + ((b.gain - a.gain) * (t - a.t)) / (b.t - a.t);
+      }
+      return envelope.at(-1)!.gain;
+    };
+    for (let i = 0; i <= 10; i++) {
+      const t = (i / 10) * 2;
+      expect(evalExpr(m![1]!, { t })).toBeCloseTo(0.25 * lin(t), 9);
+    }
+  });
+
+  it('envelopeExpr: start shifts time, outside the points the gain holds, single point is constant', () => {
+    const env = [
+      { t: 0.2, gain: 0.5 },
+      { t: 1, gain: 1.5 },
+    ];
+    expect(evalExpr(envelopeExpr(2, env, 3), { t: 3 })).toBeCloseTo(1, 9);
+    expect(evalExpr(envelopeExpr(2, env, 3), { t: 3.6 })).toBeCloseTo(2, 9);
+    expect(evalExpr(envelopeExpr(2, env, 3), { t: 9 })).toBeCloseTo(3, 9);
+    expect(evalExpr(envelopeExpr(0.5, [{ t: 0.3, gain: 0.4 }], 0), { t: 7 })).toBeCloseTo(0.2, 9);
+  });
+
+  it('subtitles=f=…:fontsdir=… is the last video filter, after the 2× → 1× scale', () => {
+    const doc = add(emptyTimeline('9:16'), { id: 'P', kind: 'image' }, 0).doc; // Ken Burns → 2×
+    const c = compileFfmpeg({
+      doc,
+      preset: 'draft',
+      sources: new Map([src('P', 'image')]),
+      filterScriptPath: '/w/graph.txt',
+      outPath: '/w/out.mp4',
+      subtitlesPath: '/w/subs.ass',
+      fontsDir: '/app/packages/captions/fonts',
+    });
+    expect(c.filterScript).toMatch(
+      /scale=720:1280:flags=area,subtitles=f='\/w\/subs\.ass':fontsdir='\/app\/packages\/captions\/fonts',format=yuv420p\[vout\]/,
+    );
+  });
+
+  it('subtitles without 2× and without fontsDir', () => {
+    const doc = add(emptyTimeline('9:16'), { id: 'V', kind: 'video', durationSec: 4, hasAudio: true }, 0).doc;
+    const c = compileFfmpeg({
+      doc,
+      preset: 'draft',
+      sources: new Map([src('V', 'video')]),
+      filterScriptPath: '/w/graph.txt',
+      outPath: '/w/out.mp4',
+      subtitlesPath: '/w/subs.ass',
+    });
+    expect(c.filterScript).toMatch(/\]subtitles=f='\/w\/subs\.ass',format=yuv420p\[vout\]/);
+  });
+});
+
+describe('compileAudioOnly', () => {
+  const docOf = (tracks: Track[]): TimelineDoc => ({ ...emptyTimeline('9:16'), tracks });
+  const sound = (id: string, assetId: string, start: number): AudioClip => ({
+    id,
+    assetId,
+    start,
+    duration: 2,
+    in: 0,
+    volume: 1,
+  });
+  const doc = docOf([
+    {
+      id: 'tv',
+      kind: 'video',
+      clips: [
+        { id: 'v1', assetId: 'V', start: 0, duration: 4, in: 0, fit: 'cover', effects: [], volume: 0.5 },
+        { id: 'p1', assetId: 'P', start: 4, duration: 2, in: 0, fit: 'cover', effects: [] },
+      ],
+    },
+    { id: 'to', kind: 'audio', role: 'original', clips: [sound('o1', 'O', 1)] },
+    { id: 'tm', kind: 'audio', role: 'music', clips: [sound('m1', 'M', 0)] },
+  ]);
+  const sources = new Map([src('V', 'video'), src('P', 'image'), src('O', 'audio'), src('M', 'audio')]);
+  const compileA = (roles: AudioRole[]) =>
+    compileAudioOnly({ doc, sources, roles, outPath: '/w/mix.webm', filterScriptPath: '/w/mix.txt' });
+
+  it('mono 16 kHz Opus 32k WebM, no video inputs', () => {
+    const c = compileA(['original']);
+    const a = c.args.join(' ');
+    expect(a).toContain('-ac 1 -ar 16000 -c:a libopus -b:a 32k');
+    expect(a).toContain('-filter_complex_script /w/mix.txt -map [aout]');
+    expect(a).not.toContain('[vout]');
+    expect(a).not.toContain('-loop');
+    expect(c.args.at(-1)).toBe('/w/mix.webm');
+    expect(c.durationSec).toBe(6);
+    expect(c.args[c.args.indexOf('-t', c.args.indexOf('-filter_complex_script')) + 1]).toBe('6');
+  });
+
+  it("only the requested roles; 'original' includes own sound of video clips", () => {
+    const orig = inputs(compileA(['original']).args).map((i) => i.at(-1));
+    expect(orig).toEqual(['/w/V', '/w/O']);
+    expect(compileA(['original']).filterScript).toMatch(/\[0:a\][^;]*volume=0\.5/);
+    expect(inputs(compileA(['music']).args).map((i) => i.at(-1))).toEqual(['/w/M']);
+  });
+
+  it('no matching sounds → silence of the document duration', () => {
+    const c = compileA(['voiceover']);
+    expect(inputs(c.args)).toHaveLength(0);
+    expect(c.filterScript).toMatch(/anullsrc=[^;]*atrim=duration=6\[aout\]/);
+  });
 });

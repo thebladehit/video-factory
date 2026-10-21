@@ -16,6 +16,8 @@ import { Route as PublicationsRouteImport } from './routes/publications'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as VoiceRouteImport } from './routes/voice'
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
+import { Route as VoiceIndexRouteImport } from './routes/voice.index'
+import { Route as VoiceIdRouteImport } from './routes/voice.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +54,16 @@ const ProjectsIdRoute = ProjectsIdRouteImport.update({
   path: '/projects/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const VoiceIndexRoute = VoiceIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => VoiceRoute,
+} as any)
+const VoiceIdRoute = VoiceIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => VoiceRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -59,8 +71,10 @@ export interface FileRoutesByFullPath {
   '/library': typeof LibraryRoute
   '/publications': typeof PublicationsRoute
   '/settings': typeof SettingsRoute
-  '/voice': typeof VoiceRoute
+  '/voice': typeof VoiceRouteWithChildren
   '/projects/$id': typeof ProjectsIdRoute
+  '/voice/$id': typeof VoiceIdRoute
+  '/voice/': typeof VoiceIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -68,8 +82,9 @@ export interface FileRoutesByTo {
   '/library': typeof LibraryRoute
   '/publications': typeof PublicationsRoute
   '/settings': typeof SettingsRoute
-  '/voice': typeof VoiceRoute
   '/projects/$id': typeof ProjectsIdRoute
+  '/voice/$id': typeof VoiceIdRoute
+  '/voice': typeof VoiceIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -78,8 +93,10 @@ export interface FileRoutesById {
   '/library': typeof LibraryRoute
   '/publications': typeof PublicationsRoute
   '/settings': typeof SettingsRoute
-  '/voice': typeof VoiceRoute
+  '/voice': typeof VoiceRouteWithChildren
   '/projects/$id': typeof ProjectsIdRoute
+  '/voice/$id': typeof VoiceIdRoute
+  '/voice/': typeof VoiceIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +108,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/voice'
     | '/projects/$id'
+    | '/voice/$id'
+    | '/voice/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -98,8 +117,9 @@ export interface FileRouteTypes {
     | '/library'
     | '/publications'
     | '/settings'
-    | '/voice'
     | '/projects/$id'
+    | '/voice/$id'
+    | '/voice'
   id:
     | '__root__'
     | '/'
@@ -109,6 +129,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/voice'
     | '/projects/$id'
+    | '/voice/$id'
+    | '/voice/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -117,7 +139,7 @@ export interface RootRouteChildren {
   LibraryRoute: typeof LibraryRoute
   PublicationsRoute: typeof PublicationsRoute
   SettingsRoute: typeof SettingsRoute
-  VoiceRoute: typeof VoiceRoute
+  VoiceRoute: typeof VoiceRouteWithChildren
   ProjectsIdRoute: typeof ProjectsIdRoute
 }
 
@@ -172,8 +194,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/voice/': {
+      id: '/voice/'
+      path: '/'
+      fullPath: '/voice/'
+      preLoaderRoute: typeof VoiceIndexRouteImport
+      parentRoute: typeof VoiceRoute
+    }
+    '/voice/$id': {
+      id: '/voice/$id'
+      path: '/$id'
+      fullPath: '/voice/$id'
+      preLoaderRoute: typeof VoiceIdRouteImport
+      parentRoute: typeof VoiceRoute
+    }
   }
 }
+
+interface VoiceRouteChildren {
+  VoiceIdRoute: typeof VoiceIdRoute
+  VoiceIndexRoute: typeof VoiceIndexRoute
+}
+
+const VoiceRouteChildren: VoiceRouteChildren = {
+  VoiceIdRoute: VoiceIdRoute,
+  VoiceIndexRoute: VoiceIndexRoute,
+}
+
+const VoiceRouteWithChildren = VoiceRoute._addFileChildren(VoiceRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -181,7 +229,7 @@ const rootRouteChildren: RootRouteChildren = {
   LibraryRoute: LibraryRoute,
   PublicationsRoute: PublicationsRoute,
   SettingsRoute: SettingsRoute,
-  VoiceRoute: VoiceRoute,
+  VoiceRoute: VoiceRouteWithChildren,
   ProjectsIdRoute: ProjectsIdRoute,
 }
 export const routeTree = rootRouteImport

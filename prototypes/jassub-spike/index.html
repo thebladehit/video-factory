@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JASSUB spike</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 16px; background: #222; color: #eee; }
+    #stage { position: relative; width: 270px; height: 480px; }
+    #stage canvas { position: absolute; inset: 0; width: 270px; height: 480px; }
+    #subs { pointer-events: none; }
+    .row { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+    #t { width: 270px; }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="video" width="1080" height="1920"></canvas>
+    <canvas id="subs"></canvas>
+  </div>
+  <div class="row">
+    <button id="play">▶</button>
+    <input id="t" type="range" min="0" max="10" step="0.001" value="0" />
+    <span id="label">0.000</span>
+  </div>
+  <div class="row">
+    <button id="swap">setTrack (інший текст)</button>
+    <span id="status">…</span>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

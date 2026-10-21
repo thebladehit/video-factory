@@ -21,6 +21,10 @@ export interface CompileInput {
   language?: string | null;
   filterScriptPath: string;
   outPath: string;
+  /** ASS-файл субтитрів мови — останнім фільтром відео (`subtitles=f=…`) */
+  subtitlesPath?: string;
+  /** Тека вбудованих шрифтів субтитрів (`fontsdir`) */
+  fontsDir?: string;
 }
 
 export interface Compiled {

@@ -9,6 +9,8 @@ export interface AppConfig {
   apiHost: string;
   ffmpegPath: string;
   ffprobePath: string;
+  /** Вбудовані шрифти субтитрів (`fontsdir` фільтра `subtitles`) */
+  captionsFontsDir: string;
   /** Опитування провайдера під час генерації відео */
   videoPollMs: number;
   videoTimeoutMs: number;
@@ -49,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     apiHost: env.API_HOST || '127.0.0.1',
     ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
     ffprobePath: env.FFPROBE_PATH || 'ffprobe',
+    captionsFontsDir: env.CAPTIONS_FONTS_DIR || '/app/packages/captions/fonts',
     videoPollMs: 10_000,
     videoTimeoutMs: 15 * 60_000,
     webOrigin: env.WEB_ORIGIN || 'http://localhost:5173',

@@ -120,3 +120,78 @@ describe('assetKeys.peaks', () => {
     expect(assetKeys.peaks('u1', 'a1')).toBe('u/u1/assets/a1/peaks.bin');
   });
 });
+
+describe('segments, speed, hold, envelope', () => {
+  const withAudio = () => {
+    const d: any = validDoc();
+    d.tracks.push({
+      id: 't2',
+      kind: 'audio',
+      role: 'voiceover',
+      clips: [{ id: 'a', assetId: 'x', start: 0, duration: 2, in: 0, volume: 1 }],
+    });
+    return d;
+  };
+  const aclip = (d: any) => d.tracks[1].clips[0];
+  const seg = (id: string, start: number, end: number) => ({ id, start, end });
+
+  it('accepts doc with segments, speed, hold, envelope', () => {
+    const d = withAudio();
+    d.segments = [seg('s1', 0, 1), seg('s2', 1, 2)];
+    d.tracks[0].clips[0].speed = 0.8;
+    d.tracks[0].clips[0].hold = 0.5;
+    Object.assign(aclip(d), {
+      speed: 1.25,
+      hold: 0,
+      envelope: [
+        { t: 0, gain: 1 },
+        { t: 0.2, gain: 0.08 },
+      ],
+    });
+    expect(normalizeDoc(d).segments).toHaveLength(2);
+  });
+
+  it('old doc without new fields still normalizes', () => {
+    const doc = normalizeDoc(validDoc());
+    expect(doc.segments).toBeUndefined();
+  });
+
+  const bad: [string, (d: any) => void][] = [
+    ['overlapping segments', (d) => (d.segments = [seg('s1', 0, 1), seg('s2', 0.5, 2)])],
+    ['unordered segments', (d) => (d.segments = [seg('s1', 1, 2), seg('s2', 0, 0.5)])],
+    ['segment shorter than one frame', (d) => (d.segments = [seg('s1', 0, 0.02)])],
+    ['speed 1.5', (d) => (d.tracks[0].clips[0].speed = 1.5)],
+    ['speed 0.5', (d) => (d.tracks[0].clips[0].speed = 0.5)],
+    ['negative hold', (d) => (d.tracks[0].clips[0].hold = -1)],
+    ['audio speed 2', (d) => (aclip(d).speed = 2)],
+    [
+      'envelope with decreasing t',
+      (d) =>
+        (aclip(d).envelope = [
+          { t: 1, gain: 1 },
+          { t: 0.5, gain: 1 },
+        ]),
+    ],
+    [
+      'envelope with equal t',
+      (d) =>
+        (aclip(d).envelope = [
+          { t: 1, gain: 1 },
+          { t: 1, gain: 0 },
+        ]),
+    ],
+    ['envelope gain 3', (d) => (aclip(d).envelope = [{ t: 0, gain: 3 }])],
+    ['envelope negative t', (d) => (aclip(d).envelope = [{ t: -1, gain: 1 }])],
+  ];
+  it.each(bad)('rejects %s', (_n, mutate) => {
+    const d = withAudio();
+    mutate(d);
+    expect(() => normalizeDoc(d)).toThrow(expect.objectContaining({ code: 'VALIDATION' }));
+  });
+});
+
+describe('jobSubject lineId', () => {
+  it('extracts lineId', () => {
+    expect(jobSubject({ lineId: 'l1' })).toEqual({ lineId: 'l1' });
+  });
+});

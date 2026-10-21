@@ -4,3 +4,4 @@ export { createEnvCredentialStore, type CredentialStore } from './credentials';
 export { createAiRegistry, type AiRegistry, type CatalogItem } from './registry';
 export { estimateCost } from './cost';
 export { taggerPrompt, taggerSchema, TAGGER_PROMPT_VERSION, type TaggerResult } from './prompts/tagger';
+export { buildTranslatePrompt, translateSchema } from './prompts/translate';

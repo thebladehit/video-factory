@@ -36,6 +36,13 @@
       "when": 1792506815796,
       "tag": "0004_editor",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792575201683,
+      "tag": "0005_voice",
+      "breakpoints": true
     }
   ]
 }

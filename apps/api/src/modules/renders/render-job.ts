@@ -38,10 +38,13 @@ async function setStatus(deps: AppDeps, id: string, status: JobStatus, fields: {
 }
 
 /**
- * render: знімок таймлайну → ffmpeg → MP4 у сховище → asset (id = id рендеру) → asset.process.
+ * render: знімок таймлайну (+ ASS мови) → ffmpeg → MP4 у сховище → asset (id = id рендеру) → asset.process.
  * Ідемпотентна: якщо asset рендеру вже є, лише доводить стан до кінця.
  */
-export function renderJob(deps: AppDeps): JobDef<{ renderId: string }, { assetId: string }> {
+export function renderJob(
+  deps: AppDeps,
+  opts: { fontsDir?: string } = {},
+): JobDef<{ renderId: string }, { assetId: string }> {
   return {
     type: 'render',
     concurrency: 1,
@@ -104,6 +107,8 @@ export function renderJob(deps: AppDeps): JobDef<{ renderId: string }, { assetId
             preset: r.preset,
             sources,
             language: r.language,
+            // кожен рендер — у своїй теці: subs.ass пишеться поруч із graph.txt
+            ...(r.subtitles ? { subtitles: r.subtitles, fontsDir: opts.fontsDir } : {}),
             filterScriptPath: join(dir, 'graph.txt'),
             outPath: join(dir, 'out.mp4'),
           },
@@ -142,7 +147,8 @@ export function renderJob(deps: AppDeps): JobDef<{ renderId: string }, { assetId
             storageKey: key,
             mime: 'video/mp4',
             sizeBytes: (await stat(out)).size,
-            title: `${project.title} — ${TITLE_DATE.format(new Date())}`,
+            language: r.language,
+            title: `${project.title}${r.language ? ` (${r.language})` : ''} — ${TITLE_DATE.format(new Date())}`,
           })
           .onConflictDoNothing();
         uploaded = false; // об'єкт тепер належить asset
