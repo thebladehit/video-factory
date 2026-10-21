@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Гілка відгалужена від `feat/subproject-3-voice`; нічого не пушити й не відкривати PR без слова власника. Не чіпати порт 3001 на хості; ніколи не виконувати `docker compose down` (і `--profile … down`). AI-ключі — лише з `.env`, не друкувати; `AI_FAKE=1` — fake-провайдер.
+- Гілка `feat/subproject-4-pipeline` (від `main`); нічого не пушити й не відкривати PR без слова власника. Не чіпати порт 3001 на хості; ніколи не виконувати `docker compose down` (і `--profile … down`). AI-ключі — лише з `.env`, не друкувати; `AI_FAKE=1` — fake-провайдер.
 - Мова UI й повідомлень помилок — українська; ідентифікатори — англійська.
 - `TimelineDoc` лишається `schemaVersion: 1`, без нових полів; документ із БД завжди проходить `normalizeDoc`.
 - Сцена = сегмент: `pipeline_scenes.segment_id` = `TimelineDoc.segments[].id`; текст сцени — рядок `voice_lines` базової мови з `text_origin='script'`. Таблиць `scenes`/`scene_texts` не створювати.

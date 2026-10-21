@@ -3,8 +3,8 @@
 - **Дата:** 2026-10-22
 - **Статус:** погоджено в обговоренні, очікує перегляду
 - **Базова специфікація:** `docs/specs/2026-10-20-video-factory-design.md` (§1 критерій 1, §4.1 задачі, §6.1 конвеєр, §7 AI, §10 помилки, §12 підпроєкт 4)
-- **Попередні підпроєкти:** `docs/specs/2026-10-20-subproject-1-library.md`, `docs/specs/2026-10-20-subproject-2-editor.md` (у `main`), `docs/specs/2026-10-20-subproject-3-voice.md` (гілка `feat/subproject-3-voice`, ще не злита)
-- **Гілка:** відгалужена від `feat/subproject-3-voice`, бо підпроєкт спирається на його API (`voice.*`, `localize`, сегменти). Після злиття підпроєкту 3 власник за потреби перебазує її на `main`
+- **Попередні підпроєкти:** `docs/specs/2026-10-20-subproject-1-library.md`, `docs/specs/2026-10-20-subproject-2-editor.md` (у `main`), `docs/specs/2026-10-20-subproject-3-voice.md` (усі в `main`)
+- **Гілка:** `feat/subproject-4-pipeline` від `main`
 
 ## 1. Мета
 
