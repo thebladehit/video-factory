@@ -5,11 +5,12 @@ import type { JobDef } from '@vf/jobs';
 import { normalizeDoc } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { finishGeneration, isCancelled, startGeneration, textModel } from './job-utils';
-import { clearFailure } from './service';
+import { MAX_LINE_CHARS, clearFailure } from './service';
 import { textHash } from './stale';
 
 /** Сегментів в одному запиті; довші проєкти — порціями з попереднім контекстом */
 export const TRANSLATE_CHUNK = 60;
+export const TOO_LONG = `Переклад довший за ${MAX_LINE_CHARS} символів`;
 /** Скільки вже перекладених фраз передати як контекст наступній порції */
 const CONTEXT_LINES = 10;
 
@@ -39,8 +40,30 @@ export function translateJob(
             .where(and(eq(voiceLines.projectId, p.id), eq(voiceLines.language, p.baseLanguage)))
         ).map((l) => [l.segmentId, l.text]),
       );
+      // «Перекласти все» (без segmentIds) не перезаписує ручні тексти мови; окремий сегмент — перекладається явно
+      const manual = wanted
+        ? new Set<string>()
+        : new Set(
+            (
+              await deps.db
+                .select({ segmentId: voiceLines.segmentId, text: voiceLines.text })
+                .from(voiceLines)
+                .where(
+                  and(
+                    eq(voiceLines.projectId, p.id),
+                    eq(voiceLines.language, language),
+                    eq(voiceLines.textOrigin, 'manual'),
+                  ),
+                )
+            )
+              .filter((l) => l.text.trim())
+              .map((l) => l.segmentId),
+          );
       // знімок базових текстів на старті: source_hash — хеш саме перекладеного тексту
-      const items = segments.map((s) => ({ id: s.id, text: base.get(s.id) ?? '' })).filter((i) => i.text.trim());
+      const items = segments
+        .filter((s) => !manual.has(s.id))
+        .map((s) => ({ id: s.id, text: base.get(s.id) ?? '' }))
+        .filter((i) => i.text.trim());
       if (!items.length) return { translated: 0 };
 
       const entry = await textModel(deps, p.userId);
@@ -80,6 +103,18 @@ export function translateJob(
           for (const item of chunk) {
             const text = byId.get(item.id);
             if (!text) continue;
+            if (text.length > MAX_LINE_CHARS) {
+              // рядок не озвучити (ліміт TTS) — помилка лише цього рядка, наявний текст лишається
+              const failed = { status: 'failed' as const, error: TOO_LONG, updatedAt: new Date() };
+              await deps.db
+                .insert(voiceLines)
+                .values({ userId: p.userId, projectId: p.id, segmentId: item.id, language, text: '', ...failed })
+                .onConflictDoUpdate({
+                  target: [voiceLines.projectId, voiceLines.segmentId, voiceLines.language],
+                  set: failed,
+                });
+              continue;
+            }
             const patch = {
               text,
               textOrigin: 'translated' as const,

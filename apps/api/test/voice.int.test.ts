@@ -968,6 +968,7 @@ describe('voice.translate', () => {
       segmentId: 's1',
       language: 'en',
       text: 'old',
+      textOrigin: 'translated',
       status: 'failed',
       error: 'x',
     });
@@ -1019,6 +1020,73 @@ describe('voice.translate', () => {
     expect(calls[1]).toContain('[de] фраза g59');
     expect((await lineOf(s, projectId, 'g60', 'de')).text).toBe('[de] фраза g60');
   }, 60_000);
+
+  it('a line stale by translation: flagged, not in the estimate; per-row translate refreshes it', async () => {
+    const s = await startApp({}, { ai: hookedAi({}) });
+    const projectId = await textProject(s, { s1: 'Привіт' });
+    await s.caller.voice.setVoice({ projectId, language: 'en', voice: VOICE });
+    await readyLine(s, projectId, {
+      segmentId: 's1',
+      language: 'en',
+      text: 'Hello',
+      textOrigin: 'translated',
+      sourceHash: textHash('Привіт'),
+    });
+    await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'uk', text: 'Вітаю' });
+    let v = await s.caller.voice.get({ projectId });
+    expect(v.lines.s1!.en).toMatchObject({ state: 'stale', translationStale: true });
+    // «Озвучити все» його не бере — і в оцінці його немає
+    expect(v.estimate.en).toEqual({ chars: 0, usd: 0 });
+
+    const { jobId } = await s.caller.voice.translate({ projectId, language: 'en', segmentIds: ['s1'] });
+    expect((await waitJobs(s, [jobId]))[0]!.status).toBe('done');
+    v = await s.caller.voice.get({ projectId });
+    expect(v.lines.s1!.en).toMatchObject({ text: '[en] Вітаю', origin: 'translated', state: 'stale' });
+    expect(v.lines.s1!.en!.translationStale).toBeUndefined();
+    // тепер застарілий лише голос — «Озвучити все» його бере
+    expect(v.estimate.en!.chars).toBe('[en] Вітаю'.length);
+  }, 30_000);
+
+  it('«Перекласти все» keeps manual texts (except empty ones); a per-row translate overwrites a manual one', async () => {
+    const s = await startApp({}, { ai: hookedAi({}) });
+    const projectId = await textProject(s, { s1: 'Привіт', s2: 'Світе' });
+    await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'en', text: 'My own hello' });
+    await s.caller.voice.setText({ projectId, segmentId: 's2', language: 'en', text: '' });
+    const all = await s.caller.voice.translate({ projectId, language: 'en' });
+    expect((await waitJobs(s, [all.jobId]))[0]!.status).toBe('done');
+    let v = (await s.caller.voice.get({ projectId })).lines;
+    expect(v.s1!.en).toMatchObject({ text: 'My own hello', origin: 'manual' });
+    expect(v.s2!.en).toMatchObject({ text: '[en] Світе', origin: 'translated' });
+
+    const one = await s.caller.voice.translate({ projectId, language: 'en', segmentIds: ['s1'] });
+    expect((await waitJobs(s, [one.jobId]))[0]!.status).toBe('done');
+    v = (await s.caller.voice.get({ projectId })).lines;
+    expect(v.s1!.en).toMatchObject({ text: '[en] Привіт', origin: 'translated' });
+  }, 30_000);
+
+  it('a translation longer than 1500 chars fails only that line, the text is kept', async () => {
+    const s = await startApp(
+      {},
+      {
+        ai: hookedAi({
+          text: (t) => ({
+            ...t,
+            generateObject: async (schema, req) => {
+              const r = (await t.generateObject(schema, req)) as { items: { id: string; text: string }[] };
+              return { items: r.items.map((x) => (x.id === 's1' ? { ...x, text: 'x'.repeat(1501) } : x)) } as never;
+            },
+          }),
+        }),
+      },
+    );
+    const projectId = await textProject(s, { s1: 'Привіт', s2: 'Світе' });
+    await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'en', text: 'Hello' });
+    const { jobId } = await s.caller.voice.translate({ projectId, language: 'en', segmentIds: ['s1', 's2'] });
+    expect((await waitJobs(s, [jobId]))[0]!.status).toBe('done');
+    const v = (await s.caller.voice.get({ projectId })).lines;
+    expect(v.s1!.en).toMatchObject({ text: 'Hello', state: 'failed', error: 'Переклад довший за 1500 символів' });
+    expect(v.s2!.en).toMatchObject({ text: '[en] Світе', state: 'empty' });
+  }, 30_000);
 
   it('base language or no base text → VALIDATION', async () => {
     const s = await startApp();

@@ -30,7 +30,7 @@ import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { firstVisualAsset, ownProject, timelineAssetIds, type ProjectRow } from '../projects/service';
 import { pickModel, textModel, userDefaults } from './job-utils';
-import { lineState, type LineState } from './stale';
+import { lineState, translationStale, type LineFacts, type LineState } from './stale';
 
 /** Максимум символів у тексті рядка */
 export const MAX_LINE_CHARS = 1500;
@@ -52,6 +52,8 @@ export interface VoiceLineView {
   timing?: 'aligned' | 'estimated' | 'stt';
   /** Файл озвучки видалено з бібліотеки */
   audioDeleted?: true;
+  /** Базовий текст змінено після перекладу — потрібен новий переклад (озвучка цього не виправить) */
+  translationStale?: true;
 }
 
 export interface CaptionStyleView {
@@ -193,10 +195,12 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
       view.timing = t.timing;
     }
     if (r.status === 'ready' && !r.audioAssetId) view.audioDeleted = true;
+    if (r.language !== p.baseLanguage && translationStale(r, baseText.get(r.segmentId))) view.translationStale = true;
     (lines[r.segmentId] ??= {})[r.language] = view;
     if (state === 'ready' && view.durationMs !== undefined)
       readyMs.set(`${r.segmentId}\n${r.language}`, view.durationMs);
-    if (r.text.trim() && state !== 'ready') chars[r.language]! += r.text.length;
+    // ті самі рядки, що поставить «Озвучити все»
+    if (voicedByAll(r, voiceFor(r.language))) chars[r.language]! += r.text.length;
   }
 
   const fits: VoiceView['fits'] = {};
@@ -520,6 +524,17 @@ export async function previewVoice(
 }
 
 /**
+ * Рядок, який бере «Озвучити все» (і рахує його оцінка): є текст і стан «не озвучено», «помилка» або «застарілий».
+ * Стан — без базового тексту: «застарілий переклад» (лише source_hash) озвучка не виправляє —
+ * потрібен новий переклад, а задача була б порожньою (voiced_hash збігається).
+ */
+export function voicedByAll(line: LineFacts, voice: VoiceChoice | null): boolean {
+  if (!line.text.trim()) return false;
+  const state = lineState(line, undefined, voice);
+  return state === 'empty' || state === 'failed' || state === 'stale';
+}
+
+/**
  * «Озвучити»: задача на кожен рядок. Без `segmentIds` — рядки з текстом у станах «не озвучено», «помилка»,
  * «застарілий»; із `segmentIds` — усі рядки з текстом цих сегментів, крім тих, що вже в черзі чи в роботі.
  */
@@ -545,11 +560,9 @@ export async function enqueueSynthesize(
 
   const todo = rows.filter((r) => {
     if (!languages.includes(r.language) || !r.text.trim()) return false;
-    // без базового тексту: «застарілий переклад» (лише source_hash) озвучка не виправляє —
-    // потрібен новий переклад, а задача була б порожньою (voiced_hash збігається)
+    if (!wanted) return voicedByAll(r, voices.get(r.language) ?? null);
     const state = lineState(r, undefined, voices.get(r.language));
-    if (state === 'queued' || state === 'running') return false;
-    return wanted ? true : state === 'empty' || state === 'failed' || state === 'stale';
+    return state !== 'queued' && state !== 'running';
   });
 
   const catalog = await deps.ai.catalog(userId);

@@ -21,6 +21,10 @@ export interface LineFacts {
   audioAssetId: string | null;
 }
 
+/** Переклад застарів: базовий текст змінено після перекладу (`source_hash` ≠ хешу поточного базового тексту). */
+export const translationStale = (line: Pick<LineFacts, 'sourceHash'>, baseText: string | undefined): boolean =>
+  !!line.sourceHash && baseText !== undefined && line.sourceHash !== textHash(baseText);
+
 /**
  * Обчислюваний стан рядка. `ready` стає `stale`, якщо текст чи голос змінено після озвучки
  * (`currentVoice` — голос мови зараз; без нього береться голос, яким озвучено) або базовий текст змінено після перекладу.
@@ -31,6 +35,6 @@ export function lineState(line: LineFacts, baseText: string | undefined, current
   if (!line.audioAssetId) return 'empty';
   const voice = currentVoice ?? line.voice;
   if (voice && line.voicedHash !== voicedHash(line.text, voice)) return 'stale';
-  if (line.sourceHash && baseText !== undefined && line.sourceHash !== textHash(baseText)) return 'stale';
+  if (translationStale(line, baseText)) return 'stale';
   return 'ready';
 }
