@@ -197,4 +197,35 @@ describe('projects', () => {
     });
     expect(Date.parse((mine[a] as { urlExpiresAt: string }).urlExpiresAt)).toBeGreaterThan(Date.now() + 50 * 60_000);
   });
+
+  it('language versions: get/save with language work on the separated copy with its own version', async () => {
+    const s = await startApp();
+    const a = await readyAsset(s);
+    const { id } = await s.caller.projects.create({ title: 'P', format: '9:16' });
+    const doc = withClip((await s.caller.projects.get({ id })).timeline, a);
+    await s.caller.projects.save({ id, timeline: doc, baseVersion: 1 });
+    await expect(s.caller.projects.get({ id, language: 'uk' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(s.caller.projects.save({ id, language: 'uk', timeline: doc, baseVersion: 1 })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+
+    await s.caller.voice.separate({ projectId: id, language: 'uk' });
+    const sep = await s.caller.projects.get({ id, language: 'uk' });
+    expect(sep).toMatchObject({ id, version: 1, timeline: doc });
+    expect(sep.assets[a]).toMatchObject({ missing: false });
+    const shorter = withClip(doc, a, 'image', 10);
+    expect(await s.caller.projects.save({ id, language: 'uk', timeline: shorter, baseVersion: 1 })).toEqual({
+      version: 2,
+    });
+    await expect(s.caller.projects.save({ id, language: 'uk', timeline: doc, baseVersion: 1 })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect((await s.caller.projects.get({ id, language: 'uk' })).timeline).toEqual(shorter);
+    expect(await s.caller.projects.get({ id })).toMatchObject({ version: 2, timeline: doc });
+    const stranger = appRouter.createCaller({ userId: randomUUID(), deps: s.deps });
+    await expect(stranger.projects.get({ id, language: 'uk' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(stranger.projects.save({ id, language: 'uk', timeline: doc, baseVersion: 2 })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
 });

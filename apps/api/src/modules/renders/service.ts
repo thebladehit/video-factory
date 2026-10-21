@@ -1,15 +1,25 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { assets, jobs, renders } from '@vf/db';
 import type { Preset } from '@vf/render';
-import { AppError, normalizeDoc, TERMINAL_STATUSES, type AssetStatus, type JobStatus } from '@vf/shared';
+import {
+  AppError,
+  normalizeDoc,
+  TERMINAL_STATUSES,
+  type AssetStatus,
+  type JobStatus,
+  type TimelineDoc,
+} from '@vf/shared';
 import { docDuration } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { ownProject } from '../projects/service';
+import { buildLocalized } from '../voice/localized';
 
 export interface RenderView {
   id: string;
   preset: Preset;
+  /** Мова рендеру (`null` — базовий документ) */
+  language: string | null;
   status: JobStatus;
   progress: number;
   message: string | null;
@@ -31,16 +41,8 @@ async function ownRender(deps: AppDeps, userId: string, id: string): Promise<Ren
   return row;
 }
 
-/** Перевірки перед рендером: версія, непорожній таймлайн, усі файли існують і готові. */
-export async function startRender(
-  deps: AppDeps,
-  userId: string,
-  input: { projectId: string; preset: Preset; version: number },
-): Promise<{ renderId: string; jobId: string }> {
-  const project = await ownProject(deps, userId, input.projectId);
-  if (project.timelineVersion !== input.version)
-    throw new AppError('CONFLICT', 'Проєкт змінено в іншій вкладці — оновіть сторінку');
-  const doc = normalizeDoc(project.timeline);
+/** Непорожній документ, усі файли існують і готові. */
+async function assertRenderable(deps: AppDeps, userId: string, doc: TimelineDoc): Promise<void> {
   const clips: { id: string; assetId: string }[] = [];
   for (const t of doc.tracks) if (t.kind !== 'captions') for (const c of t.clips) clips.push(c);
   if (!clips.length || docDuration(doc) <= 0) throw new AppError('VALIDATION', 'Таймлайн порожній — додайте файли');
@@ -57,20 +59,110 @@ export async function startRender(
     throw new AppError('VALIDATION', 'Деякі файли видалено або вони ще обробляються — замініть або приберіть їх', {
       clipIds: bad,
     });
+}
 
+interface RenderPlan {
+  projectId: string;
+  preset: Preset;
+  doc: TimelineDoc;
+  version: number;
+  language: string | null;
+  subtitles: string | null;
+}
+
+async function enqueueRender(
+  deps: AppDeps,
+  userId: string,
+  plan: RenderPlan,
+): Promise<{ renderId: string; jobId: string }> {
   const [r] = await deps.db
     .insert(renders)
     .values({
       userId,
-      projectId: project.id,
-      preset: input.preset,
-      timelineSnapshot: doc,
-      timelineVersion: input.version,
+      projectId: plan.projectId,
+      preset: plan.preset,
+      language: plan.language,
+      timelineSnapshot: plan.doc,
+      timelineVersion: plan.version,
+      subtitles: plan.subtitles,
     })
     .returning({ id: renders.id });
   const jobId = await deps.jobs.queue.enqueue('render', { renderId: r!.id }, { userId });
   await deps.db.update(renders).set({ jobId }).where(eq(renders.id, r!.id));
   return { renderId: r!.id, jobId };
+}
+
+const notReadyError = (segmentIds: string[], languages: string[]) =>
+  new AppError('VALIDATION', 'Є неозвучені або застарілі сегменти', { segmentIds, languages });
+
+/** Документ мови для рендеру: відокремлений або `localize`, разом з ASS (знімок на старті). */
+async function languagePlan(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; preset: Preset; language: string },
+): Promise<RenderPlan & { notReady: string[] }> {
+  const l = await buildLocalized(deps, userId, input.projectId, input.language);
+  await assertRenderable(deps, userId, l.timeline);
+  return {
+    projectId: l.project.id,
+    preset: input.preset,
+    doc: l.timeline,
+    version: l.version,
+    language: input.language,
+    subtitles: l.subtitles,
+    notReady: l.notReady,
+  };
+}
+
+/**
+ * Перевірки перед рендером: версія, непорожній таймлайн, усі файли існують і готові.
+ * З `language` — документ мови (версія — базового проєкту або відокремленої мови); неготові рядки → VALIDATION
+ * з `segmentIds`, якщо не `force`.
+ */
+export async function startRender(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; preset: Preset; version: number; language?: string; force?: boolean },
+): Promise<{ renderId: string; jobId: string }> {
+  const stale = () => new AppError('CONFLICT', 'Проєкт змінено в іншій вкладці — оновіть сторінку');
+  if (input.language !== undefined) {
+    const plan = await languagePlan(deps, userId, { ...input, language: input.language });
+    if (plan.version !== input.version) throw stale();
+    if (plan.notReady.length && !input.force) throw notReadyError(plan.notReady, [input.language]);
+    return enqueueRender(deps, userId, plan);
+  }
+  const project = await ownProject(deps, userId, input.projectId);
+  if (project.timelineVersion !== input.version) throw stale();
+  const doc = normalizeDoc(project.timeline);
+  await assertRenderable(deps, userId, doc);
+  return enqueueRender(deps, userId, {
+    projectId: project.id,
+    preset: input.preset,
+    doc,
+    version: input.version,
+    language: null,
+    subtitles: null,
+  });
+}
+
+/** По рендеру на мову. Спершу перевіряються всі мови — за помилки не стартує жоден. */
+export async function startAllRenders(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; preset: Preset; languages: string[]; force?: boolean },
+): Promise<{ renderIds: string[] }> {
+  const plans = [];
+  for (const language of new Set(input.languages))
+    plans.push(await languagePlan(deps, userId, { projectId: input.projectId, preset: input.preset, language }));
+  const pending = plans.filter((p) => p.notReady.length);
+  if (pending.length && !input.force)
+    throw notReadyError(
+      [...new Set(pending.flatMap((p) => p.notReady))],
+      pending.map((p) => p.language!),
+    );
+  const renderIds: string[] = [];
+  for (const plan of plans) renderIds.push((await enqueueRender(deps, userId, plan)).renderId);
+  return { renderIds };
 }
 
 /** Історія рендерів проєкту. Незавершений рендер бере стан своєї задачі (скасування, рестарт). */
@@ -96,6 +188,7 @@ export async function listRenders(deps: AppDeps, userId: string, projectId: stri
       return {
         id: r.id,
         preset: r.preset,
+        language: r.language,
         status,
         progress: status === 'done' ? 100 : (job?.progress ?? 0),
         message: job?.message ?? null,

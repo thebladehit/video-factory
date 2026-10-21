@@ -109,7 +109,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(assetAnalyzeJob(deps));
   deps.jobs.runtime.register(assetsTagJob(deps));
   deps.jobs.runtime.register(imageGenerateJob(deps));
-  deps.jobs.runtime.register(renderJob(deps));
+  deps.jobs.runtime.register(renderJob(deps, { fontsDir: cfg.captionsFontsDir }));
   deps.jobs.runtime.register(videoGenerateJob(deps, { pollMs: cfg.videoPollMs, timeoutMs: cfg.videoTimeoutMs }));
   deps.jobs.runtime.register(synthesizeJob(deps));
   deps.jobs.runtime.register(translateJob(deps));

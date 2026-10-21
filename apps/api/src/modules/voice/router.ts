@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ModelRef, OriginalSound, VoiceChoice } from '@vf/shared';
 import { procedure, router } from '../../trpc';
+import { getLocalized, languageSubtitles, separateLanguage, unseparateLanguage } from './localized';
 import {
   createFromAsset,
   enqueueSynthesize,
@@ -65,4 +66,16 @@ export const voiceRouter = router({
   preview: procedure
     .input(z.object({ model: z.string(), voiceId: z.string(), language }))
     .mutation(({ ctx, input }) => previewVoice(ctx.deps, ctx.userId, { ...input, model: input.model as ModelRef })),
+  localized: procedure
+    .input(z.object({ projectId, language }))
+    .query(({ ctx, input }) => getLocalized(ctx.deps, ctx.userId, input)),
+  separate: procedure
+    .input(z.object({ projectId, language }))
+    .mutation(({ ctx, input }) => separateLanguage(ctx.deps, ctx.userId, input)),
+  unseparate: procedure
+    .input(z.object({ projectId, language }))
+    .mutation(({ ctx, input }) => unseparateLanguage(ctx.deps, ctx.userId, input)),
+  subtitles: procedure
+    .input(z.object({ projectId, language, format: z.enum(['srt', 'vtt']) }))
+    .query(({ ctx, input }) => languageSubtitles(ctx.deps, ctx.userId, input)),
 });
