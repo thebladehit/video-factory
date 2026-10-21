@@ -19,6 +19,7 @@ const scene = (id: string, over: Partial<SceneSnap> = {}): SceneSnap => ({
   id,
   status: 'empty',
   hasVisual: false,
+  job: null,
   generation: null,
   ...over,
 });
@@ -124,11 +125,39 @@ describe('advance: produce — scenes', () => {
     ]);
   });
 
-  it('queued/running scene without generation result → []', () => {
-    expect(advance(produce([scene('s1', { status: 'queued' }), scene('s2', { status: 'running' })]))).toEqual([]);
+  it('queued/running scene with live job and no generation result → []', () => {
     expect(
-      advance(produce([scene('s1', { status: 'running', generation: { status: 'running', assetId: null, assetStatus: null } })])),
+      advance(produce([scene('s1', { status: 'queued', job: 'queued' }), scene('s2', { status: 'running', job: 'running' })])),
     ).toEqual([]);
+    expect(
+      advance(
+        produce([
+          scene('s1', { status: 'running', job: 'running', generation: { status: 'running', assetId: null, assetStatus: null } }),
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it('queued/running scene without generation and with dead or missing job → sceneFailed', () => {
+    for (const job of [null, 'failed', 'cancelled'] as const) {
+      for (const status of ['queued', 'running'] as const) {
+        expect(advance(produce([scene('s1', { status, job })]))).toEqual([
+          { type: 'sceneFailed', sceneId: 's1', error: 'Задачу візуалу перервано' },
+        ]);
+      }
+    }
+  });
+
+  it('generation done without asset → sceneFailed', () => {
+    expect(
+      advance(produce([scene('s1', { status: 'running', generation: { status: 'done', assetId: null, assetStatus: null } })])),
+    ).toEqual([{ type: 'sceneFailed', sceneId: 's1', error: 'Не вдалося згенерувати візуал' }]);
+  });
+
+  it('generation done with deleted asset (assetStatus null) → sceneFailed, not linkGenerated', () => {
+    expect(
+      advance(produce([scene('s1', { status: 'running', generation: { status: 'done', assetId: 'a1', assetStatus: null } })])),
+    ).toEqual([{ type: 'sceneFailed', sceneId: 's1', error: 'Не вдалося згенерувати візуал' }]);
   });
 
   it('generation done with asset not linked → linkGenerated (scene queued or running)', () => {
@@ -262,7 +291,7 @@ describe('advance: produce → assemble', () => {
   });
 
   it('non-terminal scene blocks assemble', () => {
-    const s = produceDone({ scenes: [scene('s1', { status: 'running' }), scene('s2', { status: 'ready', hasVisual: true })] });
+    const s = produceDone({ scenes: [scene('s1', { status: 'running', job: 'running' }), scene('s2', { status: 'ready', hasVisual: true })] });
     expect(advance(s)).toEqual([]);
   });
 
@@ -297,8 +326,12 @@ describe('advance: assemble', () => {
     expect(advance(asm({ assembleJob: 'failed' }))).toEqual([{ type: 'markFailed', error: 'Не вдалося зібрати відео' }]);
   });
 
-  it('assemble in flight / missing / cancelled → []', () => {
-    for (const assembleJob of [null, 'queued', 'running', 'cancelled'] as const) {
+  it('assemble stage without job → enqueueAssemble (heals non-atomic transition)', () => {
+    expect(advance(asm({ assembleJob: null }))).toEqual([{ type: 'enqueueAssemble' }]);
+  });
+
+  it('assemble in flight / cancelled → []', () => {
+    for (const assembleJob of ['queued', 'running', 'cancelled'] as const) {
       expect(advance(asm({ assembleJob }))).toEqual([]);
     }
   });

@@ -7,6 +7,8 @@ export interface SceneSnap {
   id: string;
   status: SceneStatus;
   hasVisual: boolean;
+  /** Статус власної задачі сцени (pipeline_scenes.job_id: pipeline.visual / pipeline.scene) */
+  job: JobStatus | null;
   generation: { status: JobStatus; assetId: string | null; assetStatus: AssetStatus | null } | null;
 }
 
@@ -46,8 +48,13 @@ export type Action =
 export const SCRIPT_FAILED = 'Не вдалося створити сценарій';
 export const VISUAL_FAILED = 'Не вдалося згенерувати візуал';
 export const ASSEMBLE_FAILED = 'Не вдалося зібрати відео';
+export const VISUAL_JOB_INTERRUPTED = 'Задачу візуалу перервано';
 
-/** Чиста машина станів запуску: знімок → дії. Порядок дій стабільний: етап, сцени, мови (за порядком масивів) */
+/**
+ * Чиста машина станів запуску: знімок → дії. Порядок дій стабільний: етап, сцени, мови (за порядком масивів).
+ * Контракт із runAdvance: якщо прохід виконав дії, що лише змінюють стан (toProduce, linkGenerated, sceneReady, sceneFailed…),
+ * runAdvance перечитує знімок і викликає advance знову, доки прохід не дасть таких дій — один прохід не мусить бачити все.
+ */
 export function advance(s: RunSnap): Action[] {
   if (s.status !== 'running') return [];
   switch (s.stage) {
@@ -56,6 +63,8 @@ export function advance(s: RunSnap): Action[] {
     case 'produce':
       return produce(s);
     case 'assemble':
+      // null — перехід produce→assemble не дійшов до постановки задачі; runner захищається assemble_job_id is null
+      if (s.assembleJob === null) return [{ type: 'enqueueAssemble' }];
       if (s.assembleJob === 'done') return [{ type: 'markDone' }];
       if (s.assembleJob === 'failed') return [{ type: 'markFailed', error: ASSEMBLE_FAILED }];
       return [];
@@ -84,8 +93,20 @@ function produce(s: RunSnap): Action[] {
     }
     // queued | running: після скасування/відновлення генерація могла вже завершитись
     const g = sc.generation;
-    if (!g) continue;
-    if (g.status === 'failed' || g.status === 'cancelled' || g.assetStatus === 'failed') {
+    if (!g) {
+      // без генерації сцену веде лише її задача: немає задачі або вона обірвалась → сцена failed
+      if (sc.job === null || sc.job === 'failed' || sc.job === 'cancelled') {
+        actions.push({ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_JOB_INTERRUPTED });
+      }
+      continue;
+    }
+    if (
+      g.status === 'failed' ||
+      g.status === 'cancelled' ||
+      g.assetStatus === 'failed' ||
+      // генерація без файлу або файл видалено — прив'язувати нічого
+      (g.status === 'done' && (g.assetId === null || g.assetStatus === null))
+    ) {
       actions.push({ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_FAILED });
       continue;
     }
