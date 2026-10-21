@@ -690,7 +690,6 @@ describe('language render (localize → compileFfmpeg)', () => {
     const under = await lowRms(out, 0.3, 0.7);
     const outside = await lowRms(out, 1.6, 0.8);
     const ratio = 10 ** ((under - outside) / 20);
-    console.log(`[lang] duck ratio ${ratio.toFixed(3)} (want ${(0.08 / 0.25).toFixed(3)})`);
     expect(Math.abs(ratio - 0.08 / 0.25)).toBeLessThanOrEqual(0.2 * (0.08 / 0.25));
   }, 120_000);
 

@@ -118,6 +118,23 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
   for (let i = 1; i <= 3; i++)
     await expect(page.getByLabel(`Текст EN, сегмент ${i}`)).toHaveValue(/^\[en\] \S/, { timeout: 30_000 });
 
+  // базовий текст змінено після перекладу → рядок EN «переклад застарів», дія рядка — «Оновити переклад» цього сегмента
+  const changedUk = 'Це перша тестова фраза, змінена';
+  await page.getByLabel('Текст UK, сегмент 1').fill(changedUk);
+  await page.getByLabel('Текст UK, сегмент 1').blur();
+  await expect(rows(page).first().getByTestId('translation-stale')).toBeVisible({ timeout: 15_000 });
+  await expect(rows(page).nth(1).getByTestId('translation-stale')).toHaveCount(0);
+  await rows(page).first().getByRole('button', { name: 'Оновити переклад' }).click();
+  await expect(page.getByLabel('Текст EN, сегмент 1')).toHaveValue(`[en] ${changedUk}`, { timeout: 30_000 });
+  await expect(rows(page).first().getByTestId('translation-stale')).toHaveCount(0);
+
+  // без голосу мови (ні в проєкті, ні за замовчуванням) «Озвучити все» вимкнена з видимою підказкою
+  const defaults = await trpc<{ voices: Record<string, unknown> }>(page, 'settings.get', {});
+  if (!defaults.voices.en) {
+    await expect(page.getByTestId('voice-all')).toBeDisabled();
+    await expect(page.getByTestId('key-hints')).toContainText('Виберіть голос для мови «Англійська»');
+  }
+
   // озвучити все: EN, потім UK
   await pickVoice(page);
   await page.getByTestId('voice-all').click();
@@ -186,8 +203,15 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
     };
     tick();
   });
+  // документ EN закінчується після останнього слова (хвіст озвучки TAIL = 0,35 с)
+  const lastEnd = Math.max(...dialogues.map((d) => d.end));
+  const enEnd = docEnd(en);
+  expect(enEnd).toBeGreaterThan(lastEnd + 0.2);
   await page.getByRole('button', { name: 'Відтворити' }).click();
+  // до кінця відтворення: прев'ю саме зупиняється в кінці документа (таймкод оновлюється рідко — чекаємо на кнопку)
   await expect.poll(playhead, { timeout: 30_000, intervals: [100] }).toBeGreaterThan(laterWord + 0.7);
+  await expect(page.getByRole('button', { name: 'Відтворити' })).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(300);
   const samples = await page.evaluate(() => {
     const w = window as unknown as { __samples: { ms: number; px: number }[]; __stop: boolean };
     w.__stop = true;
@@ -210,7 +234,15 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
   expect(offEnd).toBeGreaterThanOrEqual(laterWord - 0.1);
   expect(offEnd).toBeLessThan(laterWord + 0.7);
   expect(offEnd - offStart).toBeGreaterThan(0.2);
-  await page.getByRole('button', { name: 'Пауза' }).click();
+  // після останнього слова canvas порожній до кінця відео: останнє вимкнення — біля кінця останнього слова
+  expect(samples.at(-1)!.px).toBe(0);
+  const lastOn = samples.findLastIndex((x) => x.px > 50);
+  expect(lastOn).toBeGreaterThan(onAgain);
+  const lastOff = samples.findIndex((x, i) => i > lastOn && x.px === 0);
+  expect(lastOff).toBeGreaterThan(lastOn);
+  expect(samples.slice(lastOff).every((x) => x.px === 0)).toBe(true);
+  expect(samples[lastOff]!.t).toBeGreaterThanOrEqual(lastEnd - 0.1);
+  expect(samples[lastOff]!.t).toBeLessThan(lastEnd + 0.7);
 
   // рендер UK і EN (чернетка) → два MP4 різної тривалості = fits ±1 кадр
   const renders = await renderDraft(page, projectId, 2);
