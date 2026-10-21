@@ -81,3 +81,46 @@ describe('live vision tagger', () => {
     60_000,
   );
 });
+
+const available = async (ref: string) => !!(await registry.catalog('live')).find((i) => i.ref === ref)?.available;
+
+describe('live speech providers', () => {
+  const ttsModels = CATALOG.filter((e) => e.capability === 'tts' && e.provider !== 'fake');
+  it.each(ttsModels.map((e) => [e.ref, e] as const))(
+    '%s synthesizes a WAV',
+    async (_ref, entry) => {
+      if (!(await available(entry.ref))) return;
+      const { audio } = await (
+        await registry.tts('live', entry.ref)
+      ).synthesize({ text: 'Привіт, це перевірка озвучки.', voiceId: entry.voices![0]!.id, language: 'uk' });
+      expect(audio.mime).toBe('audio/wav');
+      expect(audio.durationMs).toBeGreaterThan(0);
+    },
+    120_000,
+  );
+
+  it('whisper-1 returns word timestamps for generated speech', async () => {
+    const tts = ttsModels.find((e) => e.provider === 'openai');
+    if (!tts || !(await available('openai/whisper-1')) || !(await available(tts.ref))) return;
+    const { audio } = await (
+      await registry.tts('live', tts.ref)
+    ).synthesize({ text: 'Hello there, this is a short test.', voiceId: 'marin', language: 'en' });
+    const res = await (
+      await registry.stt('live', 'openai/whisper-1')
+    ).transcribe({ audio: audio.bytes, mime: audio.mime });
+    expect(res.words!.length).toBeGreaterThan(0);
+    expect(res.words![0]!.endMs).toBeGreaterThan(res.words![0]!.startMs);
+  }, 120_000);
+
+  it('gemini stt returns at least one segment', async () => {
+    const tts = ttsModels.find((e) => e.provider === 'google');
+    if (!tts || !(await available('google/gemini-3.8-flash')) || !(await available(tts.ref))) return;
+    const { audio } = await (
+      await registry.tts('live', tts.ref)
+    ).synthesize({ text: 'Hello there, this is a short test.', voiceId: 'Kore', language: 'en' });
+    const res = await (
+      await registry.stt('live', 'google/gemini-3.8-flash')
+    ).transcribe({ audio: audio.bytes, mime: audio.mime });
+    expect(res.segments.length).toBeGreaterThanOrEqual(1);
+  }, 120_000);
+});
