@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { estimateCost, type CatalogItem } from '@vf/ai';
 import { PRESETS, captionStyleSchema, type CaptionStyle } from '@vf/captions';
 import { assets, captionStyles, projects, transcripts, userSettings, voiceLines } from '@vf/db';
@@ -13,20 +13,23 @@ import {
   type OriginalSound,
   type ProjectVoice,
   type Segment,
+  type TimelineDoc,
   type VoiceChoice,
   type Word,
 } from '@vf/shared';
-import { addClip, fitSegment, quantize, type SegmentFit } from '@vf/timeline';
+import { addClip, audioPlan, fitSegment, quantize, type SegmentFit } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { firstVisualAsset, ownProject, timelineAssetIds, type ProjectRow } from '../projects/service';
+import { pickModel, textModel, userDefaults } from './job-utils';
 import { lineState, type LineState } from './stale';
 
 /** Максимум символів у тексті рядка */
 export const MAX_LINE_CHARS = 1500;
 /** Оцінка тривалості озвучки для вартості */
 export const CHARS_PER_SEC = 15;
-const STT_MODEL = 'openai/whisper-1';
+/** Модель міток слів і розпізнавання за замовчуванням */
+export const STT_MODEL = 'openai/whisper-1' as ModelRef;
 const URL_TTL_SEC = 3600;
 
 export interface VoiceLineView {
@@ -79,7 +82,7 @@ export function parseVoice(raw: unknown): ProjectVoice {
 }
 
 /** Мови проєкту; базова завжди перша серед них. */
-const projectLanguages = (p: ProjectRow) =>
+export const projectLanguages = (p: ProjectRow) =>
   p.languages.includes(p.baseLanguage) ? p.languages : [p.baseLanguage, ...p.languages];
 
 export async function userVoiceDefaults(deps: AppDeps, userId: string) {
@@ -89,6 +92,16 @@ export async function userVoiceDefaults(deps: AppDeps, userId: string) {
     .where(eq(userSettings.userId, userId));
   const r = voiceDefaultsSchema.safeParse(row?.voices ?? {});
   return r.success ? r.data : {};
+}
+
+/** Голос мови проєкту: вибраний у проєкті, інакше голос користувача за замовчуванням (як у `getVoice`). */
+export async function voiceForLanguage(
+  deps: AppDeps,
+  userId: string,
+  p: Pick<ProjectRow, 'voice'>,
+  language: string,
+): Promise<VoiceChoice | null> {
+  return parseVoice(p.voice).languages[language]?.voice ?? (await userVoiceDefaults(deps, userId))[language] ?? null;
 }
 
 /** Модель озвучки існує, голос є в її списку. */
@@ -240,13 +253,19 @@ export async function listVoiceProjects(deps: AppDeps, userId: string): Promise<
 
   const out: VoiceProjectCard[] = [];
   for (const p of rows) {
-    const doc = normalizeDoc(p.timeline);
-    const segs = doc.segments ?? [];
+    // пошкоджений документ не має валити весь список: картка без сегментів і мініатюри
+    let doc: TimelineDoc | null = null;
+    try {
+      doc = normalizeDoc(p.timeline);
+    } catch {
+      doc = null;
+    }
+    const segs = doc?.segments ?? [];
     const own = byProject.get(p.id) ?? [];
     if (!segs.length && !own.length) continue;
     const voice = parseVoice(p.voice);
     const baseText = new Map(own.filter((l) => l.language === p.baseLanguage).map((l) => [l.segmentId, l.text]));
-    const first = firstVisualAsset(doc);
+    const first = doc && firstVisualAsset(doc);
     let thumbUrl: string | null = null;
     if (first && isUuid(first)) {
       const [a] = await deps.db
@@ -412,6 +431,12 @@ export async function setCaptions(
   });
 }
 
+/** `failed` → `empty` без помилки (новий текст після невдалої озвучки). */
+export const clearFailure = {
+  status: sql<'empty'>`case when ${voiceLines.status} = 'failed' then 'empty' else ${voiceLines.status} end`,
+  error: sql<null>`case when ${voiceLines.status} = 'failed' then null else ${voiceLines.error} end`,
+};
+
 /** Ручний текст рядка (upsert). Озвучка й переклад «застаріють» самі через хеші. */
 export async function setText(
   deps: AppDeps,
@@ -428,7 +453,11 @@ export async function setText(
   await deps.db
     .insert(voiceLines)
     .values({ userId, projectId: p.id, segmentId: input.segmentId, language: input.language, ...patch })
-    .onConflictDoUpdate({ target: [voiceLines.projectId, voiceLines.segmentId, voiceLines.language], set: patch });
+    .onConflictDoUpdate({
+      target: [voiceLines.projectId, voiceLines.segmentId, voiceLines.language],
+      // новий текст рядка з помилкою — знову «не озвучено», без старої помилки
+      set: { ...patch, ...clearFailure },
+    });
 }
 
 /** Коротка фраза для зразка голосу кожною мовою. */
@@ -469,4 +498,133 @@ export async function previewVoice(
     await deps.storage.put(key, audio.bytes, { contentType: audio.mime });
   }
   return { url: await deps.storage.presignGet(key, { expiresSec: URL_TTL_SEC }) };
+}
+
+/**
+ * «Озвучити»: задача на кожен рядок. Без `segmentIds` — рядки з текстом у станах «не озвучено», «помилка»,
+ * «застарілий»; із `segmentIds` — усі рядки з текстом цих сегментів, крім тих, що вже в черзі чи в роботі.
+ */
+export async function enqueueSynthesize(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; language?: string; segmentIds?: string[] },
+): Promise<{ jobIds: string[] }> {
+  const p = await ownProject(deps, userId, input.projectId);
+  const all = projectLanguages(p);
+  if (input.language !== undefined) {
+    languageInfo(input.language);
+    if (!all.includes(input.language)) throw new AppError('VALIDATION', 'Мови немає в проєкті');
+  }
+  const languages = input.language ? [input.language] : all;
+  const segIds = new Set((normalizeDoc(p.timeline).segments ?? []).map((s) => s.id));
+  const wanted = input.segmentIds ? new Set(input.segmentIds) : null;
+  const rows = (await deps.db.select().from(voiceLines).where(eq(voiceLines.projectId, p.id))).filter(
+    (r) => segIds.has(r.segmentId) && (!wanted || wanted.has(r.segmentId)),
+  );
+  const baseText = new Map(rows.filter((r) => r.language === p.baseLanguage).map((r) => [r.segmentId, r.text]));
+  const voices = new Map<string, VoiceChoice | null>();
+  for (const lang of languages) voices.set(lang, await voiceForLanguage(deps, userId, p, lang));
+
+  const todo = rows.filter((r) => {
+    if (!languages.includes(r.language) || !r.text.trim()) return false;
+    const state = lineState(
+      r,
+      r.language === p.baseLanguage ? undefined : baseText.get(r.segmentId),
+      voices.get(r.language),
+    );
+    if (state === 'queued' || state === 'running') return false;
+    return wanted ? true : state === 'empty' || state === 'failed' || state === 'stale';
+  });
+
+  const catalog = await deps.ai.catalog(userId);
+  for (const lang of new Set(todo.map((r) => r.language))) {
+    const voice = voices.get(lang);
+    if (!voice) throw new AppError('VALIDATION', `Не вибрано голос для мови «${languageInfo(lang).name}»`);
+    const entry = catalog.find((e) => e.ref === voice.model && e.capability === 'tts');
+    if (!entry?.available)
+      throw new AppError('MODEL_UNAVAILABLE', `Модель озвучки ${voice.model} недоступна — додайте ключ`, {
+        model: voice.model,
+      });
+  }
+
+  const jobIds: string[] = [];
+  for (const r of todo) {
+    // спершу «в черзі», потім задача: обробник може встигнути поставити «в роботі»
+    await deps.db
+      .update(voiceLines)
+      .set({ status: 'queued', error: null, updatedAt: new Date() })
+      .where(eq(voiceLines.id, r.id));
+    const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: r.id }, { userId });
+    await deps.db.update(voiceLines).set({ jobId }).where(eq(voiceLines.id, r.id));
+    jobIds.push(jobId);
+  }
+  return { jobIds };
+}
+
+/** «Перекласти»: базові тексти (усі або `segmentIds`) → мова `language` однією задачею. */
+export async function enqueueTranslate(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; language: string; segmentIds?: string[] },
+): Promise<{ jobId: string }> {
+  const p = await ownProject(deps, userId, input.projectId);
+  languageInfo(input.language);
+  if (input.language === p.baseLanguage) throw new AppError('VALIDATION', 'Це базова мова — перекладати нічого');
+  if (!projectLanguages(p).includes(input.language)) throw new AppError('VALIDATION', 'Мови немає в проєкті');
+  const segIds = new Set((normalizeDoc(p.timeline).segments ?? []).map((s) => s.id));
+  const wanted = input.segmentIds ? new Set(input.segmentIds) : null;
+  const base = await deps.db
+    .select({ segmentId: voiceLines.segmentId, text: voiceLines.text })
+    .from(voiceLines)
+    .where(and(eq(voiceLines.projectId, p.id), eq(voiceLines.language, p.baseLanguage)));
+  if (!base.some((l) => segIds.has(l.segmentId) && (!wanted || wanted.has(l.segmentId)) && l.text.trim()))
+    throw new AppError('VALIDATION', 'Немає тексту базової мови для перекладу');
+  await textModel(deps, userId);
+  const payload: { projectId: string; language: string; segmentIds?: string[] } = {
+    projectId: p.id,
+    language: input.language,
+  };
+  if (input.segmentIds) payload.segmentIds = input.segmentIds;
+  return { jobId: await deps.jobs.queue.enqueue('voice.translate', payload, { userId }) };
+}
+
+/** «Розпізнати»: звук ролі `original` → сегменти й тексти базової мови. */
+export async function enqueueTranscribe(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; language?: string },
+): Promise<{ jobId: string }> {
+  const p = await ownProject(deps, userId, input.projectId);
+  if (input.language !== undefined) languageInfo(input.language);
+  const ids = originalAssetIds(normalizeDoc(p.timeline));
+  const rows = ids.length
+    ? await deps.db
+        .select({ hasAudio: assets.hasAudio })
+        .from(assets)
+        .where(and(eq(assets.userId, userId), inArray(assets.id, ids)))
+    : [];
+  // has_audio = null — ще не проаналізовано: перевірить задача
+  if (!rows.some((a) => a.hasAudio !== false)) throw new AppError('VALIDATION', NO_SOUND);
+  await sttModel(deps, userId);
+  const payload: { projectId: string; language?: string } = { projectId: p.id };
+  if (input.language) payload.language = input.language;
+  return { jobId: await deps.jobs.queue.enqueue('voice.transcribe', payload, { userId }) };
+}
+
+export const NO_SOUND = 'У відео немає звуку';
+
+/** Файли, що звучать у ролі `original`: доріжки «Звук відео» + власний звук відео-кліпів. */
+export function originalAssetIds(doc: TimelineDoc): string[] {
+  const original = new Set<string>();
+  for (const t of doc.tracks)
+    if (t.kind === 'video' || (t.kind === 'audio' && t.role === 'original'))
+      for (const c of t.clips) original.add(c.id);
+  return [...new Set(audioPlan(doc).flatMap((a) => (original.has(a.clipId) && isUuid(a.assetId) ? [a.assetId] : [])))];
+}
+
+/** Модель розпізнавання: налаштування `stt` → whisper-1 → будь-яка доступна. */
+export async function sttModel(deps: AppDeps, userId: string): Promise<CatalogItem> {
+  const m = await pickModel(deps, userId, 'stt', [(await userDefaults(deps, userId)).stt, STT_MODEL]);
+  if (!m) throw new AppError('MODEL_UNAVAILABLE', 'Немає моделі розпізнавання — додайте ключ OpenAI або Google');
+  return m;
 }

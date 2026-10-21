@@ -3,6 +3,9 @@ import type { ModelRef, OriginalSound, VoiceChoice } from '@vf/shared';
 import { procedure, router } from '../../trpc';
 import {
   createFromAsset,
+  enqueueSynthesize,
+  enqueueTranscribe,
+  enqueueTranslate,
   getVoice,
   listVoiceProjects,
   previewVoice,
@@ -50,6 +53,15 @@ export const voiceRouter = router({
   setText: procedure
     .input(z.object({ projectId, segmentId: z.string(), language, text: z.string() }))
     .mutation(({ ctx, input }) => setText(ctx.deps, ctx.userId, input)),
+  transcribe: procedure
+    .input(z.object({ projectId, language: language.optional() }))
+    .mutation(({ ctx, input }) => enqueueTranscribe(ctx.deps, ctx.userId, input)),
+  translate: procedure
+    .input(z.object({ projectId, language, segmentIds: z.array(z.string()).max(5000).optional() }))
+    .mutation(({ ctx, input }) => enqueueTranslate(ctx.deps, ctx.userId, input)),
+  synthesize: procedure
+    .input(z.object({ projectId, language: language.optional(), segmentIds: z.array(z.string()).max(5000).optional() }))
+    .mutation(({ ctx, input }) => enqueueSynthesize(ctx.deps, ctx.userId, input)),
   preview: procedure
     .input(z.object({ model: z.string(), voiceId: z.string(), language }))
     .mutation(({ ctx, input }) => previewVoice(ctx.deps, ctx.userId, { ...input, model: input.model as ModelRef })),

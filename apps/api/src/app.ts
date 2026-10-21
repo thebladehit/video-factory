@@ -26,6 +26,9 @@ import { assetsTagJob } from './modules/assets/tag-job';
 import { imageGenerateJob } from './modules/generate/image-job';
 import { videoGenerateJob } from './modules/generate/video-job';
 import { renderJob } from './modules/renders/render-job';
+import { releaseOnCancel, synthesizeJob } from './modules/voice/synthesize-job';
+import { transcribeJob } from './modules/voice/transcribe-job';
+import { translateJob } from './modules/voice/translate-job';
 import { tagAfterProcess } from './modules/assets/tagger';
 import { appRouter, type AppRouter } from './routers';
 
@@ -108,6 +111,10 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(imageGenerateJob(deps));
   deps.jobs.runtime.register(renderJob(deps));
   deps.jobs.runtime.register(videoGenerateJob(deps, { pollMs: cfg.videoPollMs, timeoutMs: cfg.videoTimeoutMs }));
+  deps.jobs.runtime.register(synthesizeJob(deps));
+  deps.jobs.runtime.register(translateJob(deps));
+  deps.jobs.runtime.register(transcribeJob(deps));
+  const offVoiceEvents = deps.jobs.queue.onEvent(releaseOnCancel(deps));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
 
   await server.register(cors, { origin: cfg.webOrigin });
@@ -139,6 +146,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
       closed = true;
       scheduler.stop();
       await deps.jobs.runtime.stop();
+      offVoiceEvents();
       await server.close();
       await dbHandle.close();
     },
