@@ -1,5 +1,5 @@
 import type { AudioClip, CaptionClip, Effect, MediaClip, OriginalSound, TimelineDoc, Track } from '@vf/shared';
-import { cutEnvelope, insertTrack } from './ops';
+import { addLinkedAudio, cutEnvelope, findClip, insertTrack } from './ops';
 import { sourceTimeAt } from './evaluate';
 import { docDuration, quantize, quantizeDown } from './time';
 
@@ -60,7 +60,11 @@ export function fitSegment(D: number, V: number | null, fps: number): Omit<Segme
   if (V === null) return { base: D, target: D, speed: 1, used: D, hold: 0, trimmed: 0 };
   const frame = 1 / fps;
   const target = Math.max(frame, quantize(LEAD + V + TAIL, fps));
-  const speed = round6(clamp(D / target, SPEED_MIN, SPEED_MAX));
+  const s0 = D / target;
+  // темп у межах — весь сегмент відтворюється без стоп-кадру й обрізання (округлений `speed` не має
+  // «з'їдати» кадр через `target·speed < D`)
+  if (s0 >= SPEED_MIN && s0 <= SPEED_MAX) return { base: D, target, speed: round6(s0), used: D, hold: 0, trimmed: 0 };
+  const speed = clamp(s0, SPEED_MIN, SPEED_MAX);
   const used = Math.max(frame, Math.min(D, quantizeDown(target * speed, fps)));
   // відтворення округлюється до кадру; стоп-кадр — залишок до цілі (≥ 0, на сітці)
   const play = Math.min(target, Math.max(frame, quantize(used / speed, fps)));
@@ -250,12 +254,13 @@ function clipEnvelope(curve: Envelope, start: number, duration: number): Envelop
  * Вихід — звичайний `TimelineDoc` без `segments` + кусково-лінійна карта часу «база → мова». Вхід не мутується.
  */
 export function localize(
-  doc: TimelineDoc,
+  input: TimelineDoc,
   opts: LocalizeOptions,
 ): { doc: TimelineDoc; fits: SegmentFit[]; map: (tBase: number) => number } {
-  const fps = doc.fps;
+  const fps = input.fps;
   const frame = 1 / fps;
   const newId = opts.newId ?? defaultId;
+  const doc = withOwnSoundLinked(input, newId);
   const baseDur = docDuration(doc);
 
   // 1. Сегменти в межах документа (частини за `docDuration` відкидаються) і їхня підгонка
@@ -277,9 +282,11 @@ export function localize(
 
   // 2. Карта часу
   const regions = buildRegions(fitted);
+  // неперервна справа: на межі сегмента зі стоп-кадром — початок наступного регіону (після `hold`)
   const map = (tBase: number): number => {
-    const r = regions.find((x) => tBase <= x.b + EPS && (x.kind !== 'tail' || tBase > x.a + EPS))!;
-    return quantize(langAt(r, Math.max(tBase, r.a)), fps);
+    const t = Math.max(0, tBase);
+    const r = regions.find((x) => t < x.b - EPS) ?? regions[regions.length - 1]!;
+    return quantize(langAt(r, Math.max(t, r.a)), fps);
   };
   const newDur = quantize(baseDur + (regions[regions.length - 1]!.lang - regions[regions.length - 1]!.a), fps);
 
@@ -423,6 +430,44 @@ export function localize(
   if (captionClips.length)
     out = insertTrack(out, { id: newId(), kind: 'captions', language: opts.language, clips: captionClips });
   return { doc: out, fits, map };
+}
+
+/**
+ * Власний звук відео-кліпів (`volume > 0` без зв'язаного аудіо) виноситься в кліп ролі `original`,
+ * щоб на нього діяли `replace`/`duck` з огинаючою; `fade` відео переходить у `fadeIn/fadeOut` звуку.
+ */
+function withOwnSoundLinked(doc: TimelineDoc, newId: () => string): TimelineDoc {
+  let out = doc;
+  for (const track of doc.tracks) {
+    if (track.kind !== 'video') continue;
+    for (const v of track.clips) {
+      if (!v.volume || v.linkId) continue;
+      out = addLinkedAudio(out, v.id, newId);
+      const linkId = (findClip(out, v.id)?.clip as MediaClip | undefined)?.linkId;
+      const fade = v.effects.find((e) => e.type === 'fade');
+      if (!linkId || fade?.type !== 'fade') continue;
+      out = {
+        ...out,
+        tracks: out.tracks.map((t) =>
+          t.kind === 'audio'
+            ? {
+                ...t,
+                clips: t.clips.map((c) =>
+                  c.linkId === linkId
+                    ? {
+                        ...c,
+                        ...(fade.params.in > 0 ? { fadeIn: fade.params.in } : {}),
+                        ...(fade.params.out > 0 ? { fadeOut: fade.params.out } : {}),
+                      }
+                    : c,
+                ),
+              }
+            : t,
+        ),
+      };
+    }
+  }
+  return out;
 }
 
 /** `xfade` першого шматка = перекриття з попередніми кліпами доріжки в мові; без перекриття — прибирається. */

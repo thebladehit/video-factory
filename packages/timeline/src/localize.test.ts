@@ -104,6 +104,22 @@ describe('fitSegment', () => {
     expect(f.trimmed).toBeCloseTo(5.625, 9);
     expect(fitSegment(10, 3, 30).used).toBeCloseTo(131 / 30, 9);
   });
+  it('in-range speed → whole segment, no trim or hold (fix r1 #2)', () => {
+    expect(fitSegment(29 / 24, 0.5, 24)).toMatchObject({ trimmed: 0, hold: 0, used: 29 / 24 });
+    for (const fps of [20, 24, 25, 30, 60])
+      for (let f = 1; f <= fps * 30; f += 7) {
+        const D = f / fps;
+        for (let V = 0.3; V < 40; V += 0.173) {
+          const r = fitSegment(D, V, fps);
+          if (D / r.target >= 0.8 && D / r.target <= 1.25) {
+            expect(r.trimmed).toBe(0);
+            expect(r.hold).toBe(0);
+            expect(r.used).toBe(D);
+          }
+          expect(r.target - r.hold).toBeGreaterThanOrEqual(1 / fps - 1e-9);
+        }
+      }
+  });
   it('no voice → unchanged', () => {
     expect(fitSegment(4, null, 30)).toEqual({ base: 4, target: 4, speed: 1, used: 4, hold: 0, trimmed: 0 });
   });
@@ -342,6 +358,63 @@ describe('localize — hold, short segments, music', () => {
   });
 });
 
+describe('localize — own video sound (fix r1 #3)', () => {
+  it('video with own sound under duck → linked original clip with envelope under the voice; fades carried', () => {
+    const base = mkDoc(
+      20,
+      [vTrack('V', [video('v', 0, 8, { volume: 1, effects: [{ type: 'fade', params: { in: 0.5, out: 1 } }] })])],
+      [{ id: 's1', start: 0, end: 4 }],
+    );
+    const out = localize(base, opts([take('s1', 4.5)]));
+    const v = out.doc.tracks.find((t) => t.kind === 'video')!.clips as MediaClip[];
+    const orig = out.doc.tracks.find((t) => t.kind === 'audio' && t.role === 'original')!.clips as AudioClip[];
+    for (const c of v) expect(c.volume).toBe(0);
+    expect(orig.map((c) => [c.start, c.duration, c.volume, c.fadeIn, c.fadeOut])).toEqual([
+      [0, 5, 0.25, 0.5, undefined],
+      [5, 4, 0.25, undefined, 1],
+    ]);
+    expect(orig.map((c) => c.linkId)).toEqual(v.map((c) => c.linkId));
+    expect(Math.min(...orig[0]!.envelope!.map((p) => p.gain))).toBeCloseTo(0.08 / 0.25, 9);
+    expectValid(out.doc);
+  });
+
+  it('replace mutes the materialized original clip', () => {
+    const base = mkDoc(20, [vTrack('V', [video('v', 0, 8, { volume: 1 })])], [{ id: 's1', start: 0, end: 4 }]);
+    const out = localize(
+      base,
+      opts([take('s1', 4.5)], { original: { mode: 'replace', level: 0.25, duckLevel: 0.08 } }),
+    );
+    const orig = out.doc.tracks.find((t) => t.kind === 'audio' && t.role === 'original')!.clips as AudioClip[];
+    expect(orig.length).toBeGreaterThan(0);
+    for (const c of orig) expect(c.volume).toBe(0);
+  });
+});
+
+describe('localize — adjacent segments after a freeze frame (fix r1 #1)', () => {
+  it('next voice starts after the hold; voices do not overlap; map(s2.start) = s2 language start', () => {
+    // 20 fps; s1 [0,4] V=6 → T=6,5 (×0,8: 5 с + 1,5 с стоп-кадру); s2 [4,8] V=3 → T=3,5
+    const base = mkDoc(
+      20,
+      [vTrack('V', [video('v', 0, 8)])],
+      [
+        { id: 's1', start: 0, end: 4 },
+        { id: 's2', start: 4, end: 8 },
+      ],
+    );
+    const out = localize(base, opts([take('s1', 6), take('s2', 3)], { captions: { enabled: true, styleId: 'st' } }));
+    expect(out.map(4)).toBeCloseTo(6.5, 9);
+    const voice = out.doc.tracks.find((t) => t.kind === 'audio' && t.role === 'voiceover')!.clips as AudioClip[];
+    expect(voice.map((c) => c.start)).toEqual([0.15, 6.65]);
+    expect(voice[0]!.start + voice[0]!.duration).toBeLessThanOrEqual(voice[1]!.start);
+    const v = clipsOf(out.doc, 'V') as MediaClip[];
+    expect(v.map((c) => [c.start, c.duration, c.hold])).toEqual([
+      [0, 6.5, 1.5],
+      [6.5, 3.5, undefined],
+    ]);
+    expectValid(out.doc);
+  });
+});
+
 describe('localize — voiceover, original sound, captions', () => {
   const segs = [
     { id: 's1', start: 0, end: 4 },
@@ -385,7 +458,10 @@ describe('localize — voiceover, original sound, captions', () => {
     const out = localize(base, opts([take('s1', 4.5), take('s2', 1.1)]));
     const o = clipsOf(out.doc, 'O') as AudioClip[];
     for (const c of o) expect(c.volume).toBe(0.25);
-    expect((clipsOf(out.doc, 'V') as MediaClip[]).find((c) => c.assetId === 'asset-own')!.volume).toBe(0.25);
+    // власний звук відео винесено в зв'язаний кліп `original`
+    const own = (clipsOf(out.doc, 'V') as MediaClip[]).find((c) => c.assetId === 'asset-own')!;
+    expect(own.volume).toBe(0);
+    expect(o.find((c) => c.assetId === 'asset-own')).toMatchObject({ linkId: own.linkId, volume: 0.25 });
     const r = 0.08 / 0.25;
     // кліп оригіналу [0,5]: голос [0,15; 4,65] → рампа −0,05…0,15 (на 0 вже 0,83), рампа вгору 4,65…4,85
     const first = o[0]!;
