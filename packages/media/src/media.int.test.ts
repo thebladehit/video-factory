@@ -7,6 +7,7 @@ import {
   peaks,
   probe,
   run,
+  speechIntervals,
   synthAudio,
   synthImage,
   synthVideo,
@@ -215,5 +216,42 @@ describe('EXIF orientation (phone photos)', () => {
     await synthImage(tools, file('rot1.jpg'), { width: 64, height: 32, color: '#ff0000', format: 'jpg' });
     expect(await probe(tools, file('rot1.jpg'))).toMatchObject({ width: 64, height: 32 });
     expect(jpegOrientation(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBe(1);
+  });
+});
+
+describe('speechIntervals', () => {
+  it('tone 1s, silence 1s, tone 1s gives two intervals', async () => {
+    await run(tools.ffmpegPath, [
+      '-v',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'aevalsrc=0.5*sin(2*PI*440*t)*(lt(t\\,1)+gte(t\\,2)):s=48000:d=3',
+      file('tsT.wav'),
+    ]);
+    const r = await speechIntervals(tools, file('tsT.wav'));
+    expect(r).toHaveLength(2);
+    expect(Math.abs(r[0]!.startMs - 0)).toBeLessThanOrEqual(50);
+    expect(Math.abs(r[0]!.endMs - 1000)).toBeLessThanOrEqual(50);
+    expect(Math.abs(r[1]!.startMs - 2000)).toBeLessThanOrEqual(50);
+    expect(Math.abs(r[1]!.endMs - 3000)).toBeLessThanOrEqual(50);
+  });
+
+  it('trailing silence ends the last interval', async () => {
+    await run(tools.ffmpegPath, [
+      '-v',
+      'error',
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'aevalsrc=0.5*sin(2*PI*440*t)*lt(t\\,1):s=48000:d=2',
+      file('tS.wav'),
+    ]);
+    const r = await speechIntervals(tools, file('tS.wav'));
+    expect(r).toHaveLength(1);
+    expect(Math.abs(r[0]!.endMs - 1000)).toBeLessThanOrEqual(50);
   });
 });

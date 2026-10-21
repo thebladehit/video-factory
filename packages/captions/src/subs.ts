@@ -13,7 +13,9 @@ const srtText = (t: string) => t.replace(/[<>]/g, '');
 const vttText = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export function toSrt(pages: Page[]): string {
-  return pages.map((p, i) => `${i + 1}\n${stamp(p.start, ',')} --> ${stamp(p.end, ',')}\n${joined(p, srtText)}\n`).join('\n');
+  return pages
+    .map((p, i) => `${i + 1}\n${stamp(p.start, ',')} --> ${stamp(p.end, ',')}\n${joined(p, srtText)}\n`)
+    .join('\n');
 }
 
 export function toVtt(pages: Page[]): string {
