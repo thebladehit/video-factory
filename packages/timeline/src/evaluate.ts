@@ -15,6 +15,15 @@ export interface Layer {
 
 const EPS = 1e-9;
 
+/** Час у джерелі: `in + min(t − start, duration − hold) × speed` (у зоні `hold` — останній кадр джерела). */
+export function sourceTimeAt(
+  clip: { start: number; duration: number; in: number; speed?: number; hold?: number },
+  t: number,
+): number {
+  const local = Math.max(0, t - clip.start);
+  return clip.in + Math.min(local, clip.duration - (clip.hold ?? 0)) * (clip.speed ?? 1);
+}
+
 /**
  * Шари кадру в момент `t` у порядку малювання (перша відео-доріжка — найнижча).
  * Кліпи, тип файлу яких невідомий (`kinds` не містить asset — файл видалено), пропускаються.
@@ -36,7 +45,7 @@ export function evaluate(doc: TimelineDoc, t: number, kinds: Record<string, 'ima
         clipId: c.id,
         assetId: c.assetId,
         kind,
-        sourceTime: local + c.in,
+        sourceTime: sourceTimeAt(c, t),
         alpha: easeAlpha(fadeIn, fadeOut, c.duration).at(local),
         scale: tr.scale.at(p),
         cx: tr.cx.at(p),
@@ -57,6 +66,9 @@ export interface AudioItem {
   volume: number;
   fadeIn: number;
   fadeOut: number;
+  speed: number;
+  hold: number;
+  envelope: { t: number; gain: number }[];
 }
 
 /** Що звучить: аудіокліпи + власний звук відео-кліпів з `volume > 0` (фото `volume` не мають). */
@@ -75,6 +87,9 @@ export function audioPlan(doc: TimelineDoc): AudioItem[] {
             volume: c.volume,
             fadeIn: c.fadeIn ?? 0,
             fadeOut: c.fadeOut ?? 0,
+            speed: c.speed ?? 1,
+            hold: c.hold ?? 0,
+            envelope: c.envelope ?? [],
           });
     } else if (track.kind === 'video') {
       for (const c of track.clips) {
@@ -89,6 +104,9 @@ export function audioPlan(doc: TimelineDoc): AudioItem[] {
           volume: c.volume,
           fadeIn: fade?.type === 'fade' ? fade.params.in : 0,
           fadeOut: fade?.type === 'fade' ? fade.params.out : 0,
+          speed: c.speed ?? 1,
+          hold: c.hold ?? 0,
+          envelope: [],
         });
       }
     }

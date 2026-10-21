@@ -345,3 +345,58 @@ describe('quantization', () => {
     }
   });
 });
+
+describe('speed / hold in clip ops', () => {
+  const mk = () => {
+    const a = addClip(
+      emptyTimeline('9:16'),
+      { id: 'V', kind: 'video', durationSec: 20, hasAudio: false },
+      { at: 0 },
+      () => 'c1',
+    );
+    return {
+      ...a.doc,
+      tracks: a.doc.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => ({ ...c, duration: 10, speed: 0.8, hold: 2 })),
+      })),
+    } as TimelineDoc;
+  };
+  const clips = (d: TimelineDoc) =>
+    d.tracks.flatMap(
+      (t) => t.clips as { id: string; start: number; in: number; duration: number; speed?: number; hold?: number }[],
+    );
+  it('splitAt keeps speed, hold only on right, in advances by delta*speed', () => {
+    const [l, r] = clips(
+      splitAt(
+        mk(),
+        'c1',
+        4,
+        (() => {
+          let i = 0;
+          return () => `n${++i}`;
+        })(),
+      ),
+    ).sort((a, b) => a.start - b.start);
+    expect(l).toMatchObject({ speed: 0.8, duration: 4 });
+    expect(l!.hold).toBeUndefined();
+    expect(r).toMatchObject({ speed: 0.8, hold: 2, start: 4, duration: 6 });
+    expect(r!.in).toBeCloseTo(3.2, 9);
+  });
+  it('splitAt inside hold zone', () => {
+    const [l, r] = clips(splitAt(mk(), 'c1', 9, () => 'n1')).sort((a, b) => a.start - b.start);
+    expect(l).toMatchObject({ hold: 1, duration: 9 });
+    expect(r).toMatchObject({ hold: 1, duration: 1 });
+    expect(r!.in).toBeCloseTo(8 * 0.8, 9);
+  });
+  it('moveClip and trimStart keep speed/hold; trimStart shifts in by delta*speed', () => {
+    expect(clips(moveClip(mk(), 'c1', 3, { V: 20 }))[0]).toMatchObject({ speed: 0.8, hold: 2 });
+    const t = clips(trimStart(mk(), 'c1', 2, { V: 20 }))[0]!;
+    expect(t).toMatchObject({ speed: 0.8, hold: 2, start: 2, duration: 8 });
+    expect(t.in).toBeCloseTo(1.6, 6);
+  });
+  it('trimEnd limit accounts for speed and hold', () => {
+    // source used: 0 + (10-2)*0.8 = 6.4 of 20 -> room (20-6.4)/0.8 = 17 s
+    expect(clips(trimEnd(mk(), 'c1', 100, { V: 20 }))[0]).toMatchObject({ duration: 27, speed: 0.8, hold: 2 });
+  });
+});
