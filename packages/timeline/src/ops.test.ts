@@ -400,3 +400,65 @@ describe('speed / hold in clip ops', () => {
     expect(clips(trimEnd(mk(), 'c1', 100, { V: 20 }))[0]).toMatchObject({ duration: 27, speed: 0.8, hold: 2 });
   });
 });
+
+describe('hold bounded by trimmed duration', () => {
+  const held = (kind: 'video' | 'audio') => {
+    const a = addClip(
+      emptyTimeline('9:16'),
+      kind === 'video'
+        ? { id: 'V', kind: 'video', durationSec: 20, hasAudio: false }
+        : { id: 'M', kind: 'audio', durationSec: 20 },
+      { at: 0 },
+      () => 'c1',
+    );
+    return {
+      ...a.doc,
+      tracks: a.doc.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => ({ ...c, duration: 10, hold: 2 })) })),
+    } as TimelineDoc;
+  };
+  const one = (d: TimelineDoc) =>
+    d.tracks.flatMap((t) => t.clips as { duration: number; hold?: number; in: number }[])[0]!;
+  it.each(['video', 'audio'] as const)('trimEnd below hold keeps >= 1 frame of playback (%s)', (k) => {
+    const c = one(trimEnd(held(k), 'c1', 1, { V: 20, M: 20 }));
+    expect(c.duration).toBe(1);
+    expect(c.hold).toBeCloseTo(1 - 1 / 30, 6);
+  });
+  it.each(['video', 'audio'] as const)('trimStart into/over the hold zone (%s)', (k) => {
+    const c = one(trimStart(held(k), 'c1', 9.5, { V: 20, M: 20 }));
+    expect(c.duration).toBeCloseTo(0.5, 6);
+    expect(c.in).toBeCloseTo(8, 6); // not past the last played frame
+    expect(c.duration - (c.hold ?? 0)).toBeGreaterThanOrEqual(1 / 30 - 1e-6);
+  });
+  it('splitAt trims the left envelope to its duration', () => {
+    const d = held('audio');
+    const env = {
+      ...d,
+      tracks: d.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => ({
+          ...c,
+          hold: undefined,
+          envelope: [
+            { t: 0, gain: 1 },
+            { t: 4, gain: 0 },
+            { t: 8, gain: 1 },
+          ],
+        })),
+      })),
+    } as TimelineDoc;
+    const parts = env.tracks
+      .flatMap(
+        (t) =>
+          splitAt(env, 'c1', 2, () => 'n1').tracks.find((x) => x.id === t.id)!.clips as {
+            start: number;
+            envelope?: { t: number; gain: number }[];
+          }[],
+      )
+      .sort((a, b) => a.start - b.start);
+    expect(parts[0]!.envelope).toEqual([
+      { t: 0, gain: 1 },
+      { t: 2, gain: 0.5 },
+    ]);
+    expect(parts[1]!.envelope![0]).toEqual({ t: 0, gain: 0.5 });
+  });
+});

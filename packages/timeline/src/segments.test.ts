@@ -109,6 +109,7 @@ describe('deleteSegment', () => {
       { id: 'b', start: 1, end: 2 },
     ]);
     expect(se(deleteSegment(d, 'a'))).toEqual([['b', 1, 2]]);
+    expect(() => normalizeDoc(deleteSegment(d, 'a'))).not.toThrow();
     expect(deleteSegment(d, 'zz')).toBe(d);
   });
 });
@@ -121,6 +122,11 @@ describe('segmentsFromText', () => {
       [3, 6],
       [6, 9],
     ]);
+  });
+  it('caps count so every segment is at least one frame', () => {
+    const r = segmentsFromText(10, 0.1, 30, seq());
+    expect(r).toHaveLength(3);
+    expect(() => normalizeDoc({ ...base(), segments: r })).not.toThrow();
   });
   it('stays contiguous when parts do not land on frames', () => {
     const r = segmentsFromText(3, 10, 30, seq());
@@ -148,6 +154,13 @@ describe('groupPhrases', () => {
     const r = groupPhrases([
       { start: 0, end: 2.5, text: 'один' },
       { start: 3.4, end: 5.5, text: 'два' },
+    ]);
+    expect(r).toHaveLength(2);
+  });
+  it('a pause >= 2 s breaks even a short phrase', () => {
+    const r = groupPhrases([
+      { start: 0, end: 0.5, text: 'Так.' },
+      { start: 8.5, end: 10, text: 'Далі.' },
     ]);
     expect(r).toHaveLength(2);
   });

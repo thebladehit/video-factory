@@ -295,7 +295,18 @@ export function trimEnd(doc: TimelineDoc, clipId: string, t: number, sources: So
   delta = Math.min(Math.max(delta, lo), Math.max(hi, lo));
   if (Math.abs(delta) < EPS) return doc;
   const ids = new Set(members.map((m) => m.clip.id));
-  return mapClips(doc, (c) => (ids.has(c.id) ? { ...c, duration: quantize(c.duration + delta, fps) } : c));
+  return mapClips(doc, (c) =>
+    ids.has(c.id) ? withHold({ ...c, duration: quantize(c.duration + delta, fps) }, c.hold ?? 0, fps) : c,
+  );
+}
+
+/** Ставить `hold` так, щоб лишався ≥ 1 кадр відтворення (`duration − hold ≥ 1/fps`); нульовий `hold` прибирає. */
+function withHold<T extends AnyClip>(clip: T, hold: number, fps: number): T {
+  const h = Math.min(hold, clip.duration - 1 / fps);
+  const out = { ...clip };
+  if (h > EPS) out.hold = quantize(h, fps);
+  else delete out.hold;
+  return out;
 }
 
 export function trimStart(doc: TimelineDoc, clipId: string, t: number, sources: SourceLengths): TimelineDoc {
@@ -325,16 +336,20 @@ export function trimStart(doc: TimelineDoc, clipId: string, t: number, sources: 
   delta = Math.max(Math.min(delta, hi), Math.min(lo, hi));
   if (Math.abs(delta) < EPS) return doc;
   const ids = new Set(members.map((m) => m.clip.id));
-  return mapClips(doc, (c) =>
-    ids.has(c.id)
-      ? {
-          ...c,
-          start: quantize(c.start + delta, fps),
-          duration: quantize(c.duration - delta, fps),
-          in: shiftsIn.has(c.id) ? quantize(c.in + delta * (c.speed ?? 1), fps) : c.in,
-        }
-      : c,
-  );
+  return mapClips(doc, (c) => {
+    if (!ids.has(c.id)) return c;
+    const hold = c.hold ?? 0;
+    const playLen = c.duration - hold;
+    // обрізання входить у зону `hold`: `in` не виходить за останній кадр, `hold` скорочується
+    const advance = Math.min(Math.max(delta, 0), playLen) + Math.min(delta, 0);
+    const next = {
+      ...c,
+      start: quantize(c.start + delta, fps),
+      duration: quantize(c.duration - delta, fps),
+      in: shiftsIn.has(c.id) ? quantize(c.in + advance * (c.speed ?? 1), fps) : c.in,
+    };
+    return withHold(next, hold - Math.max(0, delta - playLen), fps);
+  });
 }
 
 type Envelope = { t: number; gain: number }[];
@@ -353,6 +368,17 @@ function shiftEnvelope(env: Envelope, cut: number): Envelope {
     g = a.gain + ((b.gain - a.gain) * (cut - a.t)) / (b.t - a.t);
   }
   return [{ t: 0, gain: round6(g) }, ...after];
+}
+
+/** Огинаюча лівої частини: точки після `cut` відкидаються, на `cut` — інтерпольована. */
+function cutEnvelope(env: Envelope, cut: number): Envelope {
+  const i = env.findIndex((p) => p.t > cut + EPS);
+  if (i < 0) return env;
+  const kept = env.slice(0, i);
+  const b = env[i]!;
+  const a = env[i - 1];
+  const g = a ? a.gain + ((b.gain - a.gain) * (cut - a.t)) / (b.t - a.t) : b.gain;
+  return a && Math.abs(a.t - cut) < EPS ? kept : [...kept, { t: round6(cut), gain: round6(g) }];
 }
 
 function splitEffects(effects: Effect[], p: number): [Effect[], Effect[]] {
@@ -414,7 +440,12 @@ export function splitAt(doc: TimelineDoc, clipId: string, t: number, newId: () =
       left = { ...c, duration: leftDur, effects: le };
       right = { ...c, id: newId(), start: at, in: rightIn, duration: rightDur, effects: re };
     } else {
-      left = { ...c, duration: leftDur, fadeOut: undefined };
+      left = {
+        ...c,
+        duration: leftDur,
+        fadeOut: undefined,
+        ...(c.envelope ? { envelope: cutEnvelope(c.envelope, leftDur) } : {}),
+      };
       right = {
         ...c,
         id: newId(),

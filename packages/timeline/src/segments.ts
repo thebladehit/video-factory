@@ -86,8 +86,10 @@ export function segmentsFromText(
   fps: number,
   newId: () => string = defaultId,
 ): Segment[] {
-  if (count < 1 || duration <= 0) return [];
-  const bound = (i: number) => (i === count ? quantize(duration, fps) : quantize((duration * i) / count, fps));
+  const total = quantize(duration, fps);
+  count = Math.min(count, Math.floor(total * fps + EPS)); // кожен сегмент ≥ 1 кадр
+  if (count < 1) return [];
+  const bound = (i: number) => (i === count ? total : quantize((duration * i) / count, fps));
   return Array.from({ length: count }, (_, i) => ({ id: newId(), start: bound(i), end: bound(i + 1) }));
 }
 
@@ -114,9 +116,12 @@ export function groupPhrases(stt: SpeechSegment[]): SpeechSegment[] {
     if (!text) continue;
     if (cur) {
       const long = cur.end - cur.start >= MIN_PHRASE;
+      const gap = seg.start - cur.end;
+      // довга тиша (≥ 2 с) розриває завжди, щоб межа не лягала до тиші
       const brk =
         seg.end - cur.start > MAX_PHRASE ||
-        (long && (SENTENCE_END.test(cur.text) || seg.start - cur.end > PAUSE + EPS));
+        gap >= MIN_PHRASE - EPS ||
+        (long && (SENTENCE_END.test(cur.text) || gap > PAUSE + EPS));
       if (brk) {
         out.push(cur);
         cur = null;
