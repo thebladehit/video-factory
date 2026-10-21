@@ -112,6 +112,19 @@ export function useEditorSession(project: ProjectView) {
   const [subtitles, setSubtitles] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
   const readOnly = isReadOnlyMode(mode);
+  /** Глибина «замків»: поки йде перемикання/відокремлення, стор лише для читання */
+  const lockDepth = useRef(0);
+  const locked = useCallback(
+    async <T>(fn: () => Promise<T>): Promise<T> => {
+      if (lockDepth.current++ === 0) store.getState().setLocked(true);
+      try {
+        return await fn();
+      } finally {
+        if (--lockDepth.current === 0) store.getState().setLocked(false);
+      }
+    },
+    [store],
+  );
   const activeAutosave = useCallback(() => {
     const k = keyOf(store.getState().mode);
     return k === null ? null : (saves.map.get(k) ?? null);
@@ -321,49 +334,50 @@ export function useEditorSession(project: ProjectView) {
    * (`discard` — ні: «Перезавантажити» після конфлікту відкидає локальні зміни). Не вдалося зберегти — режим не змінюється.
    */
   const loadMode = useCallback(
-    async (next: EditorMode, opts: { discard?: boolean } = {}): Promise<boolean> => {
-      const cur = activeAutosave();
-      if (cur && !opts.discard) {
-        await cur.flush();
-        if (cur.hasPending()) {
-          toast.error('Не вдалося зберегти проєкт — режим не змінено. Повторіть збереження.');
-          return false;
+    (next: EditorMode, opts: { discard?: boolean } = {}): Promise<boolean> =>
+      locked(async () => {
+        const cur = activeAutosave();
+        if (cur && !opts.discard) {
+          await cur.flush();
+          if (cur.hasPending()) {
+            toast.error('Не вдалося зберегти проєкт — режим не змінено. Повторіть збереження.');
+            return false;
+          }
         }
-      }
-      let nextDoc: TimelineDoc;
-      let nextSubs: string | null = null;
-      let nextMode: EditorMode = next;
-      let key: string | null;
-      let version = 0;
-      if (next.kind === 'edit') {
-        const fresh = await trpcClient.projects.get.query({ id: project.id });
-        nextDoc = fresh.timeline;
-        version = fresh.version;
-        merge(fresh.assets);
-        key = BASE_KEY;
-      } else {
-        const l = await trpcClient.voice.localized.query({ projectId: project.id, language: next.language });
-        nextDoc = l.timeline;
-        nextSubs = l.subtitles;
-        version = l.version;
-        merge(l.assets);
-        nextMode = { kind: 'language', language: next.language, separated: l.separated };
-        key = keyOf(nextMode);
-      }
-      if (key !== null) {
-        const existing = saves.map.get(key);
-        if (existing) existing.reset(version);
-        else saves.map.set(key, saves.make(key, version));
-      }
-      engine.pause();
-      ui.getState().set({ playing: false, selected: [], invalidClips: [] });
-      activeKey.current = key;
-      setSubtitles(nextSubs);
-      setSaveState('saved');
-      store.getState().switchMode(nextMode, nextDoc);
-      return true;
-    },
-    [project.id, store, merge, engine, ui, saves, activeAutosave],
+        let nextDoc: TimelineDoc;
+        let nextSubs: string | null = null;
+        let nextMode: EditorMode = next;
+        let key: string | null;
+        let version = 0;
+        if (next.kind === 'edit') {
+          const fresh = await trpcClient.projects.get.query({ id: project.id });
+          nextDoc = fresh.timeline;
+          version = fresh.version;
+          merge(fresh.assets);
+          key = BASE_KEY;
+        } else {
+          const l = await trpcClient.voice.localized.query({ projectId: project.id, language: next.language });
+          nextDoc = l.timeline;
+          nextSubs = l.subtitles;
+          version = l.version;
+          merge(l.assets);
+          nextMode = { kind: 'language', language: next.language, separated: l.separated };
+          key = keyOf(nextMode);
+        }
+        if (key !== null) {
+          const existing = saves.map.get(key);
+          if (existing) existing.reset(version);
+          else saves.map.set(key, saves.make(key, version));
+        }
+        engine.pause();
+        ui.getState().set({ playing: false, selected: [], invalidClips: [] });
+        activeKey.current = key;
+        setSubtitles(nextSubs);
+        setSaveState('saved');
+        store.getState().switchMode(nextMode, nextDoc);
+        return true;
+      }),
+    [project.id, store, merge, engine, ui, saves, activeAutosave, locked],
   );
 
   const switchTo = useCallback(
@@ -385,8 +399,10 @@ export function useEditorSession(project: ProjectView) {
     async (language: string) => {
       setSwitching(true);
       try {
-        await trpcClient.voice.separate.mutate({ projectId: project.id, language });
-        await loadMode({ kind: 'language', language, separated: true });
+        await locked(async () => {
+          await trpcClient.voice.separate.mutate({ projectId: project.id, language });
+          await loadMode({ kind: 'language', language, separated: true });
+        });
         void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId: project.id }) });
       } catch (e) {
         toast.error((e as Error).message);
@@ -394,7 +410,7 @@ export function useEditorSession(project: ProjectView) {
         setSwitching(false);
       }
     },
-    [project.id, loadMode, qc, trpc],
+    [project.id, loadMode, locked, qc, trpc],
   );
 
   /** «Повернути до спільного»: власна копія мови видаляється (її незбережені зміни теж), далі — перегляд. */
@@ -402,10 +418,14 @@ export function useEditorSession(project: ProjectView) {
     async (language: string) => {
       setSwitching(true);
       try {
-        saves.map.get(language)?.reset(1);
-        await trpcClient.voice.unseparate.mutate({ projectId: project.id, language });
-        saves.map.delete(language);
-        await loadMode({ kind: 'language', language, separated: false }, { discard: true });
+        await locked(async () => {
+          // спершу дочекатися збереження, що вже йде; копію видаляє сервер — і лише після успіху скидаємо клієнтський стан
+          await saves.map.get(language)?.flush();
+          await trpcClient.voice.unseparate.mutate({ projectId: project.id, language });
+          saves.map.get(language)?.reset(1);
+          saves.map.delete(language);
+          await loadMode({ kind: 'language', language, separated: false }, { discard: true });
+        });
         void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId: project.id }) });
       } catch (e) {
         toast.error((e as Error).message);
@@ -413,7 +433,7 @@ export function useEditorSession(project: ProjectView) {
         setSwitching(false);
       }
     },
-    [project.id, loadMode, saves, qc, trpc],
+    [project.id, loadMode, locked, saves, qc, trpc],
   );
 
   /** «Перезавантажити» після конфлікту: серверна версія поточного документа, локальні зміни відкинуто. */

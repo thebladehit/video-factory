@@ -171,3 +171,21 @@ describe('bindAutosave: documents never mix', () => {
     off();
   });
 });
+
+describe('locked store', () => {
+  it('ignores edits while locked, ends a running gesture as one step, and locking is not history', () => {
+    const { store, clipId } = seeded();
+    store.getState().beginGesture();
+    store.getState().apply((d) => moveClip(d, clipId, 2, {}));
+    store.getState().setLocked(true);
+    expect(store.temporal.getState().pastStates).toHaveLength(1);
+    store.getState().apply((d) => moveClip(d, clipId, 9, {}));
+    store.getState().beginGesture();
+    expect(startOf(store, clipId)).toBe(2);
+    store.getState().setLocked(false);
+    expect(store.temporal.getState().pastStates).toHaveLength(1);
+    store.getState().apply((d) => moveClip(d, clipId, 5, {}));
+    expect(startOf(store, clipId)).toBe(5);
+    expect(store.temporal.getState().pastStates).toHaveLength(2);
+  });
+});

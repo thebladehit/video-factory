@@ -14,6 +14,9 @@ export interface EditorState {
   doc: TimelineDoc;
   /** Режим — поза історією zundo (`partialize`) */
   mode: EditorMode;
+  /** Тимчасово лише для читання (перемикання режиму, відокремлення): зміни ігноруються, жест завершується */
+  locked: boolean;
+  setLocked(locked: boolean): void;
   /** Інший документ цілком (режим + документ атомарно); історія очищується, зберігання не запускається */
   switchMode(mode: EditorMode, doc: TimelineDoc): void;
   /** Чиста операція над документом; без змін — без кроку історії */
@@ -46,6 +49,14 @@ export function createEditorStore(initial: TimelineDoc) {
       (set, get) => ({
         doc: initial,
         mode: { kind: 'edit' },
+        locked: false,
+        setLocked(locked) {
+          if (locked) get().endGesture();
+          // не крок історії
+          store.temporal.getState().pause();
+          set({ locked });
+          store.temporal.getState().resume();
+        },
         switchMode(mode, doc) {
           gestureStart = null;
           store.temporal.getState().pause();
@@ -54,12 +65,12 @@ export function createEditorStore(initial: TimelineDoc) {
           store.temporal.getState().clear();
         },
         apply(op) {
-          if (isReadOnlyMode(get().mode)) return;
+          if (get().locked || isReadOnlyMode(get().mode)) return;
           const next = op(get().doc);
           if (next !== get().doc) set({ doc: next });
         },
         beginGesture() {
-          if (gestureStart || isReadOnlyMode(get().mode)) return;
+          if (gestureStart || get().locked || isReadOnlyMode(get().mode)) return;
           gestureStart = get().doc;
           store.temporal.getState().pause();
         },

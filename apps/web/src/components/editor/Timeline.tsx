@@ -89,6 +89,7 @@ export function Timeline({
   onTogglePlay,
   onDropAssets,
   onDropFiles,
+  segmentKeys = false,
 }: {
   store: EditorStore;
   ui: UiStore;
@@ -97,6 +98,8 @@ export function Timeline({
   onTogglePlay(): void;
   onDropAssets(assetIds: string[], at: number, trackId?: string): void;
   onDropFiles(files: File[], at: number, trackId?: string): void;
+  /** Смуга сегментів видима: ⇧S ріже сегмент (інакше ⇧S, як і S, ріже кліпи) */
+  segmentKeys?: boolean;
 }) {
   const doc = useStore(store, (s) => s.doc);
   const pps = useStore(ui, (s) => s.pxPerSec);
@@ -241,7 +244,7 @@ export function Timeline({
         store.temporal.getState().redo();
       } else if (mod) {
         return;
-      } else if (e.code === 'KeyS' && e.shiftKey) {
+      } else if (e.code === 'KeyS' && e.shiftKey && segmentKeys) {
         // ⇧S — розрізати сегмент озвучки під плейхедом (лише «Монтаж»; у перегляді мови зміни ігноруються)
         e.preventDefault();
         store.getState().apply((doc) => splitSegmentAt(doc, ph));
@@ -269,7 +272,7 @@ export function Timeline({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [store, ui, onSeek, onTogglePlay]);
+  }, [store, ui, onSeek, onTogglePlay, segmentKeys]);
 
   function seekFromRuler(e: ReactPointerEvent<HTMLDivElement>) {
     onSeek(timeAt(e.clientX));

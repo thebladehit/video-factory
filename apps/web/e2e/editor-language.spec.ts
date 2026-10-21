@@ -2,8 +2,6 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 const TONE = readFileSync(new URL('./fixtures/tone.mp4', import.meta.url));
-const SHOTS =
-  '/private/tmp/claude-501/-Users-boosted-projects-video-creator-web/54632240-2cfc-4f42-a1fc-d6e3c29fdfa2/scratchpad';
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 async function newProject(page: Page, title: string) {
@@ -99,7 +97,6 @@ test('language view is read-only, separated language is its own document, base e
   await page.getByTestId('split-segment').click();
   await expect(page.getByTestId('strip-segment')).toHaveCount(2);
   await savedState(page);
-  await page.screenshot({ path: `${SHOTS}/t16-edit-mode.png` });
 
   const full = await duration(videoClip(page));
 
@@ -113,7 +110,6 @@ test('language view is read-only, separated language is its own document, base e
   expect(await duration(videoClip(page))).toBe(full);
   await page.waitForTimeout(1800);
   expect(saves).toHaveLength(0);
-  await page.screenshot({ path: `${SHOTS}/t16-language-view.png` });
 
   // відокремити: тепер редагується й зберігається у власний документ
   await page.getByTestId('separate').click();
@@ -134,7 +130,6 @@ test('language view is read-only, separated language is its own document, base e
   );
   const enVideo = enDoc.timeline.tracks.find((t) => t.kind === 'video')!.clips[0]!.duration;
   expect(enVideo).toBeCloseTo(trimmed, 3);
-  await page.screenshot({ path: `${SHOTS}/t16-separated.png` });
 
   // «Монтаж» не зачеплений; правка Монтажу не потрапляє в мовний документ
   await page.getByTestId('mode-edit').click();
@@ -162,9 +157,24 @@ test('language view is read-only, separated language is its own document, base e
   expect(baseDoc.timeline.tracks.find((t) => t.kind === 'video')!.clips[0]!.duration).toBeCloseTo(baseTrimmed, 3);
 
   // рендер мови з меню
+  // запит перехоплюємо: справжній рендер лишив би зайнятим воркер для наступних specs
+  const started: string[] = [];
+  await page.route('**/trpc/renders.start**', async (route) => {
+    started.push(route.request().postData() ?? '');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ result: { data: { renderId: 'r', jobId: 'j' } } }]),
+    });
+  });
   await page.getByTestId('render-menu').click();
   await page.getByTestId('render-en-draft').click();
   await expect(page.getByText('EN: Чернетка 720p — у черзі')).toBeVisible();
+  expect(started).toHaveLength(1);
+  const body = JSON.parse(started[0]!)['0'] as { language: string; preset: string; version: number };
+  expect(body).toMatchObject({ language: 'en', preset: 'draft' });
+  expect(body.version).toBeGreaterThanOrEqual(1);
+  await page.unroute('**/trpc/renders.start**');
 
   // повернути до спільного — з підтвердженням
   await page.getByTestId('mode-en').click();
@@ -172,5 +182,16 @@ test('language view is read-only, separated language is its own document, base e
   await page.getByTestId('unseparate-ok').click();
   await expect(page.getByTestId('language-banner')).toContainText('Перегляд мови EN');
   await expect(page.getByTestId('mode-en')).not.toContainText('відокремлена');
-  await page.screenshot({ path: `${SHOTS}/t16-unseparated.png` });
+});
+
+test('plain project (no voice): Shift+S still splits the clip, no segments appear', async ({ page }) => {
+  await newProject(page, `Plain ${uid()}`);
+  await dropFile(page, { name: `tone-${uid()}.mp4`, type: 'video/mp4', bytes: TONE });
+  await expect(page.getByTestId('track-audio').locator('[data-clip-id]')).toHaveCount(1, { timeout: 30_000 });
+  await videoClip(page).click();
+  await page.keyboard.press('ArrowRight'); // плейхед усередину кліпа
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+S');
+  await expect(page.getByTestId('track-video').locator('[data-clip-id]')).toHaveCount(2);
+  await expect(page.getByTestId('editor-segment-strip')).toHaveCount(0);
 });

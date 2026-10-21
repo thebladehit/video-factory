@@ -165,6 +165,7 @@ export function EditorPage({ project }: { project: ProjectView }) {
       )}
       <div className="flex min-h-0 flex-col [&>*]:min-h-0 [&>*]:flex-1">
         <Timeline
+          segmentKeys={mode.kind === 'edit' && hasVoice}
           store={s.store}
           ui={s.ui}
           assets={s.assets}
