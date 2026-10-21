@@ -2,8 +2,20 @@ import { temporal } from 'zundo';
 import { createStore } from 'zustand/vanilla';
 import type { TimelineDoc } from '@vf/shared';
 
+/**
+ * Що зараз у сторі: `edit` — базовий документ («Монтаж»); `language` — документ мови.
+ * Не відокремлена мова — лише перегляд `voice.localized` (зміни ігноруються); відокремлена — власний документ.
+ */
+export type EditorMode = { kind: 'edit' } | { kind: 'language'; language: string; separated: boolean };
+
+export const isReadOnlyMode = (m: EditorMode): boolean => m.kind === 'language' && !m.separated;
+
 export interface EditorState {
   doc: TimelineDoc;
+  /** Режим — поза історією zundo (`partialize`) */
+  mode: EditorMode;
+  /** Інший документ цілком (режим + документ атомарно); історія очищується, зберігання не запускається */
+  switchMode(mode: EditorMode, doc: TimelineDoc): void;
   /** Чиста операція над документом; без змін — без кроку історії */
   apply(op: (d: TimelineDoc) => TimelineDoc): void;
   /** Жест (рух, трім, повзунок) — один крок історії: проміжні оновлення не записуються */
@@ -33,12 +45,21 @@ export function createEditorStore(initial: TimelineDoc) {
     temporal(
       (set, get) => ({
         doc: initial,
+        mode: { kind: 'edit' },
+        switchMode(mode, doc) {
+          gestureStart = null;
+          store.temporal.getState().pause();
+          set({ mode, doc });
+          store.temporal.getState().resume();
+          store.temporal.getState().clear();
+        },
         apply(op) {
+          if (isReadOnlyMode(get().mode)) return;
           const next = op(get().doc);
           if (next !== get().doc) set({ doc: next });
         },
         beginGesture() {
-          if (gestureStart) return;
+          if (gestureStart || isReadOnlyMode(get().mode)) return;
           gestureStart = get().doc;
           store.temporal.getState().pause();
         },

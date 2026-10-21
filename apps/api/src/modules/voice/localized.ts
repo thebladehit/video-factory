@@ -192,10 +192,21 @@ export async function getLocalized(
   transcripts: Record<string, TranscriptWords>;
   fits: SegmentFit[];
   assets: Record<string, EditorAsset>;
+  /** Мова відокремлена: `timeline` — її власний документ з версією `version` (інакше — версія базового) */
+  separated: boolean;
+  version: number;
 }> {
   const l = await buildLocalized(deps, userId, input.projectId, input.language);
   const assets = await editorAssets(deps, userId, timelineAssetIds(l.timeline));
-  return { timeline: l.timeline, subtitles: l.subtitles, transcripts: l.transcripts, fits: l.fits, assets };
+  return {
+    timeline: l.timeline,
+    subtitles: l.subtitles,
+    transcripts: l.transcripts,
+    fits: l.fits,
+    assets,
+    separated: l.separated,
+    version: l.version,
+  };
 }
 
 /** Відокремити мову: поточний документ мови стає її власною копією (версія 1). Повторно — без змін. */

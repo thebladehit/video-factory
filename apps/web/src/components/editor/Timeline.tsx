@@ -12,6 +12,7 @@ import {
   trimEnd,
   trimStart,
   moveClip,
+  splitSegmentAt,
 } from '@vf/timeline';
 import { Plus } from 'lucide-react';
 import { useEffect, useMemo, useRef, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
@@ -240,6 +241,10 @@ export function Timeline({
         store.temporal.getState().redo();
       } else if (mod) {
         return;
+      } else if (e.code === 'KeyS' && e.shiftKey) {
+        // ⇧S — розрізати сегмент озвучки під плейхедом (лише «Монтаж»; у перегляді мови зміни ігноруються)
+        e.preventDefault();
+        store.getState().apply((doc) => splitSegmentAt(doc, ph));
       } else if (e.code === 'KeyS') {
         e.preventDefault();
         const d = store.getState().doc;

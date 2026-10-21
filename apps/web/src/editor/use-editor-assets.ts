@@ -11,11 +11,16 @@ import { trpcClient, useTRPC } from '@/lib/trpc';
 import { Autosave, type SaveState } from './autosave';
 import { reconcileUploads, type TrackedUpload } from './uploads';
 import { createCanvasPreviewEngine } from './preview-engine';
-import { createEditorStore, createUiStore } from './store';
+import { bindAutosave } from './mode-sync';
+import { createEditorStore, createUiStore, isReadOnlyMode, type EditorMode } from './store';
 import { isPresent, type AnyAsset, type LocalAsset } from './types';
 
 const REFRESH_BEFORE_MS = 5 * 60_000;
 export const PHOTO_SECONDS = 5;
+
+/** Ключ автозбереження в реєстрі: базовий документ — '', мова — її код */
+const BASE_KEY = '';
+const keyOf = (m: EditorMode): string | null => (m.kind === 'edit' ? BASE_KEY : m.separated ? m.language : null);
 
 const assetIdsOf = (doc: TimelineDoc) => [...new Set(allClips(doc).map((c) => c.assetId))];
 
@@ -79,31 +84,62 @@ export function useEditorSession(project: ProjectView) {
     [merge],
   );
 
-  const [autosave] = useState(
-    () =>
+  /** Ключ автозбереження, чий стан показується (стани решти ігноруються) */
+  const activeKey = useRef<string | null>(BASE_KEY);
+  /** Автозбереження документів: базового ('') і відокремлених мов; кожне пише лише у свій документ */
+  const [saves] = useState(() => {
+    const map = new Map<string, Autosave>();
+    const make = (key: string, version: number) =>
       new Autosave({
-        save: (timeline, baseVersion) => trpcClient.projects.save.mutate({ id: project.id, timeline, baseVersion }),
+        save: (timeline, baseVersion) =>
+          trpcClient.projects.save.mutate({
+            id: project.id,
+            ...(key === BASE_KEY ? {} : { language: key }),
+            timeline,
+            baseVersion,
+          }),
         debounceMs: 1500,
-        version: project.version,
-        onState: setSaveState,
-      }),
-  );
+        version,
+        onState: (s) => {
+          if (activeKey.current === key) setSaveState(s);
+        },
+      });
+    map.set(BASE_KEY, make(BASE_KEY, project.version));
+    return { map, make };
+  });
+  const autosave = saves.map.get(BASE_KEY)!;
+  const mode = useStore(store, (s) => s.mode);
+  const [subtitles, setSubtitles] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const readOnly = isReadOnlyMode(mode);
+  const activeAutosave = useCallback(() => {
+    const k = keyOf(store.getState().mode);
+    return k === null ? null : (saves.map.get(k) ?? null);
+  }, [store, saves]);
 
-  // документ → автозбереження і прев'ю
+  // документ → автозбереження свого режиму; файли з бібліотеки, яких ще немає в мапі
   useEffect(() => {
+    const off = bindAutosave(store, (m) => {
+      const k = keyOf(m);
+      return k === null ? null : (saves.map.get(k) ?? null);
+    });
     let prev = store.getState().doc;
-    return store.subscribe((s) => {
+    const off2 = store.subscribe((s) => {
       if (s.doc === prev) return;
       prev = s.doc;
-      autosave.change(s.doc);
-      // файл з бібліотеки, якого ще немає в мапі
       const unknown = assetIdsOf(s.doc).filter((id) => !(id in assetsRef.current) && !awaiting.current.has(id));
       if (unknown.length) void fetchAssets(unknown);
     });
-  }, [store, autosave, fetchAssets]);
+    return () => {
+      off();
+      off2();
+    };
+  }, [store, saves, fetchAssets]);
 
   const doc = useStore(store, (s) => s.doc);
   useEffect(() => engine.setDoc(doc, assets), [engine, doc, assets]);
+  // субтитри — лише в мовному режимі (ASS приходить з сервера разом із документом мови)
+  useEffect(() => engine.setSubtitles(mode.kind === 'language' ? subtitles : null), [engine, mode, subtitles]);
 
   useEffect(() => {
     const offs = [
@@ -130,12 +166,13 @@ export function useEditorSession(project: ProjectView) {
 
   // вихід зі сторінки
   useEffect(() => {
+    const all = () => [...saves.map.values()];
     const onHide = () => {
-      if (document.visibilityState === 'hidden') void autosave.flush();
+      if (document.visibilityState === 'hidden') all().forEach((a) => void a.flush());
     };
     const onUnload = (e: BeforeUnloadEvent) => {
-      if (autosave.hasPending()) {
-        void autosave.flush();
+      if (all().some((a) => a.hasPending())) {
+        all().forEach((a) => void a.flush());
         e.preventDefault();
       }
     };
@@ -144,9 +181,9 @@ export function useEditorSession(project: ProjectView) {
     return () => {
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('beforeunload', onUnload);
-      void autosave.flush();
+      [...saves.map.values()].forEach((a) => void a.flush());
     };
-  }, [autosave]);
+  }, [saves]);
 
   // файли з ОС: прогрес, id у бібліотеці, помилки й скасування
   useEffect(() => {
@@ -209,6 +246,7 @@ export function useEditorSession(project: ProjectView) {
   /** Файли бібліотеки на таймлайн (панель, drop): по черзі від моменту `at`. */
   const addAssets = useCallback(
     async (ids: string[], at: number, trackId?: string) => {
+      if (isReadOnlyMode(store.getState().mode)) return void toast.info('Перегляд мови — редагування в «Монтажі»');
       const known = { ...assetsRef.current };
       const need = ids.filter((id) => !isPresent(known[id]));
       if (need.length) Object.assign(known, await fetchAssets(need));
@@ -236,6 +274,7 @@ export function useEditorSession(project: ProjectView) {
   /** Файли з ОС: одразу кліп з blob:-URL, паралельно — завантаження в бібліотеку. */
   const addFiles = useCallback(
     async (files: File[], at: number, trackId?: string) => {
+      if (isReadOnlyMode(store.getState().mode)) return void toast.info('Перегляд мови — редагування в «Монтажі»');
       let cursor = at;
       for (const file of files) {
         const kind = kindForMime(file.type);
@@ -277,22 +316,126 @@ export function useEditorSession(project: ProjectView) {
     [uploads, store, merge],
   );
 
-  /** «Перезавантажити» після конфлікту: серверна версія, локальні зміни відкинуто. */
-  const reload = useCallback(async () => {
-    const fresh = await trpcClient.projects.get.query({ id: project.id });
-    store.getState().replaceDoc(fresh.timeline);
-    merge(fresh.assets);
-    autosave.reset(fresh.version);
-    void qc.invalidateQueries({ queryKey: trpc.projects.get.queryKey({ id: project.id }) });
-  }, [project.id, store, merge, autosave, qc, trpc]);
+  /**
+   * Завантажити документ режиму з сервера й покласти в стор. Спершу зберігається поточний документ
+   * (`discard` — ні: «Перезавантажити» після конфлікту відкидає локальні зміни). Не вдалося зберегти — режим не змінюється.
+   */
+  const loadMode = useCallback(
+    async (next: EditorMode, opts: { discard?: boolean } = {}): Promise<boolean> => {
+      const cur = activeAutosave();
+      if (cur && !opts.discard) {
+        await cur.flush();
+        if (cur.hasPending()) {
+          toast.error('Не вдалося зберегти проєкт — режим не змінено. Повторіть збереження.');
+          return false;
+        }
+      }
+      let nextDoc: TimelineDoc;
+      let nextSubs: string | null = null;
+      let nextMode: EditorMode = next;
+      let key: string | null;
+      let version = 0;
+      if (next.kind === 'edit') {
+        const fresh = await trpcClient.projects.get.query({ id: project.id });
+        nextDoc = fresh.timeline;
+        version = fresh.version;
+        merge(fresh.assets);
+        key = BASE_KEY;
+      } else {
+        const l = await trpcClient.voice.localized.query({ projectId: project.id, language: next.language });
+        nextDoc = l.timeline;
+        nextSubs = l.subtitles;
+        version = l.version;
+        merge(l.assets);
+        nextMode = { kind: 'language', language: next.language, separated: l.separated };
+        key = keyOf(nextMode);
+      }
+      if (key !== null) {
+        const existing = saves.map.get(key);
+        if (existing) existing.reset(version);
+        else saves.map.set(key, saves.make(key, version));
+      }
+      engine.pause();
+      ui.getState().set({ playing: false, selected: [], invalidClips: [] });
+      activeKey.current = key;
+      setSubtitles(nextSubs);
+      setSaveState('saved');
+      store.getState().switchMode(nextMode, nextDoc);
+      return true;
+    },
+    [project.id, store, merge, engine, ui, saves, activeAutosave],
+  );
 
-  /** «Перезаписати моєю версією»: зберегти поверх актуальної версії. */
+  const switchTo = useCallback(
+    async (next: EditorMode) => {
+      setSwitching(true);
+      try {
+        await loadMode(next);
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [loadMode],
+  );
+
+  /** «Відокремити мову»: поточний документ мови стає її власною копією → редагування. */
+  const separate = useCallback(
+    async (language: string) => {
+      setSwitching(true);
+      try {
+        await trpcClient.voice.separate.mutate({ projectId: project.id, language });
+        await loadMode({ kind: 'language', language, separated: true });
+        void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId: project.id }) });
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [project.id, loadMode, qc, trpc],
+  );
+
+  /** «Повернути до спільного»: власна копія мови видаляється (її незбережені зміни теж), далі — перегляд. */
+  const unseparate = useCallback(
+    async (language: string) => {
+      setSwitching(true);
+      try {
+        saves.map.get(language)?.reset(1);
+        await trpcClient.voice.unseparate.mutate({ projectId: project.id, language });
+        saves.map.delete(language);
+        await loadMode({ kind: 'language', language, separated: false }, { discard: true });
+        void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId: project.id }) });
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [project.id, loadMode, saves, qc, trpc],
+  );
+
+  /** «Перезавантажити» після конфлікту: серверна версія поточного документа, локальні зміни відкинуто. */
+  const reload = useCallback(async () => {
+    await loadMode(store.getState().mode, { discard: true });
+    void qc.invalidateQueries({ queryKey: trpc.projects.get.queryKey({ id: project.id }) });
+  }, [project.id, store, loadMode, qc, trpc]);
+
+  /** «Перезаписати моєю версією»: зберегти поточний документ поверх актуальної версії. */
   const overwrite = useCallback(async () => {
-    const fresh = await trpcClient.projects.get.query({ id: project.id });
-    autosave.setVersion(fresh.version);
-    autosave.change(store.getState().doc);
-    await autosave.flush();
-  }, [project.id, autosave, store]);
+    const m = store.getState().mode;
+    const k = keyOf(m);
+    const cur = k === null ? null : saves.map.get(k);
+    if (!cur) return;
+    const fresh = await trpcClient.projects.get.query({
+      id: project.id,
+      ...(m.kind === 'language' ? { language: m.language } : {}),
+    });
+    cur.setVersion(fresh.version);
+    cur.change(store.getState().doc);
+    await cur.flush();
+  }, [project.id, saves, store]);
 
   const seek = useCallback((t: number) => engine.seek(t), [engine]);
   const togglePlay = useCallback(() => {
@@ -317,6 +460,14 @@ export function useEditorSession(project: ProjectView) {
     assets,
     saveState,
     autosave,
+    activeAutosave,
+    saves: saves.map,
+    mode,
+    readOnly,
+    switching,
+    switchTo,
+    separate,
+    unseparate,
     addAssets,
     addFiles,
     reload,

@@ -1,7 +1,15 @@
 import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { estimateCost, type CatalogItem } from '@vf/ai';
 import { PRESETS, captionStyleSchema, type CaptionStyle } from '@vf/captions';
-import { assets, captionStyles, projects, transcripts, userSettings, voiceLines } from '@vf/db';
+import {
+  assets,
+  captionStyles,
+  projectLanguageTimelines,
+  projects,
+  transcripts,
+  userSettings,
+  voiceLines,
+} from '@vf/db';
 import {
   AppError,
   emptyTimeline,
@@ -59,6 +67,8 @@ export interface VoiceView {
   segments: Segment[];
   base: string;
   languages: string[];
+  /** Мови з власним (відокремленим) документом */
+  separated: string[];
   voice: ProjectVoice;
   lines: Record<string, Record<string, VoiceLineView>>;
   fits: Record<string, ({ segmentId: string } & Omit<SegmentFit, 'segmentId'>)[]>;
@@ -212,12 +222,21 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
   }
 
   const styles = (await listCaptionStyles(deps, userId)).map(({ id, name, style }) => ({ id, name, style }));
+  const separated = (
+    await deps.db
+      .select({ language: projectLanguageTimelines.language })
+      .from(projectLanguageTimelines)
+      .where(eq(projectLanguageTimelines.projectId, p.id))
+  )
+    .map((r) => r.language)
+    .filter((l) => languages.includes(l));
   return {
     projectId: p.id,
     version: p.timelineVersion,
     segments,
     base: p.baseLanguage,
     languages,
+    separated,
     voice,
     lines,
     fits,

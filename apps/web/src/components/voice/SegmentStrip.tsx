@@ -99,7 +99,7 @@ export function SegmentStrip({
   const apply = (op: Parameters<ReturnType<EditorStore['getState']>['apply']>[0]) => store.getState().apply(op);
 
   return (
-    <div data-testid="segment-strip" className="grid gap-1.5">
+    <div data-testid="segment-strip" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5">
       <div className="flex flex-wrap items-center gap-1">
         <Button
           size="sm"
