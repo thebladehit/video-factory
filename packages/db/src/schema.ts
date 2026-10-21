@@ -9,13 +9,24 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   real,
   text,
   timestamp,
+  unique,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { ASSET_STATUSES, CAPABILITIES, FORMATS, JOB_STATUSES } from '@vf/shared';
-import type { DefaultSlot, ModelRef, TimelineDoc, VideoFormat } from '@vf/shared';
+import type {
+  DefaultSlot,
+  ModelRef,
+  ProjectVoice,
+  TimelineDoc,
+  VideoFormat,
+  VoiceChoice,
+  VoiceDefaults,
+  Word,
+} from '@vf/shared';
 
 const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -36,6 +47,8 @@ export const userSettings = pgTable('user_settings', {
   channelStyle: text('channel_style').notNull().default(''),
   /** Vision-теги для завантажених файлів (коштує грошей — вмикається свідомо) */
   autoTagUploads: boolean('auto_tag_uploads').notNull().default(false),
+  /** Голос за замовчуванням для кожної мови */
+  voices: jsonb('voices').$type<VoiceDefaults>().notNull().default({}),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -171,6 +184,7 @@ export const projects = pgTable(
       .array()
       .notNull()
       .default(sql`'{uk}'::text[]`),
+    voice: jsonb('voice').$type<ProjectVoice>().notNull().default({} as ProjectVoice),
     createdAt: createdAt(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -196,6 +210,8 @@ export const renders = pgTable(
     language: text('language'),
     timelineSnapshot: jsonb('timeline_snapshot').$type<TimelineDoc>().notNull(),
     timelineVersion: integer('timeline_version').notNull(),
+    /** ASS, згенерований на старті рендеру (знімок разом із timeline_snapshot) */
+    subtitles: text('subtitles'),
     /** Дзеркало статусу задачі */
     status: text('status', { enum: JOB_STATUSES }).notNull().default('queued'),
     jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
@@ -210,4 +226,101 @@ export const renders = pgTable(
     check('renders_preset_check', sql`${t.preset} in (${inList(RENDER_PRESETS)})`),
     check('renders_status_check', sql`${t.status} in (${inList(JOB_STATUSES)})`),
   ],
+);
+
+export const VOICE_TEXT_ORIGINS = ['manual', 'stt', 'translated'] as const;
+export const VOICE_LINE_STATUSES = ['empty', 'queued', 'running', 'ready', 'failed'] as const;
+export const TRANSCRIPT_SOURCES = ['tts', 'stt'] as const;
+export const TRANSCRIPT_TIMINGS = ['aligned', 'estimated', 'stt'] as const;
+
+export const transcripts = pgTable(
+  'transcripts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    assetId: uuid('asset_id')
+      .notNull()
+      .references(() => assets.id, { onDelete: 'cascade' }),
+    language: text('language').notNull(),
+    source: text('source', { enum: TRANSCRIPT_SOURCES }).notNull(),
+    text: text('text').notNull(),
+    words: jsonb('words').$type<Word[]>().notNull(),
+    timing: text('timing', { enum: TRANSCRIPT_TIMINGS }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('transcripts_asset_idx').on(t.assetId),
+    check('transcripts_source_check', sql`${t.source} in (${inList(TRANSCRIPT_SOURCES)})`),
+    check('transcripts_timing_check', sql`${t.timing} in (${inList(TRANSCRIPT_TIMINGS)})`),
+  ],
+);
+
+/** Рядок «сегмент × мова»: текст, голос і результат озвучки */
+export const voiceLines = pgTable(
+  'voice_lines',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    segmentId: text('segment_id').notNull(),
+    language: text('language').notNull(),
+    text: text('text').notNull().default(''),
+    textOrigin: text('text_origin', { enum: VOICE_TEXT_ORIGINS }).notNull().default('manual'),
+    /** Хеш базового тексту на момент перекладу */
+    sourceHash: text('source_hash'),
+    /** Голос, яким озвучено */
+    voice: jsonb('voice').$type<VoiceChoice>(),
+    audioAssetId: uuid('audio_asset_id').references(() => assets.id, { onDelete: 'set null' }),
+    transcriptId: uuid('transcript_id').references(() => transcripts.id, { onDelete: 'set null' }),
+    durationMs: integer('duration_ms'),
+    /** Хеш text + voice на момент озвучки */
+    voicedHash: text('voiced_hash'),
+    status: text('status', { enum: VOICE_LINE_STATUSES }).notNull().default('empty'),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    error: text('error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('voice_lines_project_segment_language_key').on(t.projectId, t.segmentId, t.language),
+    index('voice_lines_project_language_idx').on(t.projectId, t.language),
+    check('voice_lines_text_origin_check', sql`${t.textOrigin} in (${inList(VOICE_TEXT_ORIGINS)})`),
+    check('voice_lines_status_check', sql`${t.status} in (${inList(VOICE_LINE_STATUSES)})`),
+  ],
+);
+
+export const captionStyles = pgTable(
+  'caption_styles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    style: jsonb('style').notNull(),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('caption_styles_user_idx').on(t.userId)],
+);
+
+/** Мовна версія таймлайну (localize) для кожної мови проєкту */
+export const projectLanguageTimelines = pgTable(
+  'project_language_timelines',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    language: text('language').notNull(),
+    timeline: jsonb('timeline').$type<TimelineDoc>().notNull(),
+    timelineVersion: integer('timeline_version').notNull(),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.language] })],
 );
