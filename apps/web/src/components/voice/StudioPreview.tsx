@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { PreviewPane } from '@/components/editor/PreviewPane';
 import { createCanvasPreviewEngine } from '@/editor/preview-engine';
@@ -15,8 +15,14 @@ export function StudioPreview({ projectId, language }: { projectId: string; lang
   const localized = useLocalized(projectId, language);
   const data = localized.data;
 
+  // той самий документ і ті самі URL (структурно) — рушій не чіпаємо, щоб не збивати відтворення
+  const applied = useRef('');
   useEffect(() => {
-    if (data) engine.setDoc(data.timeline, data.assets);
+    if (!data) return;
+    const sig = JSON.stringify([data.timeline, data.assets]);
+    if (sig === applied.current) return;
+    applied.current = sig;
+    engine.setDoc(data.timeline, data.assets);
   }, [engine, data]);
   useEffect(() => engine.setSubtitles(data?.subtitles ?? null), [engine, data?.subtitles]);
 

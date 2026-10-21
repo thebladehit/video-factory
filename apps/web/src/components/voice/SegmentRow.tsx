@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { formatFit } from '@/voice/cost';
+import { createTextDraft } from '@/voice/text-draft';
 import { LINE_STATE_DOT, LINE_STATE_LABEL } from './states';
 
 export const MAX_LINE_CHARS = 1500;
@@ -17,40 +18,18 @@ const mmss = (t: number) => {
 };
 
 /** Текст на місці: збереження з debounce 600 мс і одразу при втраті фокуса; чужі зміни — лише коли немає правок. */
-function EditableText({
-  value,
-  label,
-  onSave,
-}: {
-  value: string;
-  label: string;
-  onSave(text: string): void;
-}) {
+function EditableText({ value, label, onSave }: { value: string; label: string; onSave(text: string): void }) {
   const [text, setText] = useState(value);
-  const dirty = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const save = useRef(onSave);
   save.current = onSave;
-  const latest = useRef(text);
-  latest.current = text;
-  const current = useRef(value);
-  current.current = value;
+  const [draft] = useState(() => createTextDraft({ value, save: (t) => save.current(t), delayMs: SAVE_DEBOUNCE_MS }));
 
   useEffect(() => {
-    if (!dirty.current) setText(value);
-    else if (value === latest.current) dirty.current = false;
-  }, [value]);
-  const flush = () => {
-    clearTimeout(timer.current);
-    if (!dirty.current) return;
-    if (latest.current === current.current) {
-      dirty.current = false;
-      return;
-    }
-    save.current(latest.current);
-  };
-  // розмонтування (зміна мови, вихід зі сторінки) не губить правку
-  useEffect(() => () => flush(), []);
+    const next = draft.sync(value);
+    if (next !== null) setText(next);
+  }, [draft, value]);
+  // розмонтування (інша мова/сегмент — інший key, вихід зі сторінки) не губить правку
+  useEffect(() => () => draft.dispose(), [draft]);
 
   return (
     <div className="grid gap-0.5">
@@ -62,12 +41,9 @@ function EditableText({
         className="min-h-0 resize-none text-sm"
         onChange={(e) => {
           setText(e.target.value);
-          latest.current = e.target.value;
-          dirty.current = true;
-          clearTimeout(timer.current);
-          timer.current = setTimeout(flush, SAVE_DEBOUNCE_MS);
+          draft.change(e.target.value);
         }}
-        onBlur={flush}
+        onBlur={draft.flush}
       />
       {text.length > MAX_LINE_CHARS * 0.9 && (
         <span className="text-right text-[10px] text-muted-foreground">
@@ -88,7 +64,6 @@ export function SegmentRow({
   fit,
   playing,
   canVoice,
-  voiceHint,
   onSaveText,
   onPlay,
   onSynthesize,
@@ -102,7 +77,6 @@ export function SegmentRow({
   fit?: SegmentFit;
   playing: boolean;
   canVoice: boolean;
-  voiceHint: string;
   onSaveText(language: string, text: string): void;
   onPlay(url: string | null): void;
   onSynthesize(): void;
@@ -130,12 +104,14 @@ export function SegmentRow({
         </div>
       </div>
       <EditableText
+        key={`${segment.id}:${base}`}
         value={baseLine?.text ?? ''}
         label={`Текст ${base.toUpperCase()}, сегмент ${index + 1}`}
         onSave={(t) => onSaveText(base, t)}
       />
       {showLang ? (
         <EditableText
+          key={`${segment.id}:${lang}`}
           value={line?.text ?? ''}
           label={`Текст ${lang.toUpperCase()}, сегмент ${index + 1}`}
           onSave={(t) => onSaveText(lang, t)}
@@ -160,7 +136,7 @@ export function SegmentRow({
             variant="ghost"
             className="size-7"
             disabled={!hasText || busy || !canVoice}
-            title={!canVoice ? voiceHint : 'Переозвучити'}
+            title="Переозвучити"
             aria-label="Переозвучити"
             onClick={onSynthesize}
           >

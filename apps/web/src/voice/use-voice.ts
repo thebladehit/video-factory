@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { TERMINAL_STATUSES } from '@vf/shared';
 import { useEffect, useRef } from 'react';
 import { useJobFeed } from '@/lib/job-feed';
 import { useTRPC } from '@/lib/trpc';
@@ -24,17 +25,26 @@ export function useVoice(projectId: string) {
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
 
+  const languages = useRef<string[]>([]);
+  languages.current = query.data?.languages ?? [];
+  const refetchGet = () => void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId }) });
+  // прев'ю мов цього проєкту
+  const refetchLocalized = () => {
+    for (const language of languages.current)
+      void qc.invalidateQueries({ queryKey: trpc.voice.localized.queryKey({ projectId, language }) });
+  };
   const refetch = () => {
-    void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId }) });
-    void qc.invalidateQueries({ queryKey: trpc.voice.localized.pathKey() });
+    refetchGet();
+    refetchLocalized();
   };
   useJobFeed((e) => {
     if (!e.type.startsWith('voice.')) return;
     const mine = e.subject.projectId === projectId || (e.subject.lineId && lineIds.current.has(e.subject.lineId));
     if (!mine) return;
-    // прогрес приходить часто — зливаємо в один запит
+    // прогрес приходить часто — зливаємо в один запит; прев'ю (документ, озвучка) міняється лише коли задача завершилась
+    const terminal = TERMINAL_STATUSES.has(e.status);
     clearTimeout(timer.current);
-    timer.current = setTimeout(refetch, 200);
+    timer.current = setTimeout(terminal ? refetch : refetchGet, 200);
   });
 
   return { view: query.data, error: query.error, isPending: query.isPending, refetch };

@@ -59,9 +59,13 @@ export function NewVoiceDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     if (upload.state === 'error') {
       toast.error(upload.error ?? 'Не вдалося завантажити файл');
       setUploadId(null);
-    } else if (upload.state === 'done' && upload.assetId && !started.current.has(upload.id)) {
+    } else if (upload.state === 'done' && !started.current.has(upload.id)) {
       started.current.add(upload.id);
-      create.mutate({ assetId: upload.assetId });
+      if (upload.assetId) create.mutate({ assetId: upload.assetId });
+      else {
+        toast.error('Файл завантажено, але його не знайдено в бібліотеці — спробуйте ще раз');
+        setUploadId(null);
+      }
     }
   }, [upload, create]);
 

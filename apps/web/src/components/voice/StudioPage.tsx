@@ -71,6 +71,8 @@ export function StudioPage({ projectId }: { projectId: string }) {
   const sttHint = 'Немає ключа для розпізнавання мови (OpenAI або Google) — додайте його в «Налаштуваннях»';
   const textHint = 'Немає ключа текстової моделі для перекладу — додайте його в «Налаштуваннях»';
 
+  // підказки видимі завжди: `title` на вимкненій кнопці не показується (pointer-events: none)
+  const hints = catalog.data ? [!hasTts && ttsHint, !hasStt && sttHint, !hasText && textHint].filter((h): h is string => !!h) : [];
   const baseHasText = view.segments.some((s) => view.lines[s.id]?.[view.base]?.text.trim());
   const hasContent = view.segments.length > 0;
   const estimate = view.estimate[lang];
@@ -169,12 +171,18 @@ export function StudioPage({ projectId }: { projectId: string }) {
             </Button>
             {busy && <span className="text-xs text-muted-foreground">Виконується…</span>}
           </div>
+          {hints.length > 0 && (
+            <ul data-testid="key-hints" className="grid gap-0.5 text-xs text-amber-700 dark:text-amber-500">
+              {hints.map((h) => (
+                <li key={h}>{h}</li>
+              ))}
+            </ul>
+          )}
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             <SegmentTable
               view={view}
               lang={lang}
               canVoice={hasTts}
-              voiceHint={ttsHint}
               onSaveText={(segmentId, language, text) => setText.mutate({ projectId, segmentId, language, text })}
               onSynthesize={(segmentId) => synthesize.mutate({ projectId, language: lang, segmentIds: [segmentId] })}
             />

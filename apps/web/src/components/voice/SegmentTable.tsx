@@ -6,14 +6,12 @@ export function SegmentTable({
   view,
   lang,
   canVoice,
-  voiceHint,
   onSaveText,
   onSynthesize,
 }: {
   view: VoiceView;
   lang: string;
   canVoice: boolean;
-  voiceHint: string;
   onSaveText(segmentId: string, language: string, text: string): void;
   onSynthesize(segmentId: string): void;
 }) {
@@ -67,7 +65,6 @@ export function SegmentTable({
           fit={fits.get(s.id)}
           playing={playing === s.id}
           canVoice={canVoice}
-          voiceHint={voiceHint}
           onSaveText={(language, text) => onSaveText(s.id, language, text)}
           onPlay={(url) => play(s.id, url)}
           onSynthesize={() => onSynthesize(s.id)}
