@@ -73,22 +73,6 @@ async function renderDraft(page: Page, projectId: string, expected: number): Pro
   return list;
 }
 
-/** Непрозорі пікселі в canvas субтитрів (JASSUB) — копія в 2D-полотно, щоб прочитати альфа-канал. */
-const captionPixels = (page: Page) =>
-  page.evaluate(() => {
-    const c = document.querySelector<HTMLCanvasElement>('[data-testid=captions-canvas]');
-    if (!c || !c.width || !c.height) return 0;
-    const copy = document.createElement('canvas');
-    copy.width = c.width;
-    copy.height = c.height;
-    const ctx = copy.getContext('2d')!;
-    ctx.drawImage(c, 0, 0);
-    const data = ctx.getImageData(0, 0, copy.width, copy.height).data;
-    let n = 0;
-    for (let i = 3; i < data.length; i += 4) if (data[i]! > 16) n++;
-    return n;
-  });
-
 interface Localized {
   timeline: { fps: number; tracks: { kind: string; clips: { start: number; duration: number }[] }[] };
   fits: { base: number; target: number }[];
@@ -159,8 +143,12 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
     start: +m[1]! * 3600 + +m[2]! * 60 + +m[3]! + +m[4]! / 100,
     end: +m[5]! * 3600 + +m[6]! * 60 + +m[7]! + +m[8]! / 100,
   }));
-  const firstWord = dialogues[0]!.start;
-  expect(firstWord).toBeGreaterThan(0);
+  // слово після паузи між кліпами озвучки (TAIL + LEAD ≥ 0,5 с): до нього canvas має бути порожнім
+  const gapAt = dialogues.findIndex((d, i) => i > 0 && d.start - dialogues[i - 1]!.end >= 0.4);
+  expect(gapAt).toBeGreaterThan(0);
+  const prevEnd = dialogues[gapAt - 1]!.end;
+  const laterWord = dialogues[gapAt]!.start;
+  expect(laterWord - 0.25).toBeGreaterThan(prevEnd + 0.1);
   const playhead = async () => {
     const m = /(\d+):(\d+\.\d+) \//.exec((await page.getByTestId('timecode').textContent()) ?? '')!;
     return +m[1]! * 60 + +m[2]!;
@@ -171,24 +159,58 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
   await expect(page.getByTestId('captions-enabled')).toBeChecked();
   await expect(page.getByTestId('timecode')).toContainText('0:00.00 /');
   await expect(page.getByTestId('captions-canvas')).toBeAttached({ timeout: 30_000 });
+  // Відтворення з семплуванням кожен кадр у сторінці: (мс від старту відтворення, непрозорі пікселі).
+  // Таймкод оновлюється рідко й відстає від кадру субтитрів на сотні мс, тому час міряємо годинником сторінки
+  // від першої зміни таймкоду (старт), а не за самим таймкодом.
+  await page.evaluate(() => {
+    const w = window as unknown as { __samples: { ms: number; px: number }[]; __stop: boolean };
+    w.__samples = [];
+    w.__stop = false;
+    const copy = document.createElement('canvas');
+    let t0: number | null = null;
+    const tick = () => {
+      const c = document.querySelector<HTMLCanvasElement>('[data-testid=captions-canvas]');
+      const tc = document.querySelector('[data-testid=timecode]')?.textContent ?? '';
+      if (t0 === null && !tc.startsWith('0:00.00 /')) t0 = performance.now();
+      if (c && c.width && t0 !== null) {
+        copy.width = c.width;
+        copy.height = c.height;
+        const ctx = copy.getContext('2d', { willReadFrequently: true })!;
+        ctx.drawImage(c, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        let px = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i]! > 16) px++;
+        w.__samples.push({ ms: performance.now() - t0, px });
+      }
+      if (!w.__stop) requestAnimationFrame(tick);
+    };
+    tick();
+  });
   await page.getByRole('button', { name: 'Відтворити' }).click();
-  // слова з'являються на canvas саме там, де перше слово в ASS (−0,25…+0,5 с: годинник таймкоду й кадр JASSUB не синхронні до кадру)
-  let seenAt = -1;
-  await expect
-    .poll(
-      async () => {
-        const px = await captionPixels(page);
-        if (px > 50) seenAt = await playhead();
-        return px;
-      },
-      { timeout: 20_000, intervals: [50] },
-    )
-    .toBeGreaterThan(50);
-  expect(seenAt).toBeGreaterThanOrEqual(firstWord - 0.25);
-  expect(seenAt).toBeLessThan(firstWord + 0.5);
-  // (перші пікселі з'явилися не раніше слова — тобто до слова canvas був порожній, а не просто нічого не малював:
-  // опитування йде кожні 50 мс з самого старту відтворення, останнє слово закінчується вже за кінцем відео)
-  await page.getByRole('button', { name: /Пауза|Відтворити/ }).click();
+  await expect.poll(playhead, { timeout: 30_000, intervals: [100] }).toBeGreaterThan(laterWord + 0.7);
+  const samples = await page.evaluate(() => {
+    const w = window as unknown as { __samples: { ms: number; px: number }[]; __stop: boolean };
+    w.__stop = true;
+    return w.__samples.map((x) => ({ t: x.ms / 1000, px: x.px }));
+  });
+  // шар вже малював слово до паузи, далі йде порожній проміжок, що збігається з паузою між кліпами
+  // (допуск на старт відтворення й ліниве перемальовування JASSUB), і слово після паузи
+  const firstOn = samples.findIndex((x) => x.px > 50);
+  expect(firstOn).toBeGreaterThanOrEqual(0);
+  expect(samples[firstOn]!.t).toBeGreaterThanOrEqual(dialogues[0]!.start - 0.25);
+  expect(samples[firstOn]!.t).toBeLessThan(dialogues[0]!.start + 0.7);
+  const offAt = samples.findIndex((x, i) => i > firstOn && x.px === 0);
+  expect(offAt).toBeGreaterThan(firstOn);
+  const onAgain = samples.findIndex((x, i) => i > offAt && x.px > 50);
+  expect(onAgain).toBeGreaterThan(offAt);
+  const offStart = samples[offAt]!.t;
+  const offEnd = samples[onAgain]!.t;
+  expect(offStart).toBeGreaterThanOrEqual(prevEnd - 0.1);
+  expect(offStart).toBeLessThan(prevEnd + 0.7);
+  expect(offEnd).toBeGreaterThanOrEqual(laterWord - 0.1);
+  expect(offEnd).toBeLessThan(laterWord + 0.7);
+  expect(offEnd - offStart).toBeGreaterThan(0.2);
+  await page.getByRole('button', { name: 'Пауза' }).click();
 
   // рендер UK і EN (чернетка) → два MP4 різної тривалості = fits ±1 кадр
   const renders = await renderDraft(page, projectId, 2);
