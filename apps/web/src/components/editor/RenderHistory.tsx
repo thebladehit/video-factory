@@ -50,9 +50,10 @@ export function RenderHistory({ projectId }: { projectId: string }) {
           {!items.length && <li className="text-muted-foreground">Ще немає рендерів</li>}
           {items.map((r) => (
             <li key={r.id} data-testid="render-item" data-status={r.status} className="flex items-center gap-3">
-              <span className="w-28 shrink-0 text-muted-foreground">
+              <span className="w-36 shrink-0 text-muted-foreground">
                 {new Date(r.createdAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })} ·{' '}
                 {r.preset === 'final' ? '1080p' : '720p'}
+                {r.language ? ` · ${r.language.toUpperCase()}` : ''}
               </span>
               <span className="w-24 shrink-0">{STATUS[r.status]}</span>
               {(r.status === 'queued' || r.status === 'running') && (

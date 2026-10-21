@@ -175,6 +175,7 @@ export function createCaptionsLayer(
       const wasEmpty = ass === null;
       ass = next;
       if (next) size = playRes(next);
+      if (next === null) message.hidden = true;
       if (failed) return;
       if (!jassub) {
         if (next && !loading) void load(next);
