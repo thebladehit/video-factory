@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { run, type MediaTools } from '@vf/media';
 import { compileFfmpeg } from './compile';
 import { parseProgress } from './progress';
@@ -11,14 +12,25 @@ export interface RenderContext {
   timeoutMs: number;
 }
 
+export interface RenderInput extends Omit<CompileInput, 'subtitlesPath'> {
+  /** ASS-текст субтитрів; пишеться в `subs.ass` поруч зі скриптом графа */
+  subtitles?: string;
+}
+
 export interface Renderer {
-  render(input: CompileInput, ctx: RenderContext): Promise<void>;
+  render(input: RenderInput, ctx: RenderContext): Promise<void>;
 }
 
 export function createFfmpegRenderer(tools: MediaTools): Renderer {
   return {
     async render(input, ctx) {
-      const compiled = compileFfmpeg(input);
+      const { subtitles, ...rest } = input;
+      let subtitlesPath: string | undefined;
+      if (subtitles) {
+        subtitlesPath = join(dirname(input.filterScriptPath), 'subs.ass');
+        await writeFile(subtitlesPath, subtitles);
+      }
+      const compiled = compileFfmpeg({ ...rest, subtitlesPath });
       await writeFile(input.filterScriptPath, compiled.filterScript);
       let pending = '';
       let last = -1;

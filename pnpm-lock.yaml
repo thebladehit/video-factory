@@ -406,6 +406,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^1.0.11
         version: 1.0.11
+      '@vf/captions':
+        specifier: workspace:*
+        version: link:../captions
 
   packages/shared:
     dependencies:
