@@ -38,33 +38,49 @@ function Slider({
 }
 
 /** Оригінальний звук: «Замінити» (мовчить) / «Приглушити» (рівень, а під голосом — нижчий); повзунки зберігаються з debounce. */
-export function OriginalSoundPanel({ value, onChange }: { value: OriginalSound; onChange(next: OriginalSound): void }) {
+export function OriginalSoundPanel({
+  value,
+  onChange,
+}: {
+  value: OriginalSound;
+  /** Відхилений проміс (помилка збереження) — повзунки повертаються до значення з сервера */
+  onChange(next: OriginalSound): void | Promise<void>;
+}) {
   const [local, setLocal] = useState(value);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const dirty = useRef(false);
+  const latest = useRef(value);
+  const current = useRef(value);
+  current.current = value;
   const save = useRef(onChange);
   save.current = onChange;
+  const commit = (next: OriginalSound) => {
+    dirty.current = false;
+    Promise.resolve(save.current(next)).catch(() => setLocal(current.current));
+  };
   // чужі зміни показуємо лише коли немає незбереженої правки
   useEffect(() => {
     if (!dirty.current) setLocal(value);
   }, [value]);
+  // розмонтування не губить правку, яка ще чекає debounce
   useEffect(
     () => () => {
       clearTimeout(timer.current);
+      if (dirty.current) {
+        dirty.current = false;
+        void save.current(latest.current);
+      }
     },
     [],
   );
 
   function update(next: OriginalSound, immediate = false) {
     setLocal(next);
+    latest.current = next;
     dirty.current = true;
     clearTimeout(timer.current);
-    const run = () => {
-      dirty.current = false;
-      save.current(next);
-    };
-    if (immediate) run();
-    else timer.current = setTimeout(run, DEBOUNCE_MS);
+    if (immediate) commit(next);
+    else timer.current = setTimeout(() => commit(next), DEBOUNCE_MS);
   }
 
   return (

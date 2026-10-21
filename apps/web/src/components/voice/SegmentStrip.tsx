@@ -210,8 +210,9 @@ export function SegmentStrip({
               onPointerDown={(e) => {
                 e.stopPropagation();
                 setSelected(s.id);
-                ui.getState().set({ playhead: s.start });
-                onSeek?.(s.start);
+                const t = Math.min(timeAt(e.clientX), total);
+                ui.getState().set({ playhead: t });
+                onSeek?.(t);
               }}
             >
               <span className="pointer-events-none absolute left-2 top-1 truncate">{i + 1}</span>

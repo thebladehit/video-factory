@@ -1,5 +1,5 @@
 import type { TimelineDoc } from '@vf/shared';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -32,6 +32,10 @@ export function PasteTextDialog({
   onApply(paragraphs: string[]): void;
 }) {
   const [text, setText] = useState('');
+  // закрили (успіх, скасування) — текст не лишається й не застосується вдруге
+  useEffect(() => {
+    if (!open) setText('');
+  }, [open]);
   const paragraphs = splitParagraphs(text);
   const plan = paragraphs.length ? planPaste(paragraphs, doc) : null;
   const tooLong = paragraphs.some((p) => p.length > MAX_LINE_CHARS);

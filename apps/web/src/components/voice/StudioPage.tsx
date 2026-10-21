@@ -129,9 +129,11 @@ function Studio({ project }: { project: ProjectView }) {
 
   // задача на сервері змінила сегменти (розпізнавання) — підтягнути документ, якщо локальних змін немає
   const serverVersion = view?.version ?? 0;
+  const reloadDoc = session.reload;
   useEffect(() => {
-    if (serverVersion > autosave.getVersion() && !autosave.hasPending()) void session.reload();
-  }, [serverVersion, autosave, session]);
+    if (serverVersion > autosave.getVersion() && !autosave.hasPending())
+      reloadDoc({ onlyIfClean: true }).catch((e: Error) => toast.error(`Не вдалося оновити сегменти: ${e.message}`));
+  }, [serverVersion, autosave, reloadDoc]);
 
   // інша мова — редактор стилю закрити (він про стиль конкретної мови)
   useEffect(() => {
@@ -342,7 +344,7 @@ function Studio({ project }: { project: ProjectView }) {
               <Section title="Оригінальний звук">
                 <OriginalSoundPanel
                   value={view.voice.original as OriginalSound}
-                  onChange={(original) => setOriginal.mutate({ projectId, original })}
+                  onChange={(original) => setOriginal.mutateAsync({ projectId, original }).then(() => undefined)}
                 />
               </Section>
               <Section title={`Голос мови ${lang.toUpperCase()}`}>
@@ -463,7 +465,7 @@ function Studio({ project }: { project: ProjectView }) {
 
       <ConflictDialog
         open={session.saveState === 'conflict'}
-        onReload={() => void session.reload()}
+        onReload={() => void session.reload().catch((e: Error) => toast.error(e.message))}
         onOverwrite={() => void session.overwrite()}
       />
 

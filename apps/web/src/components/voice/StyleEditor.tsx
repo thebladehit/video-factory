@@ -15,6 +15,14 @@ const ANIMATIONS: Record<CaptionStyle['animation'], string> = {
   pop: 'Pop по слову',
   karaoke: 'Караоке',
 };
+/** Перше порушення схеми стилю — зрозумілим текстом. */
+function styleProblem(issues: { path: PropertyKey[]; message: string }[]): string {
+  const i = issues[0];
+  return i
+    ? `Некоректний стиль субтитрів (${i.path.join('.') || 'стиль'}): ${i.message}`
+    : 'Некоректний стиль субтитрів';
+}
+
 const ALIGNS: Record<CaptionStyle['position']['align'], string> = {
   bottom: 'Знизу',
   middle: 'По центру',
@@ -146,7 +154,13 @@ export function StyleEditor({
     void qc.invalidateQueries({ queryKey: trpc.voice.get.pathKey() });
     void qc.invalidateQueries({ queryKey: trpc.voice.localized.pathKey() });
   };
-  const onError = (e: { message: string }) => toast.error(e.message);
+  const onError = (e: { message: string; data?: unknown }) => {
+    const issues = (e as { data?: { details?: { issues?: { path: string; message: string }[] } } }).data?.details
+      ?.issues;
+    toast.error(
+      issues?.length ? `${e.message}: ${issues.map((i) => `${i.path} — ${i.message}`).join('; ')}` : e.message,
+    );
+  };
   const create = useMutation(
     trpc.captionStyles.create.mutationOptions({
       onSuccess: (s) => {
@@ -168,7 +182,9 @@ export function StyleEditor({
       onError,
     }),
   );
-  const valid = captionStyleSchema.safeParse(style).success;
+  const parsed = captionStyleSchema.safeParse(style);
+  const valid = parsed.success;
+  const problem = parsed.success ? null : styleProblem(parsed.error.issues);
   const submitNew = () => name.trim() && valid && create.mutate({ name, style });
 
   return (
@@ -279,6 +295,11 @@ export function StyleEditor({
         onChange={(animation) => set({ animation })}
       />
 
+      {problem && (
+        <p data-testid="style-problem" role="alert" className="text-xs text-destructive">
+          {problem}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2 pt-1">
         {naming ? (
           <>

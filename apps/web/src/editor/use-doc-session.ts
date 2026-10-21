@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { trpcClient } from '@/lib/trpc';
 import { Autosave, type SaveState } from './autosave';
+import { canReplaceDoc } from './reload-guard';
 import { createEditorStore } from './store';
 
 /**
@@ -58,12 +59,22 @@ export function useDocSession(project: ProjectView, onSaved?: () => void) {
     };
   }, [autosave]);
 
-  /** Серверна версія замість локальної (після конфлікту або після задачі, що змінила сегменти). */
-  const reload = useCallback(async () => {
-    const fresh = await trpcClient.projects.get.query({ id: project.id });
-    store.getState().replaceDoc(fresh.timeline);
-    autosave.reset(fresh.version);
-  }, [project.id, store, autosave]);
+  /**
+   * Серверна версія замість локальної. `onlyIfClean` (після задачі на сервері): якщо користувач щось змінив
+   * до або під час запиту — нічого не замінюємо (повертає `false`).
+   */
+  const reload = useCallback(
+    async (opts: { onlyIfClean?: boolean } = {}): Promise<boolean> => {
+      const before = store.getState().doc;
+      if (opts.onlyIfClean && autosave.hasPending()) return false;
+      const fresh = await trpcClient.projects.get.query({ id: project.id });
+      if (opts.onlyIfClean && !canReplaceDoc(before, store.getState().doc, autosave.hasPending())) return false;
+      store.getState().replaceDoc(fresh.timeline);
+      autosave.reset(fresh.version);
+      return true;
+    },
+    [project.id, store, autosave],
+  );
 
   /** «Перезаписати моєю версією»: зберегти поверх актуальної версії. */
   const overwrite = useCallback(async () => {
