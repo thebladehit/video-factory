@@ -1,7 +1,9 @@
 import { assetsRouter } from '../modules/assets/router';
+import { captionStylesRouter } from '../modules/caption-styles/router';
 import { generateRouter } from '../modules/generate/router';
 import { projectsRouter } from '../modules/projects/router';
 import { rendersRouter } from '../modules/renders/router';
+import { voiceRouter } from '../modules/voice/router';
 import { router } from '../trpc';
 import { aiRouter } from './ai';
 import { healthRouter } from './health';
@@ -17,6 +19,8 @@ export const appRouter = router({
   generate: generateRouter,
   projects: projectsRouter,
   renders: rendersRouter,
+  voice: voiceRouter,
+  captionStyles: captionStylesRouter,
 });
 
 export type AppRouter = typeof appRouter;

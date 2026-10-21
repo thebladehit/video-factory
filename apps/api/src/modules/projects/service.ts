@@ -48,7 +48,7 @@ export function timelineAssetIds(doc: TimelineDoc): string[] {
 const formatOf = (doc: TimelineDoc): VideoFormat => (doc.width < doc.height ? '9:16' : '16:9');
 
 /** Перший за часом кліп нижньої відео-доріжки, що має файл. */
-function firstVisualAsset(doc: TimelineDoc): string | null {
+export function firstVisualAsset(doc: TimelineDoc): string | null {
   let best: MediaClip | null = null;
   for (const t of doc.tracks)
     if (t.kind === 'video') for (const c of t.clips) if (!best || c.start < best.start) best = c;

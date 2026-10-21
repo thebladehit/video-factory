@@ -1,7 +1,16 @@
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { userSettings } from '@vf/db';
-import { AppError, DEFAULT_SLOTS, type DefaultSlot, type ModelRef } from '@vf/shared';
+import {
+  AppError,
+  languageInfo,
+  voiceDefaultsSchema,
+  type VoiceChoice,
+  DEFAULT_SLOTS,
+  type DefaultSlot,
+  type ModelRef,
+} from '@vf/shared';
+import { assertVoiceChoice, userVoiceDefaults } from '../modules/voice/service';
 import { procedure, router } from '../trpc';
 
 /** Модель для тегів — текстова */
@@ -21,7 +30,12 @@ export const settingsRouter = router({
         return [slot, { ref, available }];
       }),
     ) as Record<DefaultSlot, { ref: ModelRef; available: boolean } | null>;
-    return { defaults, channelStyle: row?.channelStyle ?? '', autoTagUploads: row?.autoTagUploads ?? false };
+    return {
+      defaults,
+      channelStyle: row?.channelStyle ?? '',
+      autoTagUploads: row?.autoTagUploads ?? false,
+      voices: await userVoiceDefaults(ctx.deps, ctx.userId),
+    };
   }),
 
   setDefault: procedure
@@ -58,4 +72,26 @@ export const settingsRouter = router({
         set: { autoTagUploads: input.enabled, updatedAt: new Date() },
       });
   }),
+
+  /** Голос за замовчуванням для мови; `voice: null` — прибрати. */
+  setVoice: procedure
+    .input(
+      z.object({
+        language: z.string(),
+        voice: z.object({ model: z.string(), voiceId: z.string() }).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      languageInfo(input.language);
+      const voices = { ...(await userVoiceDefaults(ctx.deps, ctx.userId)) };
+      if (input.voice) {
+        const choice = input.voice as unknown as VoiceChoice;
+        await assertVoiceChoice(ctx.deps, ctx.userId, choice);
+        voices[input.language] = voiceDefaultsSchema.parse({ [input.language]: choice })[input.language]!;
+      } else delete voices[input.language];
+      await ctx.deps.db
+        .insert(userSettings)
+        .values({ userId: ctx.userId, voices })
+        .onConflictDoUpdate({ target: userSettings.userId, set: { voices, updatedAt: new Date() } });
+    }),
 });

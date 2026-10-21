@@ -205,6 +205,9 @@ importers:
       '@vf/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@vf/captions':
+        specifier: workspace:*
+        version: link:../../packages/captions
       '@vf/db':
         specifier: workspace:*
         version: link:../../packages/db
