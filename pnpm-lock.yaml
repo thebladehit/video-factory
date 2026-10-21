@@ -345,6 +345,15 @@ importers:
         specifier: ^4.6
         version: 4.6.7
 
+  packages/captions:
+    dependencies:
+      '@vf/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^4.6
+        version: 4.6.7
+
   packages/db:
     dependencies:
       '@vf/shared':
