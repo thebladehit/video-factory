@@ -1,11 +1,7 @@
-import type { ProviderId } from '@vf/shared';
+import type { ProviderId, Word } from '@vf/shared';
 import type { z } from 'zod';
 
-export interface Word {
-  text: string;
-  startMs: number;
-  endMs: number;
-}
+export type { Word };
 
 export interface GeneratedFile {
   bytes: Uint8Array;

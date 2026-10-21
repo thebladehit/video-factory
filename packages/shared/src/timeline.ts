@@ -46,6 +46,9 @@ const effectSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('xfade'), params: z.object({ duration: time.default(EFFECT_DEFAULTS.xfade.duration) }) }),
 ]);
 
+const speed = z.number().finite().min(0.8).max(1.25);
+const hold = z.number().finite().min(0);
+
 const mediaClipSchema = z.object({
   id,
   assetId: id,
@@ -58,6 +61,10 @@ const mediaClipSchema = z.object({
   /** Звук самого відео (0–2), коли він не винесений у зв'язаний аудіокліп. */
   volume: z.number().min(0).max(2).optional(),
   linkId: id.optional(),
+  /** Темп відтворення джерела (0,8–1,25); лише в мовних версіях. */
+  speed: speed.optional(),
+  /** Секунди стоп-кадру в кінці кліпа. */
+  hold: hold.optional(),
 });
 
 const audioClipSchema = z.object({
@@ -71,6 +78,20 @@ const audioClipSchema = z.object({
   fadeIn: time.optional(),
   fadeOut: time.optional(),
   linkId: id.optional(),
+  speed: speed.optional(),
+  /** Секунди тиші в кінці кліпа. */
+  hold: hold.optional(),
+  /** Кусково-лінійний множник гучності; `t` — секунди від початку кліпа. */
+  envelope: z
+    .array(z.object({ t: time, gain: z.number().finite().min(0).max(2) }))
+    .superRefine((pts, ctx) => {
+      for (let i = 1; i < pts.length; i++) {
+        if (pts[i]!.t <= pts[i - 1]!.t) {
+          ctx.addIssue({ code: 'custom', message: 'envelope.t має строго зростати', path: [i, 't'] });
+        }
+      }
+    })
+    .optional(),
 });
 
 const captionClipSchema = z.object({ id, audioClipId: id, transcriptId: id, styleId: id });
@@ -87,13 +108,36 @@ const trackSchema = z.discriminatedUnion('kind', [
   z.object({ id, kind: z.literal('captions'), clips: z.array(captionClipSchema), language: z.string().min(2) }),
 ]);
 
-export const timelineDocSchema = z.object({
-  schemaVersion: z.literal(1),
-  width: z.number().int().min(16).max(7680),
-  height: z.number().int().min(16).max(7680),
-  fps: z.number().int().min(1).max(120),
-  tracks: z.array(trackSchema),
-});
+const segmentSchema = z.object({ id, start: time, end: time });
+export type Segment = z.infer<typeof segmentSchema>;
+
+const EPS = 1e-9;
+
+export const timelineDocSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    width: z.number().int().min(16).max(7680),
+    height: z.number().int().min(16).max(7680),
+    fps: z.number().int().min(1).max(120),
+    tracks: z.array(trackSchema),
+    /** Відрізки базового таймлайну для озвучки: впорядковані, без перекриттів, ≥ 1 кадр. */
+    segments: z.array(segmentSchema).optional(),
+  })
+  .superRefine((doc, ctx) => {
+    const segs = doc.segments ?? [];
+    segs.forEach((s, i) => {
+      if (s.end - s.start < 1 / doc.fps - EPS) {
+        ctx.addIssue({ code: 'custom', message: 'Сегмент коротший за кадр', path: ['segments', i] });
+      }
+      if (i > 0 && s.start < segs[i - 1]!.end - EPS) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Сегменти мають бути впорядковані й не перекриватися',
+          path: ['segments', i],
+        });
+      }
+    });
+  });
 
 export type TimelineDoc = z.output<typeof timelineDocSchema>;
 export type Track = z.infer<typeof trackSchema>;
