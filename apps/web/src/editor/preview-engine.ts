@@ -1,6 +1,7 @@
-import type { TimelineDoc } from '@vf/shared';
+import type { AudioRole, MediaClip, TimelineDoc } from '@vf/shared';
 import { audioPlan, docDuration, drawFrame, easeAlpha, evaluate, type AudioItem, type Layer } from '@vf/timeline';
-import { AudioGraph } from './audio-graph';
+import { createCaptionsLayer, type CaptionsLayer } from '@/captions/captions-layer';
+import { applyRate, AudioGraph, audioTarget } from './audio-graph';
 import { MediaCache } from './media-cache';
 import { videoTarget } from './video-sync';
 import { isPresent, type AnyAsset } from './types';
@@ -17,6 +18,8 @@ export interface PreviewEngine {
   onRefresh(cb: (assetId: string) => void): () => void;
   /** Перемалювати (змінився розмір полотна) */
   redraw(): void;
+  /** ASS субтитрів поверх прев'ю (`null` — без субтитрів); JASSUB вантажиться лише тоді, коли субтитри є. */
+  setSubtitles(ass: string | null): void;
   destroy(): void;
 }
 
@@ -34,6 +37,11 @@ export function createCanvasPreviewEngine(): PreviewEngine {
   let tStart = 0;
   let raf = 0;
   let drawQueued = false;
+  let subtitles: string | null = null;
+  let captions: CaptionsLayer | null = null;
+  /** Кліпи відео-доріжок за id (темп і стоп-кадр) і ролі доріжок звукових кліпів. */
+  let videoClips = new Map<string, MediaClip>();
+  let roles = new Map<string, AudioRole>();
   const timeCbs = new Set<(t: number) => void>();
   const endCbs = new Set<() => void>();
   const refreshCbs = new Set<(assetId: string) => void>();
@@ -73,8 +81,11 @@ export function createCanvasPreviewEngine(): PreviewEngine {
       if (!isPresent(a)) continue;
       active.add(l.clipId);
       const v = cache.video(l.clipId, l.assetId, a.url);
-      const target = videoTarget(l.sourceTime, v.duration, doc?.fps ?? 30);
-      if (playing && !target.hold) {
+      const clip = videoClips.get(l.clipId);
+      if (!clip) continue;
+      const target = videoTarget(clip, t, v.duration, doc?.fps ?? 30);
+      applyRate(v, target.playbackRate);
+      if (playing && !target.paused) {
         if (Math.abs(v.currentTime - target.time) > DRIFT) v.currentTime = target.time;
         if (v.paused) void v.play().catch(() => {});
       } else {
@@ -94,14 +105,21 @@ export function createCanvasPreviewEngine(): PreviewEngine {
       live.add(item.clipId);
       const el = cache.audio(item.clipId, item.assetId, a.url);
       const local = t - item.start;
-      const inside = playing && local >= 0 && local < item.duration;
-      if (!inside) {
+      const target = audioTarget(item, roles.get(item.clipId), local);
+      if (!playing || !target.active) {
         if (!el.paused) el.pause();
         continue;
       }
-      audio.setGain(el, item.volume * easeAlpha(item.fadeIn, item.fadeOut, item.duration).at(local));
-      const want = item.in + local;
-      if (Math.abs(el.currentTime - want) > DRIFT) el.currentTime = want;
+      // локальний час кліпу = 0 у момент годинника clockStart + (start − tStart): від нього — рампи огинаючої
+      const clipStart = clockStart + (item.start - tStart);
+      audio.setGain(
+        el,
+        item.volume * easeAlpha(item.fadeIn, item.fadeOut, item.duration).at(local),
+        item.envelope,
+        clipStart,
+      );
+      applyRate(el, target.rate);
+      if (Math.abs(el.currentTime - target.time) > DRIFT) el.currentTime = target.time;
       if (el.paused) void el.play().catch(() => {});
     }
     for (const [id, el] of cache.allAudios()) if (!live.has(id) && !el.paused) el.pause();
@@ -116,6 +134,7 @@ export function createCanvasPreviewEngine(): PreviewEngine {
     syncVideos(layers);
     const scale = canvas.width / doc.width;
     drawFrame(ctx, { width: doc.width, height: doc.height }, layers, source, scale);
+    captions?.setTime(t, !playing);
     if (layers.some((l) => cache.unsupported.has(l.assetId))) {
       const font = Math.round(canvas.width / 22);
       ctx.save();
@@ -176,9 +195,28 @@ export function createCanvasPreviewEngine(): PreviewEngine {
     cache.prune({ images, videos, audios: new Set(sounds().map((s) => s.clipId)) });
   }
 
+  /** Шар субтитрів створюється, коли є і полотно, і ASS (до того JASSUB не вантажиться). */
+  function ensureCaptions() {
+    const host = canvas?.parentElement;
+    if (captions || !subtitles || !host || !canvas) return;
+    captions = createCaptionsLayer(host);
+    fitCaptions();
+  }
+
+  function fitCaptions() {
+    if (captions && canvas) captions.resize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1);
+  }
+
   return {
     attach(c) {
+      // полотно перемонтоване в інший контейнер — шар субтитрів (його canvas уже передано воркеру) створити заново
+      if (captions && canvas?.parentElement !== c.parentElement) {
+        captions.destroy();
+        captions = null;
+      }
       canvas = c;
+      ensureCaptions();
+      captions?.setAss(subtitles);
       queueDraw();
     },
     setDoc(d, a) {
@@ -188,6 +226,12 @@ export function createCanvasPreviewEngine(): PreviewEngine {
       }
       doc = d;
       assets = a;
+      videoClips = new Map(
+        d.tracks.flatMap((tr) => (tr.kind === 'video' ? tr.clips.map((c) => [c.id, c] as const) : [])),
+      );
+      roles = new Map(
+        d.tracks.flatMap((tr) => (tr.kind === 'audio' ? tr.clips.map((c) => [c.id, tr.role] as const) : [])),
+      );
       prune();
       if (!playing) {
         syncAudio();
@@ -224,9 +268,20 @@ export function createCanvasPreviewEngine(): PreviewEngine {
       refreshCbs.add(cb);
       return () => refreshCbs.delete(cb);
     },
-    redraw: () => (playing ? undefined : queueDraw()),
+    redraw() {
+      fitCaptions();
+      if (!playing) queueDraw();
+    },
+    setSubtitles(ass) {
+      subtitles = ass;
+      ensureCaptions();
+      captions?.setAss(ass);
+      if (!playing) queueDraw();
+    },
     destroy() {
       pause();
+      captions?.destroy();
+      captions = null;
       cache.destroy();
       audio.destroy();
       canvas = null;

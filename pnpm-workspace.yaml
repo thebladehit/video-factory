@@ -30,3 +30,5 @@ minimumReleaseAgeExclude:
   - '@aws-sdk/token-providers@3.1153.0'
 allowBuilds:
   esbuild: true
+  # postinstall оновлює список шрифтів Google з мережі — не потрібен (fonts.json у пакеті), JASSUB з queryFonts: false
+  lfa-ponyfill: false
