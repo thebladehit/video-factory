@@ -12,8 +12,8 @@ import {
 import { docDuration } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
-import { ownProject } from '../projects/service';
-import { buildLocalized } from '../voice/localized';
+import { languageTimeline, ownProject } from '../projects/service';
+import { assertProjectLanguage, buildLocalized } from '../voice/localized';
 
 export interface RenderView {
   id: string;
@@ -126,6 +126,11 @@ export async function startRender(
 ): Promise<{ renderId: string; jobId: string }> {
   const stale = () => new AppError('CONFLICT', 'Проєкт змінено в іншій вкладці — оновіть сторінку');
   if (input.language !== undefined) {
+    // версія — до localize: застаріла вкладка отримує CONFLICT, без зайвої роботи
+    const project = await ownProject(deps, userId, input.projectId);
+    assertProjectLanguage(project, input.language);
+    const sep = await languageTimeline(deps, project.id, input.language);
+    if ((sep?.timelineVersion ?? project.timelineVersion) !== input.version) throw stale();
     const plan = await languagePlan(deps, userId, { ...input, language: input.language });
     if (plan.version !== input.version) throw stale();
     if (plan.notReady.length && !input.force) throw notReadyError(plan.notReady, [input.language]);

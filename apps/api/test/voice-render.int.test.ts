@@ -202,6 +202,42 @@ describe('renders of a language', () => {
   }, 60_000);
 });
 
+describe('renders of a language — fixes r1', () => {
+  it('base text without a translation → VALIDATION with segmentIds (start and startAll)', async () => {
+    const s = await startApp();
+    const { projectId, version } = await dubbed(s);
+    await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'uk', text: 'Привіт' });
+    await s.caller.voice.setText({ projectId, segmentId: 's2', language: 'uk', text: 'Як справи' });
+    // de: s1 перекладено порожнім текстом, s2 — без рядка взагалі
+    await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'de', text: '' });
+    const err = await s.caller.renders.start({ projectId, preset: 'draft', version, language: 'de' }).then(
+      () => ({ cause: null }),
+      (e: unknown) => e as { cause: unknown },
+    );
+    expect(err.cause).toMatchObject({ code: 'VALIDATION', details: { segmentIds: ['s1', 's2'] } });
+    const all = await s.caller.renders.startAll({ projectId, preset: 'draft', languages: ['en', 'de'] }).then(
+      () => ({ cause: null }),
+      (e: unknown) => e as { cause: unknown },
+    );
+    expect(all.cause).toMatchObject({ code: 'VALIDATION', details: { segmentIds: ['s1', 's2'], languages: ['de'] } });
+    // EN перекладено й озвучено — базовий текст йому не заважає
+    await s.caller.renders.start({ projectId, preset: 'draft', version, language: 'en' });
+  }, 60_000);
+
+  it('a stale version → CONFLICT before localize and file checks', async () => {
+    const s = await startApp();
+    const { projectId, version, video } = await dubbed(s);
+    // файл ще «обробляється» — перевірка файлів дала б VALIDATION, але версія перевіряється раніше
+    await s.deps.db.update(assets).set({ status: 'processing' }).where(eq(assets.id, video));
+    await expect(
+      s.caller.renders.start({ projectId, preset: 'draft', version: version - 1, language: 'en' }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(s.caller.renders.start({ projectId, preset: 'draft', version, language: 'en' })).rejects.toMatchObject(
+      { cause: expect.objectContaining({ code: 'VALIDATION' }) },
+    );
+  }, 60_000);
+});
+
 describe('separated languages', () => {
   it('separate → own document v1 with optimistic saves; renders use it; unseparate returns to localize', async () => {
     const s = await startApp();

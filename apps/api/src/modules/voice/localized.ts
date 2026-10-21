@@ -14,7 +14,7 @@ export interface Localized {
   /** ASS з доріжок `captions` документа; `null` — субтитрів немає */
   subtitles: string | null;
   fits: SegmentFit[];
-  /** Сегменти з текстом мови, чия озвучка не готова (не озвучено, застаріла, помилка, у роботі) */
+  /** Сегменти з текстом мови, чия озвучка не готова (не озвучено, застаріла, помилка, у роботі), і сегменти з базовим текстом без перекладу */
   notReady: string[];
   /** Мова відокремлена: документ — її власна копія */
   separated: boolean;
@@ -99,11 +99,17 @@ async function resolveLocalized(
   const baseText = new Map(rows.filter((r) => r.language === p.baseLanguage).map((r) => [r.segmentId, r.text]));
   const voice = await voiceForLanguage(deps, userId, p, language);
 
+  const own = new Map(rows.filter((r) => r.language === language).map((r) => [r.segmentId, r]));
+
   const takes: VoiceTake[] = [];
   const notReady: string[] = [];
   for (const s of segments) {
-    const r = rows.find((x) => x.segmentId === s.id && x.language === language);
-    if (!r) continue;
+    const r = own.get(s.id);
+    if (!r?.text.trim()) {
+      // базовий текст є, а перекладу немає — сегмент не готовий (інакше мова вийшла б без голосу)
+      if (!isBase && baseText.get(s.id)?.trim()) notReady.push(s.id);
+      continue;
+    }
     const state = lineState(r, isBase ? undefined : baseText.get(s.id), voice);
     if (state === 'ready' && r.audioAssetId && r.durationMs !== null)
       takes.push({
@@ -112,7 +118,7 @@ async function resolveLocalized(
         durationSec: r.durationMs / 1000,
         transcriptId: r.transcriptId ?? '',
       });
-    else if (r.text.trim()) notReady.push(s.id);
+    else notReady.push(s.id);
   }
 
   if (!takes.length) {
