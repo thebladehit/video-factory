@@ -109,7 +109,7 @@ function pageEvents(sp: StyledPage, name: string): Ev[] {
     s.animation === 'pop'
       ? `{\\1c${tagColor(s.activeColor)}\\t(0,60,\\fscx115\\fscy115)\\t(60,120,\\fscx100\\fscy100)}`
       : `{\\1c${tagColor(s.activeColor)}}`;
-  const reset = `{\\1c${tagColor(s.color)}}`;
+  const reset = `{\\1c${tagColor(s.color)}${s.animation === 'pop' ? '\\fscx100\\fscy100' : ''}}`;
   return flat.map((_, k) => {
     const start = k === 0 ? page.start : flat[k]!.startMs / 1000;
     const end = k + 1 < flat.length ? flat[k + 1]!.startMs / 1000 : page.end;

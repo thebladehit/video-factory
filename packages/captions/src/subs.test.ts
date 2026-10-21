@@ -30,4 +30,13 @@ describe('toSrt / toVtt', () => {
       'WEBVTT\n\n00:00:01.250 --> 00:00:02.000\nHello world\n\n01:00:00.000 --> 01:00:02.500\ntwo\nlines\n',
     );
   });
+
+  it('VTT escapes &, < and > so text is not read as tags', () => {
+    const p: Page[] = [{ lines: [[{ text: 'a<b>&c', startMs: 0, endMs: 500 }]], start: 0, end: 0.5 }];
+    expect(toVtt(p)).toContain('\na&lt;b&gt;&amp;c\n');
+  });
+  it('SRT strips < and > so text is not read as tags', () => {
+    const p: Page[] = [{ lines: [[{ text: 'a<b>c', startMs: 0, endMs: 500 }]], start: 0, end: 0.5 }];
+    expect(toSrt(p)).toContain('\nabc\n');
+  });
 });

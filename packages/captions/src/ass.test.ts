@@ -105,6 +105,12 @@ describe('toAss', () => {
     expect(d[0]).toContain('\\t(0,60,\\fscx115\\fscy115)\\t(60,120,\\fscx100\\fscy100)');
   });
 
+  it('pop: scale is reset after the active word so the following words stay normal', () => {
+    const d = dialogues(toAss({ doc: docWith('s'), transcripts: tr, styles: custom({ animation: 'pop' }) }));
+    // the tag block after the active word resets the scale (a block with the bare reset, not the \\t one)
+    expect(d[0]).toMatch(/\{[^}]*\\1c[^}]*\\fscx100\\fscy100\}/);
+  });
+
   it('karaoke: \\kf durations in centiseconds, primary/secondary swapped', () => {
     const ass = toAss({
       doc: docWith('s'),

@@ -7,12 +7,15 @@ function stamp(sec: number, sep: ',' | '.'): string {
   return `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}${sep}${pad(ms % 1000, 3)}`;
 }
 
-const text = (p: Page) => p.lines.map((l) => l.map((w) => w.text).join(' ')).join('\n');
+const joined = (p: Page, fix: (t: string) => string) =>
+  p.lines.map((l) => l.map((w) => fix(w.text)).join(' ')).join('\n');
+const srtText = (t: string) => t.replace(/[<>]/g, '');
+const vttText = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export function toSrt(pages: Page[]): string {
-  return pages.map((p, i) => `${i + 1}\n${stamp(p.start, ',')} --> ${stamp(p.end, ',')}\n${text(p)}\n`).join('\n');
+  return pages.map((p, i) => `${i + 1}\n${stamp(p.start, ',')} --> ${stamp(p.end, ',')}\n${joined(p, srtText)}\n`).join('\n');
 }
 
 export function toVtt(pages: Page[]): string {
-  return `WEBVTT\n\n${pages.map((p) => `${stamp(p.start, '.')} --> ${stamp(p.end, '.')}\n${text(p)}\n`).join('\n')}`;
+  return `WEBVTT\n\n${pages.map((p) => `${stamp(p.start, '.')} --> ${stamp(p.end, '.')}\n${joined(p, vttText)}\n`).join('\n')}`;
 }
