@@ -1,7 +1,7 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { CatalogItem } from '@vf/ai';
 import { PRESETS } from '@vf/captions';
-import { assets, pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
+import { assets, generations, jobs, pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
 import {
   AppError,
   emptyTimeline,
@@ -19,8 +19,8 @@ import { isUuid } from '../projects/editor-assets';
 import { ownProject } from '../projects/service';
 import { assertVoiceChoice, getVoice, parseVoice } from '../voice/service';
 import { estimatePipeline, type PipelineEstimate } from './estimate';
-import { runAdvance } from './run-advance';
-import type { RunRow } from './snapshot';
+import { executeAction, runAdvance } from './run-advance';
+import { loadSnapshot, type RunRow } from './snapshot';
 
 export interface SceneView {
   id: string;
@@ -165,6 +165,168 @@ export async function continuePipeline(deps: AppDeps, userId: string, projectId:
     .returning({ id: pipelineRuns.id });
   if (!moved) throw new AppError('VALIDATION', 'Продовжити можна лише на перевірці сценарію');
   await advanceQuietly(deps, run.id);
+}
+
+const live = ['queued', 'running'] as ('queued' | 'running')[];
+
+/**
+ * «Скасувати»: запуск, що працює → cancelled (спершу стан — події скасованих задач уже не зрушать запуск), потім
+ * скасовуються живі задачі: сценарій, збірка, візуали й перегенерація тексту сцен, генерації фото/відео сцен,
+ * озвучка рядків проєкту (рядки звільняє наявний `releaseOnCancel`). Переклад мови не скасовується — дешевий,
+ * а його результат знадобиться «Повторити». Сцени в роботі → empty; генерація, що не завершилась, відв'язується.
+ */
+export async function cancelPipeline(deps: AppDeps, userId: string, projectId: string): Promise<void> {
+  const run = await ownRun(deps, userId, projectId);
+  const [moved] = await deps.db
+    .update(pipelineRuns)
+    .set({ status: 'cancelled', updatedAt: new Date() })
+    .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, 'running')))
+    .returning({ id: pipelineRuns.id });
+  if (!moved) throw new AppError('VALIDATION', 'Скасувати можна лише запуск, що працює');
+
+  const scenes = await deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.runId, run.id));
+  const sceneIds = scenes.map((sc) => sc.id);
+  const genIds = scenes.flatMap((sc) => (sc.generationId ? [sc.generationId] : []));
+  const gens = genIds.length
+    ? await deps.db
+        .select({ id: generations.id, status: generations.status, jobId: generations.jobId })
+        .from(generations)
+        .where(inArray(generations.id, genIds))
+    : [];
+  const sceneTextJobs = sceneIds.length
+    ? await deps.db
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.type, 'pipeline.scene'),
+            inArray(jobs.status, live),
+            inArray(sql<string>`${jobs.payload}->>'sceneId'`, sceneIds),
+          ),
+        )
+    : [];
+  const lineJobs = await deps.db
+    .select({ jobId: voiceLines.jobId })
+    .from(voiceLines)
+    .where(and(eq(voiceLines.projectId, run.projectId), inArray(voiceLines.status, live)));
+  const toCancel = new Set(
+    [
+      run.scriptJobId,
+      run.assembleJobId,
+      ...scenes.map((sc) => sc.jobId),
+      ...sceneTextJobs.map((j) => j.id),
+      ...gens.filter((g) => live.includes(g.status as 'queued')).map((g) => g.jobId),
+      ...lineJobs.map((l) => l.jobId),
+    ].filter((id): id is string => !!id),
+  );
+  for (const id of toCancel) {
+    try {
+      await deps.jobs.queue.cancel(id);
+    } catch (e) {
+      deps.log.error({ err: e, jobId: id }, 'pipeline: не вдалося скасувати задачу');
+    }
+  }
+
+  const unfinished = new Set(gens.filter((g) => g.status !== 'done').map((g) => g.id));
+  const detach = scenes.filter((sc) => sc.generationId && unfinished.has(sc.generationId)).map((sc) => sc.id);
+  if (detach.length)
+    await deps.db
+      .update(pipelineScenes)
+      .set({ generationId: null })
+      .where(and(inArray(pipelineScenes.id, detach), inArray(pipelineScenes.status, live)));
+  await deps.db
+    .update(pipelineScenes)
+    .set({ status: 'empty', jobId: null, error: null, updatedAt: new Date() })
+    .where(and(eq(pipelineScenes.runId, run.id), inArray(pipelineScenes.status, live)));
+}
+
+/**
+ * «Повторити»: failed|cancelled → running (на review — awaiting_review). Задача етапу, що не завершилась успіхом,
+ * обнуляється (`advance` поставить її знову); невдала збірка повертає етап на produce, щоб спершу повторились
+ * невдалі сцени й рядки. Сцени failed → empty (невдала генерація й її файл відв'язуються); рядки failed → empty;
+ * переклад мови, що впав задачею, ставиться знову. Далі — `runAdvance`.
+ */
+export async function retryPipeline(deps: AppDeps, userId: string, projectId: string): Promise<void> {
+  const run = await ownRun(deps, userId, projectId);
+  if (run.status !== 'failed' && run.status !== 'cancelled')
+    throw new AppError('VALIDATION', 'Повторити можна лише запуск з помилкою або скасований');
+  const ids = [run.scriptJobId, run.assembleJobId].filter((id): id is string => !!id);
+  const done = new Set(
+    ids.length
+      ? (
+          await deps.db
+            .select({ id: jobs.id })
+            .from(jobs)
+            .where(and(inArray(jobs.id, ids), eq(jobs.status, 'done')))
+        ).map((j) => j.id)
+      : [],
+  );
+  const keep = (id: string | null) => (id && done.has(id) ? id : null);
+  const assembleJobId = keep(run.assembleJobId);
+  const stage: PipelineStage = run.stage === 'assemble' && !assembleJobId ? 'produce' : run.stage;
+  const [moved] = await deps.db
+    .update(pipelineRuns)
+    .set({
+      stage,
+      status: stage === 'review' ? 'awaiting_review' : stage === 'done' ? 'done' : 'running',
+      error: null,
+      scriptJobId: keep(run.scriptJobId),
+      assembleJobId,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(pipelineRuns.id, run.id), inArray(pipelineRuns.status, ['failed', 'cancelled'])))
+    .returning({ id: pipelineRuns.id });
+  if (!moved) throw new AppError('VALIDATION', 'Повторити можна лише запуск з помилкою або скасований');
+
+  await resetFailedScenes(deps, run.id);
+  await deps.db
+    .update(voiceLines)
+    .set({ status: 'empty', error: null, updatedAt: new Date() })
+    .where(and(eq(voiceLines.projectId, run.projectId), eq(voiceLines.status, 'failed')));
+
+  if (stage === 'produce') {
+    const snap = await loadSnapshot(deps, run.id);
+    for (const lang of snap?.langs ?? [])
+      if (!lang.isBase && lang.translate === 'failed') {
+        try {
+          await executeAction(deps, run.id, { type: 'enqueueTranslate', language: lang.language });
+        } catch (e) {
+          deps.log.error({ err: e, runId: run.id }, 'pipeline: не вдалося повторити переклад');
+        }
+      }
+  }
+  await advanceQuietly(deps, run.id);
+}
+
+/** Сцени failed → empty; генерація, що не дала готового файлу, і згенерований візуал відв'язуються. */
+async function resetFailedScenes(deps: AppDeps, runId: string): Promise<void> {
+  const failed = await deps.db
+    .select()
+    .from(pipelineScenes)
+    .where(and(eq(pipelineScenes.runId, runId), eq(pipelineScenes.status, 'failed')));
+  for (const sc of failed) {
+    let dropGeneration = false;
+    if (sc.generationId) {
+      const [g] = await deps.db.select().from(generations).where(eq(generations.id, sc.generationId));
+      const assetId = sc.visualAssetId ?? g?.assetIds[0];
+      const [a] = assetId
+        ? await deps.db.select({ status: assets.status }).from(assets).where(eq(assets.id, assetId))
+        : [];
+      dropGeneration = !g || g.status !== 'done' || !a || a.status === 'failed';
+    }
+    const dropVisual = dropGeneration && sc.visualSource === 'generated';
+    await deps.db
+      .update(pipelineScenes)
+      .set({
+        status: 'empty',
+        jobId: null,
+        error: null,
+        ...(dropGeneration ? { generationId: null } : {}),
+        ...(dropVisual ? { visualAssetId: null, visualSource: null } : {}),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(pipelineScenes.id, sc.id), eq(pipelineScenes.status, 'failed')));
+  }
 }
 
 async function thumbs(deps: AppDeps, userId: string, ids: string[]) {

@@ -1,7 +1,8 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { assets, generations, jobs, renders, voiceLines } from '@vf/db';
+import { assets, generations, jobs, pipelineRuns, renders, voiceLines } from '@vf/db';
 import { RESTART_ERROR } from '@vf/jobs';
 import type { AppDeps } from '../app';
+import { runAdvance } from './pipeline/run-advance';
 import { releaseCancelledLines } from './voice/synthesize-job';
 
 /** Чи є жива (queued/running) задача цього типу для сутності. */
@@ -19,7 +20,9 @@ export async function hasLiveJob(deps: AppDeps, type: string, key: 'assetId' | '
  * Обробники ідемпотентні, тож просто ставимо задачі знову: asset.process — для processing без живої задачі,
  * asset.analyze — для ready-відео/аудіо без аналізу звуку,
  * генерації — для перерваних рестартом (відео продовжить опитування збереженої операції, не платячи вдруге);
- * рядки озвучки з перерваною задачею — «failed» з поясненням.
+ * рядки озвучки з перерваною задачею — «failed» з поясненням;
+ * запуски конвеєра, що працюють, — `runAdvance` (перервана задача сценарію/збірки → запуск failed з її помилкою
+ * «Перервано перезапуском сервера»; сцени й рядки — за звичайними правилами).
  */
 export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
   const stuckAssets = await deps.db.select().from(assets).where(eq(assets.status, 'processing'));
@@ -97,5 +100,18 @@ export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
     const type = g.capability === 'video' ? 'video.generate' : 'image.generate';
     const jobId = await deps.jobs.queue.enqueue(type, { generationId: g.id }, { userId: g.userId });
     await deps.db.update(generations).set({ jobId }).where(eq(generations.id, g.id));
+  }
+
+  // останнім: advance бачить уже виправлені рядки озвучки й перезапущені генерації
+  const runs = await deps.db
+    .select({ id: pipelineRuns.id })
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.status, 'running'));
+  for (const r of runs) {
+    try {
+      await runAdvance(deps, r.id);
+    } catch (e) {
+      deps.log.error({ err: e, runId: r.id }, 'pipeline: advance після рестарту не вдався');
+    }
   }
 }

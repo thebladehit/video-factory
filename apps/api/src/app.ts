@@ -25,6 +25,9 @@ import { reconcileAfterRestart } from './modules/recovery';
 import { assetsTagJob } from './modules/assets/tag-job';
 import { imageGenerateJob } from './modules/generate/image-job';
 import { videoGenerateJob } from './modules/generate/video-job';
+import { pipelineEvents } from './modules/pipeline/events';
+import { sceneJob } from './modules/pipeline/scene-job';
+import { scriptJob } from './modules/pipeline/script-job';
 import { renderJob } from './modules/renders/render-job';
 import { releaseOnCancel, synthesizeJob } from './modules/voice/synthesize-job';
 import { transcribeJob } from './modules/voice/transcribe-job';
@@ -117,7 +120,10 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(synthesizeJob(deps));
   deps.jobs.runtime.register(translateJob(deps));
   deps.jobs.runtime.register(transcribeJob(deps));
+  deps.jobs.runtime.register(scriptJob(deps));
+  deps.jobs.runtime.register(sceneJob(deps));
   const offVoiceEvents = deps.jobs.queue.onEvent(releaseOnCancel(deps));
+  const offPipelineEvents = deps.jobs.queue.onEvent(pipelineEvents(deps));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
 
   await server.register(cors, { origin: cfg.webOrigin });
@@ -148,6 +154,8 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
       if (closed) return;
       closed = true;
       scheduler.stop();
+      // перервані зупинкою задачі запусків доводить advance на наступному старті, не цей процес
+      offPipelineEvents();
       await deps.jobs.runtime.stop();
       offVoiceEvents();
       await server.close();

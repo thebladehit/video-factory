@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import type { PipelineSettings } from '@vf/shared';
 import { procedure, router } from '../../trpc';
-import { addScene, deleteScene, moveScene, updateScene } from './scenes';
-import { continuePipeline, estimate, getPipeline, startPipeline } from './service';
+import { addScene, deleteScene, moveScene, regenerateSceneText, updateScene } from './scenes';
+import { cancelPipeline, continuePipeline, estimate, getPipeline, retryPipeline, startPipeline } from './service';
 
 // перевірку налаштувань робить сервіс (pipelineSettingsSchema) — помилка VALIDATION українською
 const settings = z.unknown() as unknown as z.ZodType<PipelineSettings>;
@@ -37,4 +37,14 @@ export const pipelineRouter = router({
   continue: procedure
     .input(z.object({ projectId }))
     .mutation(({ ctx, input }) => continuePipeline(ctx.deps, ctx.userId, input.projectId)),
+  // part 'visual' — разом із pipeline.visual (T8)
+  regenerateScene: procedure
+    .input(z.object({ sceneId, part: z.literal('text') }))
+    .mutation(({ ctx, input }) => regenerateSceneText(ctx.deps, ctx.userId, input.sceneId)),
+  cancel: procedure
+    .input(z.object({ projectId }))
+    .mutation(({ ctx, input }) => cancelPipeline(ctx.deps, ctx.userId, input.projectId)),
+  retry: procedure
+    .input(z.object({ projectId }))
+    .mutation(({ ctx, input }) => retryPipeline(ctx.deps, ctx.userId, input.projectId)),
 });

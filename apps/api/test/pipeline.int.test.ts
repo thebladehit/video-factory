@@ -1,14 +1,35 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createAiRegistry, createEnvCredentialStore } from '@vf/ai';
-import { assets, jobs, pipelineRuns, pipelineScenes, projects, users, voiceLines } from '@vf/db';
-import { LOCAL_USER_ID, normalizeDoc, type ModelRef, type PipelineSettings, type VoiceChoice } from '@vf/shared';
+import {
+  createAiRegistry,
+  createEnvCredentialStore,
+  outlineSchema,
+  scenePlan,
+  scriptSchema,
+  type AiRegistry,
+  type OutlineResult,
+  type ScriptResult,
+} from '@vf/ai';
+import { assets, createDb, generations, jobs, pipelineRuns, pipelineScenes, projects, users, voiceLines } from '@vf/db';
+import { RESTART_ERROR } from '@vf/jobs';
+import {
+  AppError,
+  LOCAL_USER_ID,
+  normalizeDoc,
+  type JobEvent,
+  type ModelRef,
+  type PipelineSettings,
+  type VoiceChoice,
+} from '@vf/shared';
 import { estimateSceneSec, skeletonDoc } from '@vf/timeline';
 import { appRouter, createApp } from '../src/index';
 import { executeAction, runAdvance } from '../src/modules/pipeline/run-advance';
 import { keywordsFrom } from '../src/modules/pipeline/scenes';
+import { handlePipelineEvent, pipelineEvents } from '../src/modules/pipeline/events';
 import { loadSnapshot } from '../src/modules/pipeline/snapshot';
+import { getVoice } from '../src/modules/voice/service';
+import { voicedHash } from '../src/modules/voice/stale';
 import { tools } from './assets-helpers';
 import { testConfig } from './helpers';
 
@@ -18,6 +39,10 @@ const fakeAi = () => createAiRegistry({ credentials: createEnvCredentialStore({ 
 const opened: { close(): Promise<void> }[] = [];
 afterEach(async () => {
   await Promise.all(opened.splice(0).map((a) => a.close()));
+  // тестова БД спільна: незавершені запуски підхопило б відновлення на старті API в інших тестах
+  const probe = createDb(process.env.TEST_DATABASE_URL!);
+  await probe.db.delete(projects).where(sql`${projects.id} in (select project_id from pipeline_runs)`);
+  await probe.close();
 });
 
 /**
@@ -34,6 +59,16 @@ async function pipelineApp(stubs: readonly (typeof PIPELINE_TYPES)[number][] = P
   return { ...app, caller };
 }
 type App = Awaited<ReturnType<typeof pipelineApp>>;
+
+/** Постановка задачі цього типу падає (як для незареєстрованого типу). */
+function failEnqueue(s: App, failing: string) {
+  const queue = s.deps.jobs.queue;
+  const enqueue = queue.enqueue.bind(queue);
+  queue.enqueue = async (type, payload, opts) => {
+    if (type === failing) throw new AppError('UNKNOWN_JOB_TYPE', `Невідомий тип задачі: ${type}`);
+    return enqueue(type, payload, opts);
+  };
+}
 
 const settings = (over: Partial<PipelineSettings> = {}): PipelineSettings => ({
   topic: `Як працюють чорні діри ${randomUUID()}`,
@@ -439,7 +474,8 @@ describe('pipeline review', () => {
 
 describe('pipeline review fixes', () => {
   it('start returns the project even if the first advance fails (no duplicate on retry)', async () => {
-    const s = await pipelineApp(['pipeline.scene', 'pipeline.visual', 'pipeline.assemble']);
+    const s = await pipelineApp();
+    failEnqueue(s, 'pipeline.script');
     const st = settings();
     const { projectId } = await s.caller.pipeline.start(st);
     expect(await runOf(s, projectId)).toMatchObject({ stage: 'script', status: 'running', scriptJobId: null });
@@ -589,5 +625,435 @@ describe('pipeline cards and access', () => {
     await expect(stranger.pipeline.updateScene({ sceneId: 'not-a-uuid', narration: 'x' })).rejects.toMatchObject(
       notFound,
     );
+  });
+});
+
+type GenReq = { prompt: string; signal?: AbortSignal };
+
+/** Fake-реєстр, що записує кожен `generateObject`; `override` може повернути власну відповідь (undefined — fake). */
+function recordingAi(override?: (schema: unknown, req: GenReq, n: number) => Promise<unknown> | unknown) {
+  const base = fakeAi();
+  const calls: { schema: unknown; prompt: string; result: unknown }[] = [];
+  const ai: AiRegistry = {
+    ...base,
+    text: async (userId, ref) => {
+      const gen = await base.text(userId, ref);
+      return {
+        ...gen,
+        generateObject: async (schema, req) => {
+          const n = calls.length;
+          const result = (await override?.(schema, req, n)) ?? (await gen.generateObject(schema, req));
+          calls.push({ schema, prompt: req.prompt, result });
+          return result as never;
+        },
+      };
+    },
+  };
+  return { ai, calls };
+}
+
+/** Повний runtime (воркери + відновлення); візуал і збірка (T8/T9) — no-op заглушки. */
+async function runtimeApp(ai: AiRegistry = fakeAi()) {
+  const app = await createApp(testConfig(), { ai });
+  opened.push(app);
+  for (const type of ['pipeline.visual', 'pipeline.assemble'] as const)
+    app.deps.jobs.runtime.register({ type, concurrency: 1, handler: async () => undefined });
+  await app.start();
+  const caller = appRouter.createCaller({ userId: LOCAL_USER_ID, deps: app.deps });
+  return { ...app, caller };
+}
+
+const ukOnly = (over: Partial<PipelineSettings> = {}) =>
+  settings({ languages: ['uk'], voices: { uk: VOICE }, ...over });
+const T = { timeout: 20_000 };
+const jobRow = async (s: App, id: string) => (await s.deps.db.select().from(jobs).where(eq(jobs.id, id)))[0]!;
+const baseLines = (s: App, projectId: string) =>
+  s.deps.db
+    .select()
+    .from(voiceLines)
+    .where(and(eq(voiceLines.projectId, projectId), eq(voiceLines.language, 'uk')));
+
+function gated() {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let first = true;
+  const { ai, calls } = recordingAi(async (schema) => {
+    if (schema === scriptSchema && first) {
+      first = false;
+      await gate;
+    }
+    return undefined;
+  });
+  return { ai, calls, release };
+}
+
+describe('pipeline.script job', () => {
+  it('start without stop → script job writes N scenes, base lines (text_origin script), skeleton segments matching scene ids, project title from script, stage produce', async () => {
+    const { ai, calls } = recordingAi();
+    const s = await runtimeApp(ai);
+    const { projectId } = await s.caller.pipeline.start(ukOnly({ stopAfterScript: false }));
+    await expect.poll(async () => (await runOf(s, projectId)).stage, T).toBe('produce');
+    const run = await runOf(s, projectId);
+    const scenes = await scenesOf(s, run.id);
+    expect(scenes).toHaveLength(scenePlan('9:16', 45).scenes);
+    const script = calls.find((c) => c.schema === scriptSchema)!.result as ScriptResult;
+    expect(scenes.map((sc) => sc.visualPrompt)).toEqual(script.scenes.map((x) => x.visualPrompt));
+    expect(scenes.map((sc) => sc.keywords)).toEqual(script.scenes.map((x) => x.keywords));
+    const lines = await baseLines(s, projectId);
+    const text = new Map(lines.map((l) => [l.segmentId, l]));
+    expect(scenes.map((sc) => text.get(sc.segmentId)?.text)).toEqual(script.scenes.map((x) => x.narration));
+    expect(lines.every((l) => l.textOrigin === 'script')).toBe(true);
+    await expectSkeleton(s, projectId, run.id);
+    const [p] = await s.deps.db.select().from(projects).where(eq(projects.id, projectId));
+    expect(p!.title).toBe(script.title);
+    expect(await jobRow(s, run.scriptJobId!)).toMatchObject({ status: 'done', result: { scenes: scenes.length } });
+    const [g] = await s.deps.db.select().from(generations).where(eq(generations.jobId, run.scriptJobId!));
+    expect(g).toMatchObject({ capability: 'text', status: 'done', provider: 'fake' });
+  }, 30_000);
+
+  it('stopAfterScript → awaiting_review', async () => {
+    const s = await runtimeApp();
+    const { projectId } = await s.caller.pipeline.start(ukOnly({ stopAfterScript: true }));
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+    const run = await runOf(s, projectId);
+    expect(run.stage).toBe('review');
+    const scenes = await scenesOf(s, run.id);
+    expect(scenes.length).toBeGreaterThan(0);
+    expect(scenes.every((sc) => sc.status === 'empty' && sc.jobId === null)).toBe(true);
+  }, 30_000);
+
+  it('16:9 900 s script runs outline then per-section scenes (fake outline), scene count from scenePlan', async () => {
+    const { ai, calls } = recordingAi();
+    const s = await runtimeApp(ai);
+    const { projectId } = await s.caller.pipeline.start(
+      ukOnly({ format: '16:9', targetSec: 900, stopAfterScript: true }),
+    );
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+    const run = await runOf(s, projectId);
+    expect(await scenesOf(s, run.id)).toHaveLength(scenePlan('16:9', 900).scenes);
+    expect(calls[0]!.schema).toBe(outlineSchema);
+    const outline = calls[0]!.result as OutlineResult;
+    const sections = calls.slice(1);
+    expect(sections).toHaveLength(outline.sections.length);
+    expect(sections.every((c) => c.schema === scriptSchema)).toBe(true);
+    expect(sections[0]!.prompt).toContain(`Розділ: ${outline.sections[0]!.title}`);
+    // контекст — останні 3 сцени попереднього тексту
+    const prev = (sections[0]!.result as ScriptResult).scenes.slice(-3).map((x) => `- ${x.narration}`);
+    expect(sections[1]!.prompt).toContain(prev.join('\n'));
+    const [p] = await s.deps.db.select().from(projects).where(eq(projects.id, projectId));
+    expect(p!.title).toBe(outline.title);
+  }, 30_000);
+
+  const invalid = {
+    title: 'Невалідний',
+    scenes: [{ narration: 'а'.repeat(1600), visualPrompt: 'x', keywords: ['k'] }],
+  };
+
+  it('invalid model output retried once with the errors in the prompt, then succeeds', async () => {
+    const { ai, calls } = recordingAi((schema, _req, n) => (schema === scriptSchema && n === 0 ? invalid : undefined));
+    const s = await runtimeApp(ai);
+    const { projectId } = await s.caller.pipeline.start(ukOnly());
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.prompt).toContain('Попередня відповідь була невалідною');
+    expect(calls[1]!.prompt).toContain('1600');
+    expect(await scenesOf(s, (await runOf(s, projectId)).id)).toHaveLength(scenePlan('9:16', 45).scenes);
+  }, 30_000);
+
+  it('invalid model output twice → run failed with message', async () => {
+    const { ai, calls } = recordingAi((schema) => (schema === scriptSchema ? invalid : undefined));
+    const s = await runtimeApp(ai);
+    const { projectId } = await s.caller.pipeline.start(ukOnly());
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('failed');
+    const run = await runOf(s, projectId);
+    expect(calls).toHaveLength(2);
+    expect(run.error).toContain('1500');
+    expect(await scenesOf(s, run.id)).toHaveLength(0);
+    const [g] = await s.deps.db.select().from(generations).where(eq(generations.jobId, run.scriptJobId!));
+    expect(g!.status).toBe('failed');
+  }, 30_000);
+
+  it('deleting the project while the script job runs → job ends without throwing, no run rows left', async () => {
+    const { ai, release } = gated();
+    const s = await runtimeApp(ai);
+    const { projectId } = await s.caller.pipeline.start(ukOnly());
+    const run = await runOf(s, projectId);
+    await expect.poll(async () => (await jobRow(s, run.scriptJobId!)).status, T).toBe('running');
+    await s.deps.db.delete(projects).where(eq(projects.id, projectId));
+    release();
+    await expect.poll(async () => (await jobRow(s, run.scriptJobId!)).status, T).toBe('done');
+    expect((await jobRow(s, run.scriptJobId!)).result).toEqual({ scenes: 0 });
+    expect(await s.deps.db.select().from(pipelineRuns).where(eq(pipelineRuns.projectId, projectId))).toEqual([]);
+    expect(await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.runId, run.id))).toEqual([]);
+    expect(await s.deps.db.select().from(voiceLines).where(eq(voiceLines.projectId, projectId))).toEqual([]);
+    // сцени немає — pipeline.scene теж no-op
+    const sceneJob = await s.deps.jobs.queue.enqueue(
+      'pipeline.scene',
+      { sceneId: randomUUID() },
+      { userId: LOCAL_USER_ID },
+    );
+    await expect.poll(async () => (await jobRow(s, sceneJob)).status, T).toBe('done');
+    expect((await jobRow(s, sceneJob)).result).toEqual({ ok: false });
+  }, 30_000);
+});
+
+describe('pipeline cancel, retry, recovery', () => {
+  it('cancel during script then retry → exactly one set of scenes', async () => {
+    const { ai, release } = gated();
+    const s = await runtimeApp(ai);
+    const { projectId } = await s.caller.pipeline.start(ukOnly());
+    const first = (await runOf(s, projectId)).scriptJobId!;
+    await expect.poll(async () => (await jobRow(s, first)).status, T).toBe('running');
+    await s.caller.pipeline.cancel({ projectId });
+    expect(await runOf(s, projectId)).toMatchObject({ status: 'cancelled' });
+    await expect(s.caller.pipeline.cancel({ projectId })).rejects.toMatchObject({ cause: { code: 'VALIDATION' } });
+
+    await s.caller.pipeline.retry({ projectId });
+    const retried = await runOf(s, projectId);
+    expect(retried.scriptJobId).not.toBe(first);
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+    // перша задача «дописує» вже після скасування — нічого не пише
+    release();
+    await expect.poll(async () => (await jobRow(s, first)).status, T).toBe('cancelled');
+    const n = scenePlan('9:16', 45).scenes;
+    expect(await scenesOf(s, retried.id)).toHaveLength(n);
+    expect(await baseLines(s, projectId)).toHaveLength(n);
+    await expectSkeleton(s, projectId, retried.id);
+    await expect(s.caller.pipeline.retry({ projectId })).rejects.toMatchObject({ cause: { code: 'VALIDATION' } });
+  }, 30_000);
+
+  it('restart with interrupted script job → run failed with restart message, retry completes', async () => {
+    const before = await pipelineApp(['pipeline.visual', 'pipeline.assemble']);
+    const { projectId } = await before.caller.pipeline.start(ukOnly());
+    const run = await runOf(before, projectId);
+    // процес «упав» посеред задачі сценарію
+    await before.deps.db.update(jobs).set({ status: 'running' }).where(eq(jobs.id, run.scriptJobId!));
+    const s = await runtimeApp();
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('failed');
+    expect((await runOf(s, projectId)).error).toBe(RESTART_ERROR);
+    await s.caller.pipeline.retry({ projectId });
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+    expect(await scenesOf(s, run.id)).toHaveLength(scenePlan('9:16', 45).scenes);
+  }, 30_000);
+
+  it('recovery advances running runs at startup (script job never enqueued)', async () => {
+    const before = await pipelineApp();
+    failEnqueue(before, 'pipeline.script');
+    const { projectId } = await before.caller.pipeline.start(ukOnly());
+    expect((await runOf(before, projectId)).scriptJobId).toBeNull();
+    const s = await runtimeApp();
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+  }, 30_000);
+
+  it('cancel during produce cancels visual, scene, generation and synth jobs; scenes → empty; retry re-queues', async () => {
+    const s = await pipelineApp();
+    const { projectId, runId } = await reviewRun(s);
+    await s.caller.pipeline.continue({ projectId });
+    const scenes = await scenesOf(s, runId);
+    // сцена 0 — фото генерується; сцена 1 — перегенеровується текст
+    const [g] = await s.deps.db
+      .insert(generations)
+      .values({ userId: LOCAL_USER_ID, capability: 'image', provider: 'fake', model: 'image', prompt: 'x', params: {} })
+      .returning();
+    const genJob = await s.deps.jobs.queue.enqueue(
+      'image.generate',
+      { generationId: g!.id },
+      { userId: LOCAL_USER_ID },
+    );
+    await s.deps.db.update(generations).set({ jobId: genJob }).where(eq(generations.id, g!.id));
+    await s.deps.db
+      .update(pipelineScenes)
+      .set({ generationId: g!.id, status: 'running' })
+      .where(eq(pipelineScenes.id, scenes[0]!.id));
+    const textJob = await s.deps.jobs.queue.enqueue(
+      'pipeline.scene',
+      { sceneId: scenes[1]!.id },
+      { userId: LOCAL_USER_ID },
+    );
+    const synth = (await baseLines(s, projectId)).map((l) => l.jobId!);
+    expect(synth.every(Boolean)).toBe(true);
+
+    const stranger = appRouter.createCaller({ userId: randomUUID(), deps: s.deps });
+    await expect(stranger.pipeline.cancel({ projectId })).rejects.toMatchObject({ cause: { code: 'NOT_FOUND' } });
+    await s.caller.pipeline.cancel({ projectId });
+    expect(await runOf(s, projectId)).toMatchObject({ status: 'cancelled', stage: 'produce' });
+    const status = async (id: string) => (await jobRow(s, id)).status;
+    for (const id of [...scenes.map((sc) => sc.jobId!), genJob, textJob, ...synth])
+      expect(await status(id)).toBe('cancelled');
+    const after = await scenesOf(s, runId);
+    expect(after.every((sc) => sc.status === 'empty' && sc.jobId === null)).toBe(true);
+    expect(after[0]!.generationId).toBeNull();
+    await expect
+      .poll(async () => (await baseLines(s, projectId)).map((l) => l.status), T)
+      .toEqual(['empty', 'empty', 'empty']);
+
+    await s.caller.pipeline.retry({ projectId });
+    expect(await runOf(s, projectId)).toMatchObject({ status: 'running', stage: 'produce', error: null });
+    const again = await scenesOf(s, runId);
+    expect(again.every((sc) => sc.status === 'queued' && sc.jobId && !scenes.some((o) => o.jobId === sc.jobId))).toBe(
+      true,
+    );
+    expect((await baseLines(s, projectId)).every((l) => l.status === 'queued')).toBe(true);
+  });
+
+  it('retry after a failed assemble: back to produce, failed scene and failed lines re-queued, translate again', async () => {
+    const s = await pipelineApp();
+    const { projectId, runId } = await reviewRun(s);
+    const assembleJob = await s.deps.jobs.queue.enqueue('pipeline.assemble', { projectId }, { userId: LOCAL_USER_ID });
+    await s.deps.db.update(jobs).set({ status: 'failed', error: 'Збій збірки' }).where(eq(jobs.id, assembleJob));
+    await s.deps.db
+      .update(pipelineRuns)
+      .set({ stage: 'assemble', status: 'failed', error: 'Збій збірки', assembleJobId: assembleJob })
+      .where(eq(pipelineRuns.id, runId));
+    const [g] = await s.deps.db
+      .insert(generations)
+      .values({
+        userId: LOCAL_USER_ID,
+        capability: 'image',
+        provider: 'fake',
+        model: 'image',
+        prompt: 'x',
+        params: {},
+        status: 'failed',
+        error: 'Fake: відмова',
+      })
+      .returning();
+    const scenes = await scenesOf(s, runId);
+    await s.deps.db.update(pipelineScenes).set({ status: 'ready' }).where(eq(pipelineScenes.runId, runId));
+    await s.deps.db
+      .update(pipelineScenes)
+      .set({ status: 'failed', error: 'Fake: відмова', generationId: g!.id })
+      .where(eq(pipelineScenes.id, scenes[0]!.id));
+    await s.deps.db
+      .update(voiceLines)
+      .set({ status: 'ready' })
+      .where(and(eq(voiceLines.projectId, projectId), eq(voiceLines.language, 'uk')));
+    // переклад не вдалося поставити (як позначає runAdvance)
+    await s.deps.db.insert(voiceLines).values(
+      scenes.map((sc) => ({
+        userId: LOCAL_USER_ID,
+        projectId,
+        segmentId: sc.segmentId,
+        language: 'en',
+        status: 'failed' as const,
+        error: 'Немає ключа',
+      })),
+    );
+    expect((await loadSnapshot(s.deps, runId))!.langs.find((l) => l.language === 'en')!.translate).toBe('failed');
+
+    await s.caller.pipeline.retry({ projectId });
+    const run = await runOf(s, projectId);
+    expect(run).toMatchObject({ status: 'running', stage: 'produce', error: null, assembleJobId: null });
+    const [sc0] = await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, scenes[0]!.id));
+    expect(sc0).toMatchObject({ status: 'queued', error: null, generationId: null, jobId: expect.any(String) });
+    const en = await s.deps.db
+      .select()
+      .from(voiceLines)
+      .where(and(eq(voiceLines.projectId, projectId), eq(voiceLines.language, 'en')));
+    expect(en.every((l) => l.status === 'empty' && l.error === null)).toBe(true);
+    expect(await projectJobs(s, 'voice.translate', projectId)).toHaveLength(1);
+  });
+});
+
+describe('pipeline.scene and event listener', () => {
+  it('regenerateScene text rewrites narration, base line becomes voiced-stale', async () => {
+    const { ai, calls } = recordingAi();
+    const s = await runtimeApp(ai);
+    const { projectId } = await s.caller.pipeline.start(ukOnly());
+    await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+    const run = await runOf(s, projectId);
+    const scenes = await scenesOf(s, run.id);
+    const target = scenes[1]!;
+    const [old] = (await baseLines(s, projectId)).filter((l) => l.segmentId === target.segmentId);
+    const audio = await insertAsset(s);
+    await s.deps.db
+      .update(voiceLines)
+      .set({ status: 'ready', audioAssetId: audio, voice: VOICE, voicedHash: voicedHash(old!.text, VOICE) })
+      .where(eq(voiceLines.id, old!.id));
+    expect((await getVoice(s.deps, LOCAL_USER_ID, projectId)).lines[target.segmentId]!.uk!.state).toBe('ready');
+
+    const { jobId } = await s.caller.pipeline.regenerateScene({ sceneId: target.id, part: 'text' });
+    await expect.poll(async () => (await jobRow(s, jobId)).status, T).toBe('done');
+    const [line] = (await baseLines(s, projectId)).filter((l) => l.segmentId === target.segmentId);
+    expect(line!.text).toBe(`Нова версія. ${old!.text}`);
+    expect(line!.textOrigin).toBe('script');
+    const [sc] = await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, target.id));
+    expect(sc).toMatchObject({
+      visualPrompt: `new version ${old!.text}`,
+      keywords: ['fake'],
+      status: 'empty',
+      jobId: null,
+    });
+    expect((await getVoice(s.deps, LOCAL_USER_ID, projectId)).lines[target.segmentId]!.uk!.state).toBe('stale');
+    const prompt = calls.at(-1)!.prompt;
+    expect(prompt).toContain('Попередня сцена:');
+    expect(prompt).toContain('Наступна сцена:');
+    const [g] = await s.deps.db.select().from(generations).where(eq(generations.jobId, jobId));
+    expect(g).toMatchObject({ capability: 'text', status: 'done' });
+    // інші сцени без змін
+    const others = (await baseLines(s, projectId)).filter((l) => l.segmentId !== target.segmentId);
+    expect(others.every((l) => !l.text.startsWith('Нова версія.'))).toBe(true);
+  }, 30_000);
+
+  it('regenerateScene is rejected while the script is being written and for a stranger', async () => {
+    const s = await pipelineApp();
+    const { projectId, runId } = await reviewRun(s);
+    const [sc] = await scenesOf(s, runId);
+    const stranger = appRouter.createCaller({ userId: randomUUID(), deps: s.deps });
+    await expect(stranger.pipeline.regenerateScene({ sceneId: sc!.id, part: 'text' })).rejects.toMatchObject({
+      cause: { code: 'NOT_FOUND' },
+    });
+    const a = await s.caller.pipeline.regenerateScene({ sceneId: sc!.id, part: 'text' });
+    // повторне натискання, поки задача жива, не ставить другу
+    const b = await s.caller.pipeline.regenerateScene({ sceneId: sc!.id, part: 'text' });
+    expect(b.jobId).toBe(a.jobId);
+    await s.deps.db.update(pipelineRuns).set({ stage: 'script', status: 'running' }).where(eq(pipelineRuns.id, runId));
+    await expect(s.caller.pipeline.regenerateScene({ sceneId: sc!.id, part: 'text' })).rejects.toMatchObject({
+      cause: { code: 'VALIDATION' },
+    });
+    expect(projectId).toBeTruthy();
+  });
+
+  it('event listener survives an event for a deleted project', async () => {
+    const s = await pipelineApp(['pipeline.script', 'pipeline.scene', 'pipeline.assemble']); // без pipeline.visual
+    const errors: unknown[] = [];
+    const deps = { ...s.deps, log: { error: (o: object) => void errors.push(o) } };
+    const ev = (patch: Partial<JobEvent>): JobEvent => ({
+      jobId: randomUUID(),
+      userId: LOCAL_USER_ID,
+      type: 'pipeline.script',
+      subject: {},
+      status: 'done',
+      progress: 100,
+      message: null,
+      error: null,
+      ...patch,
+    });
+    const { projectId } = await s.caller.pipeline.start(settings());
+    const [sc] = await s.deps.db
+      .insert(pipelineScenes)
+      .values({ userId: LOCAL_USER_ID, runId: (await runOf(s, projectId)).id, segmentId: 'seg-x', position: 0 })
+      .returning();
+    await s.deps.db.delete(projects).where(eq(projects.id, projectId));
+    await handlePipelineEvent(deps, ev({ subject: { projectId } }));
+    await handlePipelineEvent(deps, ev({ type: 'pipeline.visual', subject: { sceneId: sc!.id } }));
+    await handlePipelineEvent(deps, ev({ type: 'asset.process', subject: { assetId: randomUUID() } }));
+    await handlePipelineEvent(deps, ev({ type: 'voice.synthesize', subject: { lineId: 'not-a-uuid' } }));
+    await handlePipelineEvent(deps, ev({ type: 'image.generate', subject: { generationId: randomUUID() } }));
+    expect(errors).toEqual([]);
+    expect(pipelineEvents(deps)(ev({ subject: { projectId } }))).toBeUndefined();
+
+    // advance падає (pipeline.visual не зареєстровано) — помилку журналюємо, слухач не кидає
+    const other = await reviewRun(s);
+    await s.deps.db
+      .update(pipelineRuns)
+      .set({ stage: 'produce', status: 'running' })
+      .where(eq(pipelineRuns.id, other.runId));
+    const [first] = await scenesOf(s, other.runId);
+    await handlePipelineEvent(deps, ev({ type: 'pipeline.scene', subject: { sceneId: first!.id } }));
+    expect(errors).toHaveLength(1);
+    // незавершені події не запускають advance
+    await handlePipelineEvent(deps, ev({ type: 'pipeline.scene', status: 'running', subject: { sceneId: first!.id } }));
+    expect(errors).toHaveLength(1);
   });
 });

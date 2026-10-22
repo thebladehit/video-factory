@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '@vf/db';
-import { pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
+import { jobs, pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
 import { AppError, normalizeDoc } from '@vf/shared';
 import { estimateSceneSec, skeletonDoc } from '@vf/timeline';
 import type { AppDeps } from '../../app';
@@ -228,4 +228,26 @@ export async function moveScene(
     await renumber(tx, [...rest.slice(0, to), current, ...rest.slice(to)]);
     await rebuildSkeleton(tx, locked);
   });
+}
+
+/**
+ * «↻ текст» сцени: задача `pipeline.scene` (будь-коли, крім етапу script). Жива задача цієї сцени вже є —
+ * повертається вона (повторне натискання не ставить другу).
+ */
+export async function regenerateSceneText(deps: AppDeps, userId: string, sceneId: string): Promise<{ jobId: string }> {
+  const { scene, run } = await ownScene(deps, userId, sceneId);
+  if (run.stage === 'script') throw new AppError('VALIDATION', 'Сценарій ще створюється — зачекайте');
+  const [live] = await deps.db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.type, 'pipeline.scene'),
+        inArray(jobs.status, ['queued', 'running']),
+        sql`${jobs.payload}->>'sceneId' = ${scene.id}`,
+      ),
+    )
+    .limit(1);
+  if (live) return { jobId: live.id };
+  return { jobId: await deps.jobs.queue.enqueue('pipeline.scene', { sceneId: scene.id }, { userId }) };
 }
