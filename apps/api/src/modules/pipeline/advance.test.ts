@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { advance, type LangSnap, type RunSnap, type SceneSnap } from './advance';
+import { advance, afterDone, type LangSnap, type RunSnap, type SceneSnap } from './advance';
 
 function run(over: Partial<RunSnap> = {}): RunSnap {
   return {
@@ -372,5 +372,45 @@ describe('advance: purity', () => {
       { type: 'enqueueTranslate', language: 'en' },
       { type: 'enqueueSynthesize', language: 'de' },
     ]);
+  });
+});
+
+describe('afterDone', () => {
+  const done = (scenes: SceneSnap[], over: Partial<RunSnap> = {}) =>
+    produceDone({ stage: 'done', status: 'done', assembleJob: 'done', scenes, langs: [base({ lines: lines('empty') })], ...over });
+
+  it('done run: advance stays [] while afterDone links and readies a regenerated scene only', () => {
+    const s = done([
+      scene('s1', { status: 'ready', hasVisual: true }),
+      scene('s2', { status: 'running', generation: { status: 'done', assetId: 'a2', assetStatus: 'ready' } }),
+      scene('s3', { status: 'running', generation: { status: 'done', assetId: 'a3', assetStatus: 'processing' } }),
+      scene('s4', { status: 'empty' }),
+    ]);
+    expect(advance(s)).toEqual([]);
+    expect(afterDone(s)).toEqual([
+      { type: 'linkGenerated', sceneId: 's2', assetId: 'a2' },
+      { type: 'sceneReady', sceneId: 's2' },
+      { type: 'linkGenerated', sceneId: 's3', assetId: 'a3' },
+    ]);
+  });
+
+  it('failed generation or interrupted job after done → sceneFailed; nothing live → []', () => {
+    const s = done([
+      scene('s1', { status: 'running', generation: { status: 'failed', assetId: null, assetStatus: null } }),
+      scene('s2', { status: 'queued', job: 'failed' }),
+      scene('s3', { status: 'running', job: 'running' }),
+    ]);
+    expect(afterDone(s)).toEqual([
+      { type: 'sceneFailed', sceneId: 's1', error: 'Не вдалося згенерувати візуал' },
+      { type: 'sceneFailed', sceneId: 's2', error: 'Задачу візуалу перервано' },
+    ]);
+    expect(afterDone(done([scene('s1', { status: 'ready', hasVisual: true })]))).toEqual([]);
+  });
+
+  it('not done (produce, failed, cancelled) → []', () => {
+    const live = [scene('s1', { status: 'running', generation: { status: 'done', assetId: 'a', assetStatus: 'ready' } })];
+    expect(afterDone(produceDone({ scenes: live }))).toEqual([]);
+    expect(afterDone(done(live, { status: 'failed' }))).toEqual([]);
+    expect(afterDone(done(live, { status: 'cancelled' }))).toEqual([]);
   });
 });

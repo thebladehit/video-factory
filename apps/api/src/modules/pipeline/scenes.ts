@@ -10,6 +10,7 @@ import { generateVideo } from '../generate/service';
 import { clearFailure, MAX_LINE_CHARS, setText } from '../voice/service';
 import { serialized } from './run-advance';
 import { advanceQuietly, ownRun } from './service';
+import { applySceneVisual } from './visual-swap';
 import type { RunRow, SceneRow } from './snapshot';
 
 /** Межі сценарію (як у перевірці відповіді моделі) */
@@ -259,9 +260,11 @@ const liveStatuses = ['queued', 'running'] as ('queued' | 'running')[];
 /**
  * Етапи, на яких можна змінювати візуал сцени. Генерація (знову / відео) — лише після перевірки сценарію, бо її файл
  * прив'язує `advance`, а на перевірці він нічого не робить; вибір файлу — й на перевірці. Під час збірки — ні:
- * збірка вже читає сцени.
+ * збірка вже читає сцени. Запуск, зупинений помилкою чи скасуванням, — лише після «Повторити».
  */
 function checkVisualStage(run: RunRow, manual: boolean): void {
+  if (run.status === 'cancelled' || run.status === 'failed')
+    throw new AppError('VALIDATION', 'Запуск зупинено — натисніть «Повторити»');
   if (run.stage === 'script') throw new AppError('VALIDATION', 'Сценарій ще створюється — зачекайте');
   if (run.stage === 'review' && !manual)
     throw new AppError('VALIDATION', 'Візуал генерується після перевірки сценарію — натисніть «Продовжити»');
@@ -288,6 +291,14 @@ async function stopSceneWork(deps: AppDeps, scene: SceneRow): Promise<void> {
   }
 }
 
+/** Актуальний стан запуску всередині черги викликів (перевірка до черги могла застаріти). */
+async function freshVisualStage(deps: AppDeps, runId: string, manual: boolean): Promise<RunRow> {
+  const [run] = await deps.db.select().from(pipelineRuns).where(eq(pipelineRuns.id, runId));
+  if (!run) throw sceneNotFound();
+  checkVisualStage(run, manual);
+  return run;
+}
+
 const freshScene = async (deps: AppDeps, sceneId: string): Promise<SceneRow> => {
   const [s] = await deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, sceneId));
   if (!s) throw sceneNotFound();
@@ -309,6 +320,7 @@ export async function regenerateSceneVisual(
   const { run } = await ownScene(deps, userId, sceneId);
   checkVisualStage(run, false);
   const jobId = await serialized(run.id, async () => {
+    await freshVisualStage(deps, run.id, false);
     const cur = await freshScene(deps, sceneId);
     await stopSceneWork(deps, cur);
     await deps.db
@@ -344,6 +356,7 @@ export async function generateSceneVideo(
     .where(eq(projects.id, run.projectId));
   if (!project) throw sceneNotFound();
   const generationId = await serialized(run.id, async () => {
+    await freshVisualStage(deps, run.id, false);
     const cur = await freshScene(deps, i.sceneId);
     const { generationId } = await generateVideo(deps, userId, {
       model: i.model,
@@ -366,7 +379,8 @@ export async function generateSceneVideo(
 /**
  * «Вибрати з бібліотеки» / підказка: власний готовий фото- чи відеофайл → `visual_source='manual'`, сцена `ready`
  * (поточна робота сцени скасовується). Чужий/неіснуючий файл → NOT_FOUND; аудіо чи не готовий → VALIDATION.
- * Можна й на перевірці сценарію (тоді «Продовжити» цю сцену вже не генерує).
+ * Можна й на перевірці сценарію (тоді «Продовжити» цю сцену вже не генерує); після `done` кліп сегмента
+ * замінюється точково.
  */
 export async function setSceneVisual(
   deps: AppDeps,
@@ -384,10 +398,8 @@ export async function setSceneVisual(
   if ((a.kind !== 'image' && a.kind !== 'video') || a.status !== 'ready')
     throw new AppError('VALIDATION', 'Візуал сцени — це готове фото або відео з бібліотеки');
   checkVisualStage(run, true);
-  // T9: після `done` — точкова заміна кліпів сегмента (`replaceSegmentVisual`) разом зі сценою
-  if (run.stage === 'done')
-    throw new AppError('VALIDATION', 'Заміна візуалу після збірки ще недоступна — пересоберіть чернетку');
   await serialized(run.id, async () => {
+    const fresh = await freshVisualStage(deps, run.id, true);
     const cur = await freshScene(deps, i.sceneId);
     await stopSceneWork(deps, cur);
     await deps.db
@@ -400,6 +412,8 @@ export async function setSceneVisual(
         updatedAt: new Date(),
       })
       .where(eq(pipelineScenes.id, i.sceneId));
+    // після збірки — точкова заміна кліпу сегмента (немає сегмента — документ не змінюється)
+    if (fresh.stage === 'done') await applySceneVisual(deps, i.sceneId);
   });
   await advanceQuietly(deps, run.id);
 }

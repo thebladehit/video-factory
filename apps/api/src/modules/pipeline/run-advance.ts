@@ -3,8 +3,9 @@ import { assets, generations, jobs, pipelineRuns, pipelineScenes, voiceLines } f
 import { isAppError, normalizeDoc, normalizeTags } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { enqueueSynthesize, enqueueTranslate } from '../voice/service';
-import { advance, type Action } from './advance';
+import { advance, afterDone, type Action } from './advance';
 import { loadRun, type RunRow } from './snapshot';
+import { applySceneVisual } from './visual-swap';
 
 /** Тег файлів, створених конвеєром */
 export const PIPELINE_TAG = 'конвеєр';
@@ -20,8 +21,9 @@ const MAX_PASSES = 5;
 const chains = new Map<string, Promise<void>>();
 
 /**
- * Читає знімок запуску, обчислює `advance` і виконує дії; повторює, поки прохід змінює стан (toProduce, sceneReady…),
- * щоб, наприклад, «сценарій готовий» одразу ставив візуали й озвучку. Видалений запуск — no-op.
+ * Читає знімок запуску, обчислює `advance` (після done — `afterDone`) і виконує дії; повторює, поки прохід змінює
+ * стан (toProduce, sceneReady…), щоб, наприклад, «сценарій готовий» одразу ставив візуали й озвучку.
+ * Видалений запуск — no-op.
  * Помилка дії не зупиняє інші дії проходу й не скасовує перечитування, якщо прохід змінив стан;
  * перша помилка кидається наприкінці.
  */
@@ -52,10 +54,14 @@ async function advanceLoop(deps: AppDeps, runId: string): Promise<void> {
   for (let pass = 0; pass < MAX_PASSES; pass++) {
     const loaded = await loadRun(deps, runId);
     if (!loaded) break;
+    // після done — лише сцени, яким змінили візуал; готова сцена точково міняє свій кліп у документі
+    const done = loaded.run.stage === 'done' && loaded.run.status === 'done';
     let changed = false;
-    for (const action of advance(loaded.snap)) {
+    for (const action of done ? afterDone(loaded.snap) : advance(loaded.snap)) {
       try {
-        if (await executeAction(deps, runId, action)) changed = true;
+        const ok = await executeAction(deps, runId, action);
+        if (ok) changed = true;
+        if (ok && done && action.type === 'sceneReady') await applySceneVisual(deps, action.sceneId);
       } catch (e) {
         failure ??= e;
       }

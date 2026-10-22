@@ -317,6 +317,39 @@ export async function retryPipeline(deps: AppDeps, userId: string, projectId: st
   await advanceQuietly(deps, run.id);
 }
 
+/**
+ * «Пересібрати чернетку»: лише після `done`; `version` ≠ поточній версії документа → CONFLICT (ручні правки, яких
+ * користувач не бачив). Нова задача `pipeline.assemble` (етап лишається done; пише лише вона — `assemble_job_id`).
+ * Збірка, що вже йде, повертається та сама.
+ */
+export async function reassemble(
+  deps: AppDeps,
+  userId: string,
+  input: { projectId: string; version: number },
+): Promise<{ jobId: string }> {
+  const run = await ownRun(deps, userId, input.projectId);
+  return deps.db.transaction(async (tx) => {
+    const [locked] = await tx.select().from(pipelineRuns).where(eq(pipelineRuns.id, run.id)).for('update');
+    if (!locked || locked.stage !== 'done' || locked.status !== 'done')
+      throw new AppError('VALIDATION', 'Пересібрати можна лише готову чернетку');
+    const [p] = await tx
+      .select({ version: projects.timelineVersion })
+      .from(projects)
+      .where(eq(projects.id, locked.projectId));
+    if (!p || p.version !== input.version) throw new AppError('CONFLICT', 'Таймлайн змінено — оновіть сторінку');
+    if (locked.assembleJobId) {
+      const [j] = await tx.select({ status: jobs.status }).from(jobs).where(eq(jobs.id, locked.assembleJobId));
+      if (j && live.includes(j.status as 'queued')) return { jobId: locked.assembleJobId };
+    }
+    const jobId = await deps.jobs.queue.enqueue('pipeline.assemble', { projectId: locked.projectId }, { userId });
+    await tx
+      .update(pipelineRuns)
+      .set({ assembleJobId: jobId, updatedAt: new Date() })
+      .where(eq(pipelineRuns.id, locked.id));
+    return { jobId };
+  });
+}
+
 type Tx = Parameters<Parameters<AppDeps['db']['transaction']>[0]>[0];
 
 /** Сцени failed → empty; генерація, що не дала готового файлу, і згенерований візуал відв'язуються. */

@@ -91,32 +91,7 @@ function produce(s: RunSnap): Action[] {
       actions.push({ type: 'enqueueVisual', sceneId: sc.id });
       continue;
     }
-    // queued | running: після скасування/відновлення генерація могла вже завершитись
-    const g = sc.generation;
-    if (!g) {
-      // без генерації сцену веде лише її задача: немає задачі або вона обірвалась → сцена failed
-      if (sc.job === null || sc.job === 'failed' || sc.job === 'cancelled') {
-        actions.push({ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_JOB_INTERRUPTED });
-      }
-      continue;
-    }
-    if (
-      g.status === 'failed' ||
-      g.status === 'cancelled' ||
-      g.assetStatus === 'failed' ||
-      // генерація без файлу або файл видалено — прив'язувати нічого
-      (g.status === 'done' && (g.assetId === null || g.assetStatus === null))
-    ) {
-      actions.push({ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_FAILED });
-      continue;
-    }
-    let linked = sc.hasVisual;
-    if (g.status === 'done' && g.assetId && !linked) {
-      actions.push({ type: 'linkGenerated', sceneId: sc.id, assetId: g.assetId });
-      linked = true;
-    }
-    // asset уже ready — окремої події не буде, тож готовність сцени — в тому ж проході
-    if (linked && g.assetStatus === 'ready') actions.push({ type: 'sceneReady', sceneId: sc.id });
+    actions.push(...liveScene(sc));
   }
 
   let langsTerminal = true;
@@ -135,5 +110,43 @@ function produce(s: RunSnap): Action[] {
   if (actions.length === 0 && scenesTerminal && langsTerminal && s.assembleJob === null) {
     actions.push({ type: 'enqueueAssemble' });
   }
+  return actions;
+}
+
+/**
+ * Після `done` `advance` нічого не робить, але сцени, яким після збірки змінили візуал (перегенерація, відео),
+ * треба довести: прив'язати файл генерації й позначити готовність/помилку — як на `produce`, без нових задач,
+ * збірки й мов. Точкову заміну кліпу робить runAdvance після `sceneReady`.
+ */
+export function afterDone(s: RunSnap): Action[] {
+  if (s.stage !== 'done' || s.status !== 'done') return [];
+  return s.scenes.flatMap((sc) => (sc.status === 'queued' || sc.status === 'running' ? liveScene(sc) : []));
+}
+
+/** Сцена queued|running: після скасування/відновлення генерація могла вже завершитись. */
+function liveScene(sc: SceneSnap): Action[] {
+  const g = sc.generation;
+  if (!g) {
+    // без генерації сцену веде лише її задача: немає задачі або вона обірвалась → сцена failed
+    if (sc.job === null || sc.job === 'failed' || sc.job === 'cancelled')
+      return [{ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_JOB_INTERRUPTED }];
+    return [];
+  }
+  if (
+    g.status === 'failed' ||
+    g.status === 'cancelled' ||
+    g.assetStatus === 'failed' ||
+    // генерація без файлу або файл видалено — прив'язувати нічого
+    (g.status === 'done' && (g.assetId === null || g.assetStatus === null))
+  )
+    return [{ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_FAILED }];
+  const actions: Action[] = [];
+  let linked = sc.hasVisual;
+  if (g.status === 'done' && g.assetId && !linked) {
+    actions.push({ type: 'linkGenerated', sceneId: sc.id, assetId: g.assetId });
+    linked = true;
+  }
+  // asset уже ready — окремої події не буде, тож готовність сцени — в тому ж проході
+  if (linked && g.assetStatus === 'ready') actions.push({ type: 'sceneReady', sceneId: sc.id });
   return actions;
 }

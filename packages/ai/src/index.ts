@@ -19,3 +19,4 @@ export {
   type SceneResult,
   type ScriptResult,
 } from './prompts/script';
+export { solidPng } from './fake/png';

@@ -25,6 +25,7 @@ import { reconcileAfterRestart } from './modules/recovery';
 import { assetsTagJob } from './modules/assets/tag-job';
 import { imageGenerateJob } from './modules/generate/image-job';
 import { videoGenerateJob } from './modules/generate/video-job';
+import { assembleJob } from './modules/pipeline/assemble-job';
 import { pipelineEvents } from './modules/pipeline/events';
 import { sceneJob } from './modules/pipeline/scene-job';
 import { scriptJob } from './modules/pipeline/script-job';
@@ -124,6 +125,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(scriptJob(deps));
   deps.jobs.runtime.register(sceneJob(deps));
   deps.jobs.runtime.register(visualJob(deps));
+  deps.jobs.runtime.register(assembleJob(deps));
   const offVoiceEvents = deps.jobs.queue.onEvent(releaseOnCancel(deps));
   const offPipelineEvents = deps.jobs.queue.onEvent(pipelineEvents(deps));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));

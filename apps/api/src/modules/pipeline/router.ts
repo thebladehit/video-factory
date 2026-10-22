@@ -11,7 +11,15 @@ import {
   setSceneVisual,
   updateScene,
 } from './scenes';
-import { cancelPipeline, continuePipeline, estimate, getPipeline, retryPipeline, startPipeline } from './service';
+import {
+  cancelPipeline,
+  continuePipeline,
+  estimate,
+  getPipeline,
+  reassemble,
+  retryPipeline,
+  startPipeline,
+} from './service';
 
 // перевірку налаштувань робить сервіс (pipelineSettingsSchema) — помилка VALIDATION українською
 const settings = z.unknown() as unknown as z.ZodType<PipelineSettings>;
@@ -65,6 +73,9 @@ export const pipelineRouter = router({
   setSceneVisual: procedure
     .input(z.object({ sceneId, assetId: z.string() }))
     .mutation(({ ctx, input }) => setSceneVisual(ctx.deps, ctx.userId, input)),
+  reassemble: procedure
+    .input(z.object({ projectId, version: z.number().int().min(1) }))
+    .mutation(({ ctx, input }) => reassemble(ctx.deps, ctx.userId, input)),
   cancel: procedure
     .input(z.object({ projectId }))
     .mutation(({ ctx, input }) => cancelPipeline(ctx.deps, ctx.userId, input.projectId)),

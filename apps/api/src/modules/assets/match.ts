@@ -35,6 +35,8 @@ export async function matchAssets(
     inArray(assets.kind, ['image', 'video']),
     sql`${assets.width} is not null and ${assets.height} is not null`,
     orient,
+    // чорна заглушка конвеєра («Порожня сцена», pipeline/blank.ts) — не кандидат для сцени
+    sql`not (${assets.tags} @> array['заглушка']::text[])`,
   ];
   if (i.exclude.length) where.push(notInArray(assets.id, i.exclude));
   const rows = await deps.db
