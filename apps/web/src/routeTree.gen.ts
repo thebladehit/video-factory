@@ -18,6 +18,7 @@ import { Route as VoiceRouteImport } from './routes/voice'
 import { Route as ProjectsIdRouteImport } from './routes/projects.$id'
 import { Route as VoiceIndexRouteImport } from './routes/voice.index'
 import { Route as VoiceIdRouteImport } from './routes/voice.$id'
+import { Route as ProjectsIdPipelineRouteImport } from './routes/projects.$id.pipeline'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -64,6 +65,11 @@ const VoiceIdRoute = VoiceIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => VoiceRoute,
 } as any)
+const ProjectsIdPipelineRoute = ProjectsIdPipelineRouteImport.update({
+  id: '/pipeline',
+  path: '/pipeline',
+  getParentRoute: () => ProjectsIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -72,9 +78,10 @@ export interface FileRoutesByFullPath {
   '/publications': typeof PublicationsRoute
   '/settings': typeof SettingsRoute
   '/voice': typeof VoiceRouteWithChildren
-  '/projects/$id': typeof ProjectsIdRoute
+  '/projects/$id': typeof ProjectsIdRouteWithChildren
   '/voice/$id': typeof VoiceIdRoute
   '/voice/': typeof VoiceIndexRoute
+  '/projects/$id/pipeline': typeof ProjectsIdPipelineRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -82,9 +89,10 @@ export interface FileRoutesByTo {
   '/library': typeof LibraryRoute
   '/publications': typeof PublicationsRoute
   '/settings': typeof SettingsRoute
-  '/projects/$id': typeof ProjectsIdRoute
+  '/projects/$id': typeof ProjectsIdRouteWithChildren
   '/voice/$id': typeof VoiceIdRoute
   '/voice': typeof VoiceIndexRoute
+  '/projects/$id/pipeline': typeof ProjectsIdPipelineRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -94,9 +102,10 @@ export interface FileRoutesById {
   '/publications': typeof PublicationsRoute
   '/settings': typeof SettingsRoute
   '/voice': typeof VoiceRouteWithChildren
-  '/projects/$id': typeof ProjectsIdRoute
+  '/projects/$id': typeof ProjectsIdRouteWithChildren
   '/voice/$id': typeof VoiceIdRoute
   '/voice/': typeof VoiceIndexRoute
+  '/projects/$id/pipeline': typeof ProjectsIdPipelineRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -110,6 +119,7 @@ export interface FileRouteTypes {
     | '/projects/$id'
     | '/voice/$id'
     | '/voice/'
+    | '/projects/$id/pipeline'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -120,6 +130,7 @@ export interface FileRouteTypes {
     | '/projects/$id'
     | '/voice/$id'
     | '/voice'
+    | '/projects/$id/pipeline'
   id:
     | '__root__'
     | '/'
@@ -131,6 +142,7 @@ export interface FileRouteTypes {
     | '/projects/$id'
     | '/voice/$id'
     | '/voice/'
+    | '/projects/$id/pipeline'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -140,7 +152,7 @@ export interface RootRouteChildren {
   PublicationsRoute: typeof PublicationsRoute
   SettingsRoute: typeof SettingsRoute
   VoiceRoute: typeof VoiceRouteWithChildren
-  ProjectsIdRoute: typeof ProjectsIdRoute
+  ProjectsIdRoute: typeof ProjectsIdRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -208,6 +220,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VoiceIdRouteImport
       parentRoute: typeof VoiceRoute
     }
+    '/projects/$id/pipeline': {
+      id: '/projects/$id/pipeline'
+      path: '/pipeline'
+      fullPath: '/projects/$id/pipeline'
+      preLoaderRoute: typeof ProjectsIdPipelineRouteImport
+      parentRoute: typeof ProjectsIdRoute
+    }
   }
 }
 
@@ -223,6 +242,18 @@ const VoiceRouteChildren: VoiceRouteChildren = {
 
 const VoiceRouteWithChildren = VoiceRoute._addFileChildren(VoiceRouteChildren)
 
+interface ProjectsIdRouteChildren {
+  ProjectsIdPipelineRoute: typeof ProjectsIdPipelineRoute
+}
+
+const ProjectsIdRouteChildren: ProjectsIdRouteChildren = {
+  ProjectsIdPipelineRoute: ProjectsIdPipelineRoute,
+}
+
+const ProjectsIdRouteWithChildren = ProjectsIdRoute._addFileChildren(
+  ProjectsIdRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AnalyticsRoute: AnalyticsRoute,
@@ -230,7 +261,7 @@ const rootRouteChildren: RootRouteChildren = {
   PublicationsRoute: PublicationsRoute,
   SettingsRoute: SettingsRoute,
   VoiceRoute: VoiceRouteWithChildren,
-  ProjectsIdRoute: ProjectsIdRoute,
+  ProjectsIdRoute: ProjectsIdRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
