@@ -460,11 +460,11 @@ export const clearFailure = {
   error: sql<null>`case when ${voiceLines.status} = 'failed' then null else ${voiceLines.error} end`,
 };
 
-/** Ручний текст рядка (upsert). Озвучка й переклад «застаріють» самі через хеші. */
+/** Ручний текст рядка (upsert; `origin: 'script'` — текст сцени конвеєра). Озвучка й переклад «застаріють» самі через хеші. */
 export async function setText(
   deps: AppDeps,
   userId: string,
-  input: { projectId: string; segmentId: string; language: string; text: string },
+  input: { projectId: string; segmentId: string; language: string; text: string; origin?: 'manual' | 'script' },
 ): Promise<void> {
   const p = await ownProject(deps, userId, input.projectId);
   languageInfo(input.language);
@@ -472,7 +472,7 @@ export async function setText(
     throw new AppError('VALIDATION', `Текст довший за ${MAX_LINE_CHARS} символів — розділіть сегмент`);
   if (!(normalizeDoc(p.timeline).segments ?? []).some((s) => s.id === input.segmentId))
     throw new AppError('NOT_FOUND', 'Сегмент не знайдено');
-  const patch = { text: input.text, textOrigin: 'manual' as const, sourceHash: null, updatedAt: new Date() };
+  const patch = { text: input.text, textOrigin: input.origin ?? 'manual', sourceHash: null, updatedAt: new Date() };
   await deps.db
     .insert(voiceLines)
     .values({ userId, projectId: p.id, segmentId: input.segmentId, language: input.language, ...patch })
