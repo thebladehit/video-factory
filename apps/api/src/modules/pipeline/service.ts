@@ -195,7 +195,11 @@ export async function cancelPipeline(deps: AppDeps, userId: string, projectId: s
     .update(pipelineRuns)
     .set({ status: 'cancelled', updatedAt: new Date() })
     .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, 'running')))
-    .returning({ id: pipelineRuns.id });
+    .returning({
+      id: pipelineRuns.id,
+      scriptJobId: pipelineRuns.scriptJobId,
+      assembleJobId: pipelineRuns.assembleJobId,
+    });
   if (!moved) throw new AppError('VALIDATION', 'Скасувати можна лише запуск, що працює');
 
   const scenes = await deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.runId, run.id));
@@ -235,8 +239,8 @@ export async function cancelPipeline(deps: AppDeps, userId: string, projectId: s
     .where(and(eq(voiceLines.projectId, run.projectId), inArray(voiceLines.status, live)));
   const toCancel = new Set(
     [
-      run.scriptJobId,
-      run.assembleJobId,
+      moved.scriptJobId, // з оновлення стану: задача, поставлена між читанням запуску й зміною стану, теж скасується
+      moved.assembleJobId,
       ...scenes.map((sc) => sc.jobId),
       ...sceneTextJobs.map((j) => j.id),
       ...gens.filter((g) => live.includes(g.status as 'queued')).map((g) => g.jobId),

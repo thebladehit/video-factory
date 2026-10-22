@@ -46,7 +46,6 @@ describe('matchAssets', () => {
   it('strong match for keywords scores >= LIBRARY_MATCH_MIN', async () => {
     const f = await fixture();
     const r = await run(['море', 'захід сонця']);
-    console.log('scores море+захід сонця', r.map((m) => [m.assetId === f.sunset ? 'sunset' : m.assetId, m.score]));
     expect(r[0]!.assetId).toBe(f.sunset);
     expect(r[0]!.score).toBeGreaterThanOrEqual(LIBRARY_MATCH_MIN);
     expect(r[0]).toMatchObject({ kind: 'image', width: 1080, height: 1920, durationMs: null });
@@ -55,7 +54,6 @@ describe('matchAssets', () => {
   it('unrelated keywords score below LIBRARY_MATCH_MIN', async () => {
     await fixture();
     const r = await run(['космос']);
-    console.log('scores космос', r.map((m) => m.score));
     for (const m of r) expect(m.score).toBeLessThan(LIBRARY_MATCH_MIN);
   });
 
@@ -81,6 +79,18 @@ describe('matchAssets', () => {
     const f = await fixture();
     const ids = (await run(['море'], '9:16', [f.sunset])).map((m) => m.assetId);
     expect(ids).not.toContain(f.sunset);
+  });
+
+  it('rendered assets (own finished renders) are never returned', async () => {
+    await seed({ title: 'Захід сонця над морем (uk) — 2026-10-20', source: 'rendered' });
+    expect(await run(['море', 'захід сонця'])).toEqual([]);
+  });
+
+  it('keywords shorter than 3 characters alone yield no match', async () => {
+    await fixture();
+    await seed({ title: 'Я', tags: ['я'] });
+    expect(await run(['м'])).toEqual([]);
+    expect(await run(['я', ' ую '])).toEqual([]);
   });
 
   it("other user's assets never returned", async () => {

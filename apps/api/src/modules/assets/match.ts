@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, notInArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ne, inArray, notInArray, sql, type SQL } from 'drizzle-orm';
 import { assets } from '@vf/db';
 import type { VideoFormat } from '@vf/shared';
 import type { AppDeps } from '../../app';
@@ -23,18 +23,21 @@ export async function matchAssets(
   userId: string,
   i: { keywords: string[]; format: VideoFormat; exclude: string[]; limit?: number },
 ): Promise<AssetMatch[]> {
-  const words = i.keywords.map((k) => k.trim()).filter(Boolean);
+  const words = i.keywords.map((k) => k.trim()).filter((k) => k.length >= 3);
   if (!words.length) return [];
   const queries = [...new Set([...words, words.join(' ')])];
   const score = sql<number>`greatest(${sql.join(queries.map(rankExpr), sql`, `)})`;
   // 9:16 → вертикальні або квадратні, 16:9 → горизонтальні або квадратні
-  const orient: SQL = i.format === '9:16' ? sql`${assets.height} >= ${assets.width}` : sql`${assets.width} >= ${assets.height}`;
+  const orient: SQL =
+    i.format === '9:16' ? sql`${assets.height} >= ${assets.width}` : sql`${assets.width} >= ${assets.height}`;
   const where: SQL[] = [
     eq(assets.userId, userId),
     eq(assets.status, 'ready'),
     inArray(assets.kind, ['image', 'video']),
     sql`${assets.width} is not null and ${assets.height} is not null`,
     orient,
+    // власні готові рендери (назва «<проєкт> (мова) — дата») збігаються з темою майже ідеально, але не є матеріалом сцени
+    ne(assets.source, 'rendered'),
     // чорна заглушка конвеєра («Порожня сцена», pipeline/blank.ts) — не кандидат для сцени
     sql`not (${assets.tags} @> array['заглушка']::text[])`,
   ];

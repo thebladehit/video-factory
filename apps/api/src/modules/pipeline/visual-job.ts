@@ -54,6 +54,7 @@ export function visualJob(deps: AppDeps): JobDef<{ sceneId: string; regenerate?:
       // уже є генерація — її доведе координатор; є лише файл (бібліотека/вибір) — сцена готова
       if (scene.generationId) return { source: 'generated' };
       if (scene.visualAssetId) {
+        if (ctx.signal.aborted) return none;
         await deps.db
           .update(pipelineScenes)
           .set({ status: 'ready', error: null, updatedAt: now() })

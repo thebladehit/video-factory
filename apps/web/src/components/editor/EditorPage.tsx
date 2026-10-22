@@ -155,6 +155,7 @@ export function EditorPage({ project }: { project: ProjectView }) {
           language={mode.language}
           separated={mode.separated}
           busy={s.switching}
+          frozen={s.pipelineLive}
           onSeparate={() => void s.separate((mode as { language: string }).language)}
           onUnseparate={() => void s.unseparate((mode as { language: string }).language)}
         />
