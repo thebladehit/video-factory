@@ -12,12 +12,14 @@ import {
   type PipelineStage,
   type PipelineStatus,
   type SceneStatus,
+  type VideoFormat,
   type VisualSource,
 } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { ownProject } from '../projects/service';
 import { assertVoiceChoice, enqueueTranslate, getVoice, parseVoice } from '../voice/service';
+import type { LineState } from '../voice/stale';
 import { estimatePipeline, type PipelineEstimate } from './estimate';
 import { runAdvance } from './run-advance';
 import { loadSnapshot, type RunRow } from './snapshot';
@@ -35,9 +37,21 @@ export interface SceneView {
   suggestions: { assetId: string; thumbUrl: string | null }[];
   /** Сегмента сцени немає в документі (видалено в редакторі) */
   inTimeline: boolean;
+  /** Жива/остання генерація візуалу — щоб сторінка сцен оновлювалась за подіями `image.generate`/`video.generate` */
+  generationId: string | null;
+  /** Рядки озвучки сцени по мовах (стани — як у студії) */
+  lines: Record<string, { id: string; state: LineState }>;
 }
 
 export interface PipelineView {
+  project: {
+    id: string;
+    title: string;
+    topic: string | null;
+    format: VideoFormat;
+    baseLanguage: string;
+    timelineVersion: number;
+  };
   run: {
     stage: PipelineStage;
     status: PipelineStatus;
@@ -416,6 +430,8 @@ export async function getPipeline(deps: AppDeps, userId: string, projectId: stri
     scenes.flatMap((s) => [...(s.visualAssetId ? [s.visualAssetId] : []), ...s.suggestions]),
   );
 
+  // стани рядків — як у студії озвучки (з урахуванням «застарілих»)
+  const voice = await getVoice(deps, userId, p.id);
   const views: SceneView[] = scenes.map((s) => {
     const file = s.visualAssetId ? files.get(s.visualAssetId) : undefined;
     return {
@@ -441,11 +457,13 @@ export async function getPipeline(deps: AppDeps, userId: string, projectId: stri
         return f ? [{ assetId: id, thumbUrl: f.thumbUrl }] : [];
       }),
       inTimeline: segIds.has(s.segmentId),
+      generationId: s.generationId,
+      lines: Object.fromEntries(
+        Object.entries(voice.lines[s.segmentId] ?? {}).map(([lang, l]) => [lang, { id: l.id, state: l.state }]),
+      ),
     };
   });
 
-  // стани рядків — як у студії озвучки (з урахуванням «застарілих»)
-  const voice = await getVoice(deps, userId, p.id);
   const languages = voice.languages.map((language) => {
     let ready = 0;
     let failed = 0;
@@ -463,6 +481,14 @@ export async function getPipeline(deps: AppDeps, userId: string, projectId: stri
   const total = scenes.length + languages.reduce((sum, l) => sum + l.total, 0);
 
   return {
+    project: {
+      id: p.id,
+      title: p.title,
+      topic: p.topic,
+      format: p.format,
+      baseLanguage: p.baseLanguage,
+      timelineVersion: p.timelineVersion,
+    },
     run: {
       stage: run.stage,
       status: run.status,

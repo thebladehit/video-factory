@@ -281,7 +281,12 @@ describe('pipeline review', () => {
       visual: null,
       suggestions: [],
       inTimeline: true,
+      generationId: null,
     });
+    // для сторінки сцен: шапка, версія для «Пересібрати», рядки сцени (події voice.* мають лише lineId)
+    expect(v.project).toMatchObject({ id: projectId, format: '9:16', baseLanguage: 'uk' });
+    expect(v.project.timelineVersion).toBeGreaterThanOrEqual(1);
+    expect(v.scenes[0]!.lines.uk).toMatchObject({ id: expect.any(String), state: 'empty' });
     expect(v.languages).toEqual([
       { language: 'uk', ready: 0, total: 3, failed: 0 },
       { language: 'en', ready: 0, total: 3, failed: 0 },
