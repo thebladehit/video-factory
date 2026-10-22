@@ -103,6 +103,18 @@ async function checkStart(deps: AppDeps, userId: string, s: PipelineSettings): P
   }
 }
 
+/**
+ * `runAdvance` після вже збереженої зміни стану: помилку лише журналюємо — інакше клієнт повторив би запит
+ * (дубль проєкту), а запуск далі доведе слухач подій або advance на старті API.
+ */
+async function advanceQuietly(deps: AppDeps, runId: string): Promise<void> {
+  try {
+    await runAdvance(deps, runId);
+  } catch (e) {
+    deps.log.error({ err: e, runId }, 'pipeline: advance після зміни стану не вдався');
+  }
+}
+
 /** «Відео з теми»: проєкт (назва — початок теми до генерації назви) + запуск на етапі script + задача сценарію. */
 export async function startPipeline(deps: AppDeps, userId: string, raw: unknown): Promise<{ projectId: string }> {
   const s = parseSettings(raw);
@@ -133,7 +145,7 @@ export async function startPipeline(deps: AppDeps, userId: string, raw: unknown)
       .returning({ id: pipelineRuns.id });
     return { projectId: p!.id, runId: run!.id };
   });
-  await runAdvance(deps, runId);
+  await advanceQuietly(deps, runId);
   return { projectId };
 }
 
@@ -152,7 +164,7 @@ export async function continuePipeline(deps: AppDeps, userId: string, projectId:
     )
     .returning({ id: pipelineRuns.id });
   if (!moved) throw new AppError('VALIDATION', 'Продовжити можна лише на перевірці сценарію');
-  await runAdvance(deps, run.id);
+  await advanceQuietly(deps, run.id);
 }
 
 async function thumbs(deps: AppDeps, userId: string, ids: string[]) {

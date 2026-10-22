@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import type { Db } from '@vf/db';
 import { pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
-import { AppError } from '@vf/shared';
+import { AppError, normalizeDoc } from '@vf/shared';
 import { estimateSceneSec, skeletonDoc } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
@@ -46,6 +46,15 @@ function checkKeywords(keywords: string[]): string[] {
   if (list.length < 1 || list.length > MAX_KEYWORDS || list.some((k) => k.length > MAX_KEYWORD_CHARS))
     throw new AppError('VALIDATION', `Ключових слів має бути від 1 до ${MAX_KEYWORDS}`);
   return list;
+}
+
+/** Ключові слова нової сцени з тексту: перші значущі (≥ 4 літери) слова без повторів, ≤ 8; інакше — перше слово. */
+export function keywordsFrom(text: string): string[] {
+  const words = (text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).map((w) =>
+    w.slice(0, MAX_KEYWORD_CHARS),
+  );
+  const significant = [...new Set(words.filter((w) => [...w].length >= 4))].slice(0, MAX_KEYWORDS);
+  return significant.length ? significant : words.slice(0, 1);
 }
 
 /** Блокує запуск (правки сцен ідуть по черзі) і перевіряє, що він на перевірці сценарію. */
@@ -105,24 +114,30 @@ export async function updateScene(
     patch.visualPrompt = prompt;
   }
   if (input.keywords !== undefined) patch.keywords = checkKeywords(input.keywords);
-  if (input.narration !== undefined) checkNarration(input.narration);
+  // спершу всі перевірки (включно з тими, що робить setText), потім запис: помилка не лишає половину змін
+  let baseLanguage: string | null = null;
+  if (input.narration !== undefined) {
+    checkNarration(input.narration);
+    const [p] = await deps.db.select().from(projects).where(eq(projects.id, run.projectId));
+    if (!p) throw sceneNotFound();
+    if (!(normalizeDoc(p.timeline).segments ?? []).some((sg) => sg.id === scene.segmentId))
+      throw new AppError('VALIDATION', 'Сцени немає в таймлайні — змініть текст у студії озвучки');
+    baseLanguage = p.baseLanguage;
+  }
+  if (baseLanguage !== null)
+    await setText(deps, userId, {
+      projectId: run.projectId,
+      segmentId: scene.segmentId,
+      language: baseLanguage,
+      text: input.narration!,
+      origin: 'script',
+    });
   if (Object.keys(patch).length)
     await deps.db
       .update(pipelineScenes)
       .set({ ...patch, updatedAt: new Date() })
       .where(eq(pipelineScenes.id, scene.id));
   if (input.narration === undefined) return;
-  const [p] = await deps.db
-    .select({ baseLanguage: projects.baseLanguage })
-    .from(projects)
-    .where(eq(projects.id, run.projectId));
-  await setText(deps, userId, {
-    projectId: run.projectId,
-    segmentId: scene.segmentId,
-    language: p!.baseLanguage,
-    text: input.narration,
-    origin: 'script',
-  });
   // на перевірці тривалості скелета йдуть за текстом; пізніше документ уже не скелет (або ось-ось зберуть)
   if (run.stage === 'review')
     await deps.db.transaction(async (tx) => {
@@ -156,7 +171,14 @@ export async function addScene(
     const segmentId = randomUUID();
     const [row] = await tx
       .insert(pipelineScenes)
-      .values({ userId, runId: run.id, segmentId, position: at })
+      .values({
+        userId,
+        runId: run.id,
+        segmentId,
+        position: at,
+        visualPrompt: text.trim().slice(0, MAX_PROMPT_CHARS),
+        keywords: keywordsFrom(text),
+      })
       .returning();
     await renumber(tx, [...scenes.slice(0, at), row!, ...scenes.slice(at)]);
     const patch = { text, textOrigin: 'script' as const, sourceHash: null, updatedAt: new Date() };

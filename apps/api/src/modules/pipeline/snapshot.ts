@@ -24,12 +24,15 @@ async function jobStatuses(deps: AppDeps, ids: (string | null)[]): Promise<Map<s
   return new Map(rows.map((r) => [r.id, r.status]));
 }
 
-/** Стан перекладу мови: жива задача → live; текст для всіх сегментів → done; інакше — за останньою задачею. */
-function translateState(live: JobStatus | undefined, covered: boolean): LangSnap['translate'] {
+/**
+ * Стан перекладу мови: жива задача → live; текст для всіх сегментів → done; інакше — за останньою задачею.
+ * Задачі немає, а рядки мови failed — переклад не вдалося навіть поставити (runAdvance позначив рядки) → failed.
+ */
+function translateState(live: JobStatus | undefined, covered: boolean, linesFailed: boolean): LangSnap['translate'] {
   if (live === 'queued' || live === 'running') return 'live';
   if (covered || live === 'done') return 'done';
   if (live === 'failed' || live === 'cancelled') return 'failed';
-  return 'none';
+  return linesFailed ? 'failed' : 'none';
 }
 
 /** Запуск, його проєкт, сцени й знімок для `advance`; null — запуск або проєкт видалено. */
@@ -94,7 +97,13 @@ export async function loadRun(deps: AppDeps, runId: string): Promise<LoadedRun |
     return {
       language,
       isBase,
-      translate: isBase ? 'done' : translateState(latest, segments.length > 0 && langLines.every((l) => l.hasText)),
+      translate: isBase
+        ? 'done'
+        : translateState(
+            latest,
+            segments.length > 0 && langLines.every((l) => l.hasText),
+            langLines.some((l) => l.status === 'failed'),
+          ),
       lines: langLines,
     };
   });

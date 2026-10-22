@@ -7,6 +7,8 @@ import { LOCAL_USER_ID, normalizeDoc, type ModelRef, type PipelineSettings, type
 import { estimateSceneSec, skeletonDoc } from '@vf/timeline';
 import { appRouter, createApp } from '../src/index';
 import { executeAction, runAdvance } from '../src/modules/pipeline/run-advance';
+import { keywordsFrom } from '../src/modules/pipeline/scenes';
+import { loadSnapshot } from '../src/modules/pipeline/snapshot';
 import { tools } from './assets-helpers';
 import { testConfig } from './helpers';
 
@@ -22,11 +24,12 @@ afterEach(async () => {
  * Застосунок без запуску воркерів: поставлені задачі лишаються `queued` (обробники pipeline.* — у T7–T9,
  * тут — заглушки, бо черга приймає лише зареєстровані типи).
  */
-async function pipelineApp() {
+const PIPELINE_TYPES = ['pipeline.script', 'pipeline.scene', 'pipeline.visual', 'pipeline.assemble'] as const;
+
+async function pipelineApp(stubs: readonly (typeof PIPELINE_TYPES)[number][] = PIPELINE_TYPES) {
   const app = await createApp(testConfig(), { ai: fakeAi() });
   opened.push(app);
-  for (const type of ['pipeline.script', 'pipeline.scene', 'pipeline.visual', 'pipeline.assemble'] as const)
-    app.deps.jobs.runtime.register({ type, concurrency: 1, handler: async () => undefined });
+  for (const type of stubs) app.deps.jobs.runtime.register({ type, concurrency: 1, handler: async () => undefined });
   const caller = appRouter.createCaller({ userId: LOCAL_USER_ID, deps: app.deps });
   return { ...app, caller };
 }
@@ -431,6 +434,119 @@ describe('pipeline review', () => {
     expect((await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, sc!.id)))[0]!.status).toBe(
       'failed',
     );
+  });
+});
+
+describe('pipeline review fixes', () => {
+  it('start returns the project even if the first advance fails (no duplicate on retry)', async () => {
+    const s = await pipelineApp(['pipeline.scene', 'pipeline.visual', 'pipeline.assemble']);
+    const st = settings();
+    const { projectId } = await s.caller.pipeline.start(st);
+    expect(await runOf(s, projectId)).toMatchObject({ stage: 'script', status: 'running', scriptJobId: null });
+    expect(await s.deps.db.select().from(projects).where(eq(projects.topic, st.topic))).toHaveLength(1);
+  });
+
+  it('translate that cannot be enqueued fails the language, and assemble still proceeds', async () => {
+    const s = await pipelineApp();
+    const { projectId, runId } = await reviewRun(s);
+    const base = s.deps.ai;
+    // ключ текстової моделі «видалено» після старту
+    s.deps.ai = {
+      ...base,
+      catalog: async (u) =>
+        (await base.catalog(u)).map((e) => (e.capability === 'text' ? { ...e, available: false } : e)),
+    };
+    await s.caller.pipeline.continue({ projectId });
+    expect(await runOf(s, projectId)).toMatchObject({ stage: 'produce', status: 'running' });
+    const en = await s.deps.db
+      .select()
+      .from(voiceLines)
+      .where(and(eq(voiceLines.projectId, projectId), eq(voiceLines.language, 'en')));
+    expect(en).toHaveLength(3);
+    expect(en.every((l) => l.status === 'failed' && l.error?.includes('текстової моделі'))).toBe(true);
+    expect((await loadSnapshot(s.deps, runId))!.langs.find((l) => l.language === 'en')!.translate).toBe('failed');
+    expect(await projectJobs(s, 'voice.translate', projectId)).toHaveLength(0);
+
+    // візуали й базова озвучка завершились → збірка
+    await s.deps.db.update(pipelineScenes).set({ status: 'ready' }).where(eq(pipelineScenes.runId, runId));
+    await s.deps.db
+      .update(voiceLines)
+      .set({ status: 'ready' })
+      .where(and(eq(voiceLines.projectId, projectId), eq(voiceLines.language, 'uk')));
+    await runAdvance(s.deps, runId);
+    expect(await runOf(s, projectId)).toMatchObject({ stage: 'assemble', assembleJobId: expect.any(String) });
+  });
+
+  it('a failing action does not skip the reload pass after a state change', async () => {
+    const s = await pipelineApp(['pipeline.script', 'pipeline.scene', 'pipeline.assemble']); // pipeline.visual не зареєстровано
+    const { projectId } = await s.caller.pipeline.start(settings({ stopAfterScript: false }));
+    const run = await writeScript(s, projectId, ['Раз.', 'Два.']);
+    await expect(runAdvance(s.deps, run.id)).rejects.toMatchObject({ code: 'UNKNOWN_JOB_TYPE' });
+    // toProduce змінив стан → наступний прохід поставив озвучку, хоч візуали й не вдалось поставити
+    expect(await runOf(s, projectId)).toMatchObject({ stage: 'produce' });
+    const lines = await s.deps.db
+      .select()
+      .from(voiceLines)
+      .where(and(eq(voiceLines.projectId, projectId), eq(voiceLines.language, 'uk')));
+    expect(lines.every((l) => l.status === 'queued')).toBe(true);
+  });
+
+  it('visual job_id is saved even if the handler already took the scene (running)', async () => {
+    const s = await pipelineApp();
+    const { runId } = await reviewRun(s);
+    await s.deps.db.update(pipelineRuns).set({ stage: 'produce', status: 'running' }).where(eq(pipelineRuns.id, runId));
+    const [sc] = await scenesOf(s, runId);
+    const queue = s.deps.jobs.queue;
+    const enqueue = queue.enqueue.bind(queue);
+    queue.enqueue = async (type, payload, opts) => {
+      const id = await enqueue(type, payload, opts);
+      if (type === 'pipeline.visual')
+        await s.deps.db.update(pipelineScenes).set({ status: 'running' }).where(eq(pipelineScenes.id, sc!.id));
+      return id;
+    };
+    await executeAction(s.deps, runId, { type: 'enqueueVisual', sceneId: sc!.id });
+    const [after] = await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, sc!.id));
+    expect(after).toMatchObject({ status: 'running', jobId: expect.any(String) });
+  });
+
+  it('addScene defaults visual prompt to narration and keywords to significant words', async () => {
+    const s = await pipelineApp();
+    const { projectId } = await reviewRun(s);
+    const narration = 'Хмари над морем, і знову хмари на заході сонця.';
+    const { sceneId } = await s.caller.pipeline.addScene({ projectId, narration });
+    const [sc] = await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, sceneId));
+    expect(sc).toMatchObject({ visualPrompt: narration, keywords: ['хмари', 'морем', 'знову', 'заході', 'сонця'] });
+    expect(keywordsFrom('Я і ти.')).toEqual(['я']);
+    expect(keywordsFrom('один два три чотири пʼять шість сім вісім девʼять десять одинадцять дванадцять')).toHaveLength(
+      8,
+    );
+  });
+
+  it('updateScene writes nothing when any part is invalid', async () => {
+    const s = await pipelineApp();
+    const { projectId, runId } = await reviewRun(s);
+    const [sc] = await scenesOf(s, runId);
+    const validation = { cause: { code: 'VALIDATION' } };
+    await expect(
+      s.caller.pipeline.updateScene({ sceneId: sc!.id, visualPrompt: 'new prompt', narration: 'x'.repeat(1501) }),
+    ).rejects.toMatchObject(validation);
+    // сегмента вже немає в документі
+    await s.deps.db
+      .update(projects)
+      .set({ timeline: skeletonDoc('9:16', 30, [{ segmentId: 'seg-1', estimatedSec: 1 }]) })
+      .where(eq(projects.id, projectId));
+    await expect(
+      s.caller.pipeline.updateScene({ sceneId: sc!.id, keywords: ['нове'], narration: 'Новий текст.' }),
+    ).rejects.toMatchObject(validation);
+    const [after] = await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, sc!.id));
+    expect(after).toMatchObject({ visualPrompt: 'prompt 0', keywords: ['море'] });
+    const [line] = await s.deps.db
+      .select()
+      .from(voiceLines)
+      .where(
+        and(eq(voiceLines.projectId, projectId), eq(voiceLines.segmentId, 'seg-0'), eq(voiceLines.language, 'uk')),
+      );
+    expect(line!.text).toBe('Перша сцена.');
   });
 });
 

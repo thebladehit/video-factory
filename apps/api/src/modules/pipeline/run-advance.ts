@@ -9,13 +9,18 @@ import { loadRun, type RunRow } from './snapshot';
 /** Межа проходів одного виклику: кожен прохід після дій, що лише змінюють стан, перечитує знімок */
 const MAX_PASSES = 5;
 
-/** Виклики для одного запуску в цьому процесі виконуються по черзі (умови в БД захищають і між процесами). */
+/**
+ * Виклики для одного запуску в цьому процесі виконуються по черзі. Сцени, рядки, script/assemble захищені ще й
+ * умовами в БД, а `enqueueTranslate` — ні (немає рядка, який можна «забрати»): від дубля перекладу захищає лише
+ * ця серіалізація, тобто припущення, що API — один процес.
+ */
 const chains = new Map<string, Promise<void>>();
 
 /**
  * Читає знімок запуску, обчислює `advance` і виконує дії; повторює, поки прохід змінює стан (toProduce, sceneReady…),
  * щоб, наприклад, «сценарій готовий» одразу ставив візуали й озвучку. Видалений запуск — no-op.
- * Помилка постановки задачі не зупиняє інші дії проходу; перша з них кидається наприкінці.
+ * Помилка дії не зупиняє інші дії проходу й не скасовує перечитування, якщо прохід змінив стан;
+ * перша помилка кидається наприкінці.
  */
 export function runAdvance(deps: AppDeps, runId: string): Promise<void> {
   const prev = chains.get(runId) ?? Promise.resolve();
@@ -29,11 +34,11 @@ export function runAdvance(deps: AppDeps, runId: string): Promise<void> {
 }
 
 async function advanceLoop(deps: AppDeps, runId: string): Promise<void> {
+  let failure: unknown = null;
   for (let pass = 0; pass < MAX_PASSES; pass++) {
     const loaded = await loadRun(deps, runId);
-    if (!loaded) return;
+    if (!loaded) break;
     let changed = false;
-    let failure: unknown = null;
     for (const action of advance(loaded.snap)) {
       try {
         if (await executeAction(deps, runId, action)) changed = true;
@@ -41,9 +46,9 @@ async function advanceLoop(deps: AppDeps, runId: string): Promise<void> {
         failure ??= e;
       }
     }
-    if (failure) throw failure;
-    if (!changed) return;
+    if (!changed) break;
   }
+  if (failure) throw failure;
 }
 
 const now = () => new Date();
@@ -87,12 +92,8 @@ export async function executeAction(deps: AppDeps, runId: string, action: Action
         status: 'failed',
         error: (await sceneError(deps, action.sceneId)) ?? action.error,
       });
-    case 'enqueueTranslate': {
-      const run = await runRow(deps, runId);
-      if (!run) return false;
-      await enqueueTranslate(deps, run.userId, { projectId: run.projectId, language: action.language });
-      return false;
-    }
+    case 'enqueueTranslate':
+      return translate(deps, runId, action.language);
     case 'enqueueSynthesize':
       return synthesize(deps, runId, action.language);
   }
@@ -161,7 +162,8 @@ async function enqueueVisual(deps: AppDeps, runId: string, sceneId: string): Pro
   await deps.db
     .update(pipelineScenes)
     .set({ jobId })
-    .where(and(eq(pipelineScenes.id, sceneId), eq(pipelineScenes.status, 'queued'), isNull(pipelineScenes.jobId)));
+    // обробник може забрати сцену (running) ще всередині enqueue — id пишемо й тоді
+    .where(and(eq(pipelineScenes.id, sceneId), inArray(pipelineScenes.status, live), isNull(pipelineScenes.jobId)));
 }
 
 /** Зміна сцени, що ще в роботі (queued|running): кінцеві стани не перезаписуються. */
@@ -254,6 +256,37 @@ async function synthesize(deps: AppDeps, runId: string, language: string): Promi
           eq(voiceLines.status, 'empty'),
         ),
       );
+    return true;
+  }
+}
+
+/**
+ * Переклад мови. Не вдалося поставити (немає текстової моделі чи ключа) — рядки мови в сегментах, що ще «не озвучено»,
+ * стають failed з текстом помилки (рядків ще немає — створюються порожні failed); знімок тоді вважає переклад
+ * мови невдалим (кінцевим), і збірка не чекає його вічно.
+ */
+async function translate(deps: AppDeps, runId: string, language: string): Promise<boolean> {
+  const loaded = await loadRun(deps, runId);
+  if (!loaded) return false;
+  const { run, project } = loaded;
+  try {
+    await enqueueTranslate(deps, run.userId, { projectId: project.id, language });
+    return false;
+  } catch (e) {
+    if (!isAppError(e)) throw e;
+    const segments = normalizeDoc(project.timeline).segments ?? [];
+    if (!segments.length) return false;
+    const failed = { status: 'failed' as const, error: e.message, updatedAt: now() };
+    await deps.db
+      .insert(voiceLines)
+      .values(
+        segments.map((sg) => ({ userId: run.userId, projectId: project.id, segmentId: sg.id, language, ...failed })),
+      )
+      .onConflictDoUpdate({
+        target: [voiceLines.projectId, voiceLines.segmentId, voiceLines.language],
+        set: failed,
+        setWhere: eq(voiceLines.status, 'empty'),
+      });
     return true;
   }
 }

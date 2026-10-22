@@ -45,6 +45,8 @@ export interface AppDeps {
   ai: AiRegistry;
   auth: AuthProvider;
   renderer: Renderer;
+  /** Журнал сервера (фонові помилки, які не повертаються клієнту) */
+  log: { error(obj: object, msg?: string): void };
 }
 
 /** Composition root: єдине місце, де інтерфейси отримують реалізації. */
@@ -102,6 +104,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     jobs: overrides.jobs ?? createInProcessJobs(createPgJobStore(dbHandle.db)),
     auth: overrides.auth ?? singleUserAuth,
     renderer: overrides.renderer ?? createFfmpegRenderer(media),
+    log: overrides.log ?? server.log,
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
