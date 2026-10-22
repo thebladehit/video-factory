@@ -7,8 +7,20 @@ import {
   type VoiceChoice,
 } from '@vf/shared';
 
-/** Форма запуску — ті самі налаштування, що йдуть у `pipeline.estimate/start` (моделі можуть бути порожні, доки не вибрані). */
-export type PipelineForm = PipelineSettings;
+/**
+ * Форма запуску — налаштування `pipeline.estimate/start` плюс `stopTouched`: користувач сам змінив
+ * «Зупинитися після сценарію» (доти значення слідує за замовчуванням формату).
+ */
+export type PipelineForm = PipelineSettings & { stopTouched: boolean };
+
+/** Налаштування для API (без службових полів форми). */
+export function toSettings(form: PipelineForm): PipelineSettings {
+  return Object.fromEntries(Object.entries(form).filter(([k]) => k !== 'stopTouched')) as PipelineSettings;
+}
+
+export function setStopAfterScript(form: PipelineForm, value: boolean): PipelineForm {
+  return { ...form, stopAfterScript: value, stopTouched: true };
+}
 
 /** Мінімум полів запису `ai.catalog`, потрібний формі. */
 export interface FormCatalogItem {
@@ -45,12 +57,13 @@ export function initialForm(format: VideoFormat, defaults: FormDefaults): Pipeli
     voices: voice ? { [lang]: voice } : {},
     musicAssetId: null,
     stopAfterScript: stopDefault(format),
+    stopTouched: false,
   };
 }
 
 /**
  * Зміна формату: тривалість — у межі нового формату; «зупинитися після сценарію» переходить на замовчування
- * нового формату, лише якщо дорівнює замовчуванню старого (користувач його не чіпав).
+ * нового формату, доки користувач його не змінював (`stopTouched`).
  */
 export function onFormatChange(form: PipelineForm, format: VideoFormat): PipelineForm {
   if (form.format === format) return form;
@@ -59,7 +72,7 @@ export function onFormatChange(form: PipelineForm, format: VideoFormat): Pipelin
     ...form,
     format,
     targetSec: Math.min(max, Math.max(min, form.targetSec)),
-    stopAfterScript: form.stopAfterScript === stopDefault(form.format) ? stopDefault(format) : form.stopAfterScript,
+    stopAfterScript: form.stopTouched ? form.stopAfterScript : stopDefault(format),
   };
 }
 

@@ -19,8 +19,10 @@ import {
   initialForm,
   onFormatChange,
   removeLanguage,
+  setStopAfterScript,
   setBaseLanguage,
   type FormCatalogItem,
+  toSettings,
   type PipelineForm,
 } from '@/pipeline/settings-form';
 import { usePipelineEstimate } from '@/pipeline/use-pipeline';
@@ -116,7 +118,7 @@ function PipelineFormBody({
       className="grid gap-4"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!reasons.length && !start.isPending) start.mutate(form);
+        if (!reasons.length && !start.isPending) start.mutate(toSettings(form));
       }}
     >
       <DialogHeader>
@@ -255,7 +257,7 @@ function PipelineFormBody({
           id="pl-stop"
           type="checkbox"
           checked={form.stopAfterScript}
-          onChange={(e) => patch({ stopAfterScript: e.target.checked })}
+          onChange={(e) => setForm((f) => setStopAfterScript(f, e.target.checked))}
         />
         <Label htmlFor="pl-stop">Зупинитися після сценарію</Label>
       </div>

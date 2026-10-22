@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { pipelineSettingsSchema } from '@vf/shared';
 import { useEffect, useState } from 'react';
 import { useTRPC } from '@/lib/trpc';
-import type { PipelineForm } from './settings-form';
+import { toSettings, type PipelineForm } from './settings-form';
 
 /** Значення, що встановлюється через `ms` після останньої зміни. */
 export function useDebounced<T>(value: T, ms: number): T {
@@ -18,9 +18,10 @@ export function useDebounced<T>(value: T, ms: number): T {
 export function usePipelineEstimate(form: PipelineForm) {
   const trpc = useTRPC();
   const debounced = useDebounced(form, 300);
-  const valid = pipelineSettingsSchema.safeParse(debounced).success;
+  const settings = toSettings(debounced);
+  const valid = pipelineSettingsSchema.safeParse(settings).success;
   const query = useQuery({
-    ...trpc.pipeline.estimate.queryOptions(debounced),
+    ...trpc.pipeline.estimate.queryOptions(settings),
     enabled: valid,
     placeholderData: (prev) => prev,
   });

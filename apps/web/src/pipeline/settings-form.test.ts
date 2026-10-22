@@ -1,6 +1,14 @@
 import type { ModelRef, VoiceChoice } from '@vf/shared';
 import { describe, expect, it } from 'vitest';
-import { addLanguage, blockers, initialForm, onFormatChange, type FormCatalogItem } from './settings-form';
+import {
+  addLanguage,
+  blockers,
+  initialForm,
+  onFormatChange,
+  setStopAfterScript,
+  toSettings,
+  type FormCatalogItem,
+} from './settings-form';
 
 const TEXT = 'anthropic/claude-sonnet' as ModelRef;
 const IMAGE = 'openai/gpt-image' as ModelRef;
@@ -26,11 +34,28 @@ describe('settings-form', () => {
     expect(onFormatChange({ ...next, targetSec: 600 }, '9:16').targetSec).toBe(90);
   });
 
-  it('user-set stopAfterScript survives format change', () => {
-    const form = { ...initialForm('9:16', defaults), stopAfterScript: true };
-    expect(onFormatChange(form, '16:9').stopAfterScript).toBe(true);
-    const wide = { ...initialForm('16:9', defaults), stopAfterScript: false };
-    expect(onFormatChange(wide, '9:16').stopAfterScript).toBe(false);
+  it('user-set stopAfterScript survives format change and round trips', () => {
+    // 9:16: ticked -> 16:9 -> back to 9:16 stays ticked
+    const ticked = setStopAfterScript(initialForm('9:16', defaults), true);
+    const wide = onFormatChange(ticked, '16:9');
+    expect(wide.stopAfterScript).toBe(true);
+    expect(onFormatChange(wide, '9:16').stopAfterScript).toBe(true);
+    // 16:9: unticked -> 9:16 -> back to 16:9 stays unticked
+    const unticked = setStopAfterScript(initialForm('16:9', defaults), false);
+    const tall = onFormatChange(unticked, '9:16');
+    expect(tall.stopAfterScript).toBe(false);
+    expect(onFormatChange(tall, '16:9').stopAfterScript).toBe(false);
+  });
+
+  it('explicitly setting the current default still counts as user choice', () => {
+    const form = setStopAfterScript(initialForm('9:16', defaults), false); // equals 9:16 default
+    expect(onFormatChange(form, '16:9').stopAfterScript).toBe(false);
+    const untouched = onFormatChange(onFormatChange(initialForm('9:16', defaults), '16:9'), '9:16');
+    expect(untouched.stopAfterScript).toBe(false);
+  });
+
+  it('toSettings drops form-only fields', () => {
+    expect('stopTouched' in toSettings(initialForm('9:16', defaults))).toBe(false);
   });
 
   it('blockers lists missing voice per language and unavailable model', () => {
