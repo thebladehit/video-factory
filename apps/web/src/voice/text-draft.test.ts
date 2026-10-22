@@ -57,3 +57,63 @@ describe('createTextDraft', () => {
     expect(de.sync('hallo')).toBe('hallo');
   });
 });
+
+describe('createTextDraft: normalize і збереження в процесі', () => {
+  const trim = (t: string) => t.trim();
+
+  it('зберігає нормалізований текст; пробіл у кінці не дає окремого збереження', () => {
+    const save = vi.fn();
+    const d = createTextDraft({ value: 'aerial', save, delayMs: 600, normalize: trim });
+    d.change('aerial view ');
+    d.flush();
+    expect(save).toHaveBeenCalledExactlyOnceWith('aerial view');
+    d.change('aerial ');
+    d.flush();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith('aerial');
+  });
+
+  it('обрізане сервером значення не замінює локальний текст посеред набору', () => {
+    const d = createTextDraft({ value: 'aerial', save: vi.fn(), delayMs: 600, normalize: trim });
+    d.change('aerial view ');
+    d.flush();
+    // сервер повернув trim-нутий текст — у полі лишається «aerial view », наступне слово не злипнеться
+    expect(d.sync('aerial view')).toBeNull();
+    d.change('aerial view of');
+    d.flush();
+    // чужа зміна підхоплюється як завжди
+    expect(d.sync('waterfall')).toBe('waterfall');
+  });
+
+  it('поки збереження не завершилось, старий текст із сервера не затирає правку', async () => {
+    let resolve!: () => void;
+    const save = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    const d = createTextDraft({ value: 'old', save, delayMs: 600 });
+    d.change('new');
+    d.flush();
+    expect(d.pending()).toBe(true);
+    // refetch, що почався до збереження
+    expect(d.sync('old')).toBeNull();
+    resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(d.pending()).toBe(false);
+    expect(d.sync('new')).toBe('new');
+    expect(d.sync('other')).toBe('other');
+  });
+
+  it('невдале збереження теж знімає очікування', async () => {
+    let reject!: (e: Error) => void;
+    const d = createTextDraft({
+      value: 'old',
+      save: () => new Promise<void>((_, r) => (reject = r)),
+      delayMs: 600,
+    });
+    d.change('new');
+    d.flush();
+    reject(new Error('x'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(d.pending()).toBe(false);
+  });
+});

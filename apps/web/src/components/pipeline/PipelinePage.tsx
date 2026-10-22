@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { PipelineView } from '@vf/api';
 import { ArrowLeft } from 'lucide-react';
@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { useTRPC } from '@/lib/trpc';
+import { waitUntilIdle } from '@/pipeline/settle';
 import { usePipeline } from '@/pipeline/use-pipeline';
 import { SceneRow } from './SceneRow';
 import { StageBar } from './StageBar';
@@ -24,11 +25,8 @@ const NEW_SCENE_TEXT = 'Нова сцена';
 
 const isConflict = (e: unknown) => (e as { data?: { code?: string } } | null)?.data?.code === 'CONFLICT';
 
-/** Чекає, поки збережуться правки тексту (blur перед кліком уже поставив `updateScene`). */
-async function settleEdits(qc: QueryClient, mutationKey: readonly unknown[]) {
-  await new Promise((r) => setTimeout(r, 0));
-  while (qc.isMutating({ mutationKey }) > 0) await new Promise((r) => setTimeout(r, 50));
-}
+/** Скільки «Продовжити» чекає на збереження правок тексту, перш ніж іти далі */
+const SETTLE_TIMEOUT_MS = 10_000;
 
 /** Сторінка сцен конвеєра (спека §6.2). */
 export function PipelinePage({ projectId }: { projectId: string }) {
@@ -59,6 +57,7 @@ function PipelineContent({ view, refetch, opening }: { view: PipelineView; refet
     }),
   );
   const [confirmReassemble, setConfirmReassemble] = useState(false);
+  const [settling, setSettling] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -173,9 +172,16 @@ function PipelineContent({ view, refetch, opening }: { view: PipelineView; refet
           </Button>
           <Button
             className="ml-auto"
-            disabled={cont.isPending}
+            disabled={cont.isPending || settling}
             onClick={async () => {
-              await settleEdits(qc, trpc.pipeline.updateScene.mutationKey());
+              // blur перед кліком уже поставив `updateScene` — продовжуємо, коли правки збережено
+              setSettling(true);
+              const mutationKey = trpc.pipeline.updateScene.mutationKey();
+              await waitUntilIdle(() => qc.isMutating({ mutationKey }) > 0, {
+                stepMs: 50,
+                timeoutMs: SETTLE_TIMEOUT_MS,
+              });
+              setSettling(false);
               cont.mutate({ projectId });
             }}
           >

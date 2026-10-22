@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { LINE_STATE_DOT, LINE_STATE_LABEL } from '@/components/voice/states';
 import { useTRPC } from '@/lib/trpc';
+import { joinKeywords, keywordsToSave } from '@/pipeline/keywords';
 import { createTextDraft } from '@/voice/text-draft';
 import { SceneVisual } from './SceneVisual';
 
@@ -17,7 +18,10 @@ const SAVE_DEBOUNCE_MS = 600;
 export const MAX_NARRATION_CHARS = 1500;
 export const SCENE_MIME = 'application/x-vf-scene';
 
-/** Текст на місці: debounce-збереження і одразу при втраті фокуса; зміни з сервера — лише коли немає правки. */
+/**
+ * Текст на місці: debounce-збереження і одразу при втраті фокуса. Сервер обрізає пробіли — зберігаємо trim
+ * і не замінюємо локальний текст рівним йому після trim; поки збереження не завершилось, сервер не перезаписує поле.
+ */
 function DraftField({
   value,
   label,
@@ -31,14 +35,19 @@ function DraftField({
   maxLength: number;
   rows: number;
   disabled?: boolean;
-  onSave(text: string): void;
+  onSave(text: string): Promise<unknown>;
 }) {
   const [text, setText] = useState(value);
   const save = useRef(onSave);
   save.current = onSave;
-  // порожній текст сервер відхилив би — не зберігаємо
   const [draft] = useState(() =>
-    createTextDraft({ value, save: (t) => t.trim() && save.current(t), delayMs: SAVE_DEBOUNCE_MS }),
+    createTextDraft({
+      value,
+      // порожній текст сервер відхилив би — не зберігаємо
+      save: (t) => (t ? save.current(t) : undefined),
+      delayMs: SAVE_DEBOUNCE_MS,
+      normalize: (t) => t.trim(),
+    }),
   );
   useEffect(() => {
     const next = draft.sync(value);
@@ -62,7 +71,7 @@ function DraftField({
   );
 }
 
-/** Ключові слова через кому; зберігаються при втраті фокуса або Enter. */
+/** Ключові слова через кому; зберігаються при втраті фокуса або Enter. Поки поле у фокусі, сервер його не перезаписує. */
 function KeywordsField({
   value,
   label,
@@ -74,20 +83,20 @@ function KeywordsField({
   disabled?: boolean;
   onSave(k: string[]): void;
 }) {
-  const joined = value.join(', ');
+  const joined = joinKeywords(value);
   const [text, setText] = useState(joined);
-  useEffect(() => setText(joined), [joined]);
+  const [focused, setFocused] = useState(false);
+  const committed = useRef(joined);
+  useEffect(() => {
+    if (focused) return;
+    committed.current = joined;
+    setText(joined);
+  }, [joined, focused]);
   const commit = () => {
-    const keywords = [
-      ...new Set(
-        text
-          .split(',')
-          .map((k) => k.trim())
-          .filter(Boolean),
-      ),
-    ].slice(0, 8);
-    if (!keywords.length) return setText(joined);
-    if (keywords.join(', ') !== joined) onSave(keywords);
+    const keywords = keywordsToSave(text, committed.current);
+    if (!keywords) return;
+    committed.current = joinKeywords(keywords);
+    onSave(keywords);
   };
   return (
     <Input
@@ -96,7 +105,11 @@ function KeywordsField({
       disabled={disabled}
       className="h-7 text-xs"
       onChange={(e) => setText(e.target.value)}
-      onBlur={commit}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        commit();
+        setFocused(false);
+      }}
       onKeyDown={(e) => e.key === 'Enter' && commit()}
     />
   );
@@ -189,7 +202,7 @@ export function SceneRow({
           maxLength={MAX_NARRATION_CHARS}
           rows={3}
           disabled={!editable}
-          onSave={(narration) => update.mutate({ sceneId: scene.id, narration })}
+          onSave={(narration) => update.mutateAsync({ sceneId: scene.id, narration }).catch(() => undefined)}
         />
         <DraftField
           label={`Промпт сцени ${index}`}
@@ -197,7 +210,7 @@ export function SceneRow({
           maxLength={4000}
           rows={1}
           disabled={!editable}
-          onSave={(visualPrompt) => update.mutate({ sceneId: scene.id, visualPrompt })}
+          onSave={(visualPrompt) => update.mutateAsync({ sceneId: scene.id, visualPrompt }).catch(() => undefined)}
         />
         <KeywordsField
           label={`Ключові слова сцени ${index}`}
