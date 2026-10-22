@@ -1,7 +1,16 @@
 import { z } from 'zod';
-import type { PipelineSettings } from '@vf/shared';
+import type { ModelRef, PipelineSettings } from '@vf/shared';
 import { procedure, router } from '../../trpc';
-import { addScene, deleteScene, moveScene, regenerateSceneText, updateScene } from './scenes';
+import {
+  addScene,
+  deleteScene,
+  generateSceneVideo,
+  moveScene,
+  regenerateSceneText,
+  regenerateSceneVisual,
+  setSceneVisual,
+  updateScene,
+} from './scenes';
 import { cancelPipeline, continuePipeline, estimate, getPipeline, retryPipeline, startPipeline } from './service';
 
 // перевірку налаштувань робить сервіс (pipelineSettingsSchema) — помилка VALIDATION українською
@@ -37,10 +46,25 @@ export const pipelineRouter = router({
   continue: procedure
     .input(z.object({ projectId }))
     .mutation(({ ctx, input }) => continuePipeline(ctx.deps, ctx.userId, input.projectId)),
-  // part 'visual' — разом із pipeline.visual (T8)
   regenerateScene: procedure
-    .input(z.object({ sceneId, part: z.literal('text') }))
-    .mutation(({ ctx, input }) => regenerateSceneText(ctx.deps, ctx.userId, input.sceneId)),
+    .input(z.object({ sceneId, part: z.enum(['text', 'visual']) }))
+    .mutation(({ ctx, input }) =>
+      input.part === 'text'
+        ? regenerateSceneText(ctx.deps, ctx.userId, input.sceneId)
+        : regenerateSceneVisual(ctx.deps, ctx.userId, input.sceneId),
+    ),
+  generateSceneVideo: procedure
+    .input(
+      z.object({
+        sceneId,
+        model: z.string().regex(/^[a-z]+\/.+$/) as unknown as z.ZodType<ModelRef>,
+        durationSec: z.number().int().min(1).max(60).optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) => generateSceneVideo(ctx.deps, ctx.userId, input)),
+  setSceneVisual: procedure
+    .input(z.object({ sceneId, assetId: z.string() }))
+    .mutation(({ ctx, input }) => setSceneVisual(ctx.deps, ctx.userId, input)),
   cancel: procedure
     .input(z.object({ projectId }))
     .mutation(({ ctx, input }) => cancelPipeline(ctx.deps, ctx.userId, input.projectId)),

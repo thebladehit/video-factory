@@ -107,7 +107,7 @@ async function checkStart(deps: AppDeps, userId: string, s: PipelineSettings): P
  * `runAdvance` після вже збереженої зміни стану: помилку лише журналюємо — інакше клієнт повторив би запит
  * (дубль проєкту), а запуск далі доведе слухач подій або advance на старті API.
  */
-async function advanceQuietly(deps: AppDeps, runId: string): Promise<void> {
+export async function advanceQuietly(deps: AppDeps, runId: string): Promise<void> {
   try {
     await runAdvance(deps, runId);
   } catch (e) {

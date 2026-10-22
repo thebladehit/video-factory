@@ -1,10 +1,13 @@
-import { and, eq, inArray, isNull, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { assets, generations, jobs, pipelineRuns, pipelineScenes, voiceLines } from '@vf/db';
-import { isAppError, normalizeDoc } from '@vf/shared';
+import { isAppError, normalizeDoc, normalizeTags } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { enqueueSynthesize, enqueueTranslate } from '../voice/service';
 import { advance, type Action } from './advance';
 import { loadRun, type RunRow } from './snapshot';
+
+/** Тег файлів, створених конвеєром */
+export const PIPELINE_TAG = 'конвеєр';
 
 /** Межа проходів одного виклику: кожен прохід після дій, що лише змінюють стан, перечитує знімок */
 const MAX_PASSES = 5;
@@ -23,13 +26,24 @@ const chains = new Map<string, Promise<void>>();
  * перша помилка кидається наприкінці.
  */
 export function runAdvance(deps: AppDeps, runId: string): Promise<void> {
+  return serialized(runId, () => advanceLoop(deps, runId));
+}
+
+/**
+ * Виконує `fn` у черзі викликів цього запуску (разом із `runAdvance`). Для ручних дій над сценою, що проходять
+ * через проміжний стан, який `advance` прочитав би хибно (напр. queued без id задачі → «задачу перервано»).
+ */
+export function serialized<T>(runId: string, fn: () => Promise<T>): Promise<T> {
   const prev = chains.get(runId) ?? Promise.resolve();
-  const next = prev.catch(() => undefined).then(() => advanceLoop(deps, runId));
-  chains.set(runId, next);
-  const cleanup = () => {
-    if (chains.get(runId) === next) chains.delete(runId);
-  };
-  next.then(cleanup, cleanup);
+  const next = prev.catch(() => undefined).then(fn);
+  const tail = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  chains.set(runId, tail);
+  tail.then(() => {
+    if (chains.get(runId) === tail) chains.delete(runId);
+  });
   return next;
 }
 
@@ -77,14 +91,17 @@ export async function executeAction(deps: AppDeps, runId: string, action: Action
     case 'enqueueVisual':
       await enqueueVisual(deps, runId, action.sceneId);
       return false;
-    case 'linkGenerated':
-      return sceneUpdate(
+    case 'linkGenerated': {
+      const linked = await sceneUpdate(
         deps,
         runId,
         action.sceneId,
         { visualAssetId: action.assetId, visualSource: 'generated' },
         isNull(pipelineScenes.visualAssetId),
       );
+      if (linked) await tagGenerated(deps, runId, action.sceneId, action.assetId);
+      return linked;
+    }
     case 'sceneReady':
       return sceneUpdate(deps, runId, action.sceneId, { status: 'ready', error: null });
     case 'sceneFailed':
@@ -182,6 +199,23 @@ async function sceneUpdate(
     )
     .returning({ id: pipelineScenes.id });
   return rows.length > 0;
+}
+
+/** Теги прив'язаного згенерованого файлу: тема (перші 3 слова), «конвеєр», ключові слова сцени. Ідемпотентно. */
+async function tagGenerated(deps: AppDeps, runId: string, sceneId: string, assetId: string): Promise<void> {
+  const [row] = await deps.db
+    .select({ topic: sql<string>`${pipelineRuns.settings}->>'topic'`, keywords: pipelineScenes.keywords })
+    .from(pipelineScenes)
+    .innerJoin(pipelineRuns, eq(pipelineRuns.id, pipelineScenes.runId))
+    .where(and(eq(pipelineScenes.id, sceneId), eq(pipelineRuns.id, runId)));
+  if (!row) return;
+  const topic = (row.topic ?? '').trim().split(/\s+/).slice(0, 3).join(' ');
+  await deps.db.transaction(async (tx) => {
+    const [a] = await tx.select({ tags: assets.tags }).from(assets).where(eq(assets.id, assetId)).for('update');
+    if (!a) return;
+    const tags = normalizeTags([...a.tags, topic, PIPELINE_TAG, ...row.keywords]);
+    if (tags.join('\n') !== a.tags.join('\n')) await tx.update(assets).set({ tags }).where(eq(assets.id, assetId));
+  });
 }
 
 /** Справжній текст помилки сцени: генерація → її файл → задача сцени; null — немає. */

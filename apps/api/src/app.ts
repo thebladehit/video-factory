@@ -28,6 +28,7 @@ import { videoGenerateJob } from './modules/generate/video-job';
 import { pipelineEvents } from './modules/pipeline/events';
 import { sceneJob } from './modules/pipeline/scene-job';
 import { scriptJob } from './modules/pipeline/script-job';
+import { visualJob } from './modules/pipeline/visual-job';
 import { renderJob } from './modules/renders/render-job';
 import { releaseOnCancel, synthesizeJob } from './modules/voice/synthesize-job';
 import { transcribeJob } from './modules/voice/transcribe-job';
@@ -122,6 +123,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(transcribeJob(deps));
   deps.jobs.runtime.register(scriptJob(deps));
   deps.jobs.runtime.register(sceneJob(deps));
+  deps.jobs.runtime.register(visualJob(deps));
   const offVoiceEvents = deps.jobs.queue.onEvent(releaseOnCancel(deps));
   const offPipelineEvents = deps.jobs.queue.onEvent(pipelineEvents(deps));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));

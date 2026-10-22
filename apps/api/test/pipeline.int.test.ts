@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createAiRegistry,
@@ -24,6 +24,8 @@ import {
 } from '@vf/shared';
 import { estimateSceneSec, skeletonDoc } from '@vf/timeline';
 import { appRouter, createApp } from '../src/index';
+import { LIBRARY_MATCH_MIN, matchAssets } from '../src/modules/assets/match';
+import { visualJob } from '../src/modules/pipeline/visual-job';
 import { executeAction, runAdvance } from '../src/modules/pipeline/run-advance';
 import { keywordsFrom } from '../src/modules/pipeline/scenes';
 import { handlePipelineEvent, pipelineEvents } from '../src/modules/pipeline/events';
@@ -37,11 +39,15 @@ const VOICE: VoiceChoice = { model: 'fake/tts' as ModelRef, voiceId: 'fake-voice
 const fakeAi = () => createAiRegistry({ credentials: createEnvCredentialStore({ AI_FAKE: '1' }), media: tools });
 
 const opened: { close(): Promise<void> }[] = [];
+/** Окремі користувачі тестів візуалу (власна бібліотека); видаляються каскадом разом з усім своїм */
+const freshUsers: string[] = [];
 afterEach(async () => {
   await Promise.all(opened.splice(0).map((a) => a.close()));
   // тестова БД спільна: незавершені запуски підхопило б відновлення на старті API в інших тестах
   const probe = createDb(process.env.TEST_DATABASE_URL!);
   await probe.db.delete(projects).where(sql`${projects.id} in (select project_id from pipeline_runs)`);
+  const users_ = freshUsers.splice(0);
+  if (users_.length) await probe.db.delete(users).where(inArray(users.id, users_));
   await probe.close();
 });
 
@@ -514,7 +520,8 @@ describe('pipeline review fixes', () => {
   });
 
   it('a failing action does not skip the reload pass after a state change', async () => {
-    const s = await pipelineApp(['pipeline.script', 'pipeline.scene', 'pipeline.assemble']); // pipeline.visual не зареєстровано
+    const s = await pipelineApp(['pipeline.script', 'pipeline.scene', 'pipeline.assemble']);
+    failEnqueue(s, 'pipeline.visual');
     const { projectId } = await s.caller.pipeline.start(settings({ stopAfterScript: false }));
     const run = await writeScript(s, projectId, ['Раз.', 'Два.']);
     await expect(runAdvance(s.deps, run.id)).rejects.toMatchObject({ code: 'UNKNOWN_JOB_TYPE' });
@@ -1063,7 +1070,7 @@ describe('pipeline.scene and event listener', () => {
   });
 
   it('event listener survives an event for a deleted project', async () => {
-    const s = await pipelineApp(['pipeline.script', 'pipeline.scene', 'pipeline.assemble']); // без pipeline.visual
+    const s = await pipelineApp(['pipeline.script', 'pipeline.scene', 'pipeline.assemble']);
     const errors: unknown[] = [];
     const deps = { ...s.deps, log: { error: (o: object) => void errors.push(o) } };
     const ev = (patch: Partial<JobEvent>): JobEvent => ({
@@ -1091,7 +1098,8 @@ describe('pipeline.scene and event listener', () => {
     expect(errors).toEqual([]);
     expect(pipelineEvents(deps)(ev({ subject: { projectId } }))).toBeUndefined();
 
-    // advance падає (pipeline.visual не зареєстровано) — помилку журналюємо, слухач не кидає
+    // advance падає (постановка pipeline.visual не вдається) — помилку журналюємо, слухач не кидає
+    failEnqueue(s, 'pipeline.visual');
     const other = await reviewRun(s);
     await s.deps.db
       .update(pipelineRuns)
@@ -1103,5 +1111,264 @@ describe('pipeline.scene and event listener', () => {
     // незавершені події не запускають advance
     await handlePipelineEvent(deps, ev({ type: 'pipeline.scene', status: 'running', subject: { sceneId: first!.id } }));
     expect(errors).toHaveLength(1);
+  });
+});
+
+/** Fake-реєстр, у якому генерація фото з «HOLD» у промпті чекає `release()` (або скасування задачі). */
+function holdingAi() {
+  const base = fakeAi();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const ai: AiRegistry = {
+    ...base,
+    image: async (userId, ref) => {
+      const gen = await base.image(userId, ref);
+      return {
+        generate: async (req) => {
+          if (req.prompt.includes('HOLD'))
+            await Promise.race([gate, new Promise((r) => req.signal?.addEventListener('abort', r))]);
+          return gen.generate(req);
+        },
+      };
+    },
+  };
+  return { ai, release };
+}
+
+/** Повний runtime зі справжнім pipeline.visual (збірка — заглушка) і окремим користувачем із власною бібліотекою. */
+async function visualApp(ai: AiRegistry = fakeAi()) {
+  const app = await createApp(testConfig({ videoPollMs: 50 }), { ai });
+  opened.push(app);
+  app.deps.jobs.runtime.register({ type: 'pipeline.assemble', concurrency: 1, handler: async () => undefined });
+  await app.start();
+  const [u] = await app.deps.db.insert(users).values({ name: 'Конвеєр візуал' }).returning();
+  freshUsers.push(u!.id);
+  const caller = appRouter.createCaller({ userId: u!.id, deps: app.deps });
+  return { ...app, caller, userId: u!.id };
+}
+type VApp = Awaited<ReturnType<typeof visualApp>>;
+
+/** Фото в бібліотеці користувача (вертикальне, готове). */
+async function libraryImage(s: VApp, patch: Partial<typeof assets.$inferInsert> = {}) {
+  const id = randomUUID();
+  await s.deps.db.insert(assets).values({
+    id,
+    userId: s.userId,
+    kind: 'image',
+    source: 'uploaded',
+    status: 'ready',
+    storageKey: `u/${s.userId}/assets/${id}/original.png`,
+    mime: 'image/png',
+    width: 1080,
+    height: 1920,
+    ...patch,
+  });
+  return id;
+}
+
+/** Запуск на 3 сцени (fake-сценарій), промпти й ключові слова сцен задано, далі «Продовжити». */
+async function producedRun(s: VApp, scenes: { keywords: string[]; visualPrompt?: string }[]) {
+  const { projectId } = await s.caller.pipeline.start(ukOnly({ targetSec: 15 }));
+  await expect.poll(async () => (await runOf(s, projectId)).status, T).toBe('awaiting_review');
+  const run = await runOf(s, projectId);
+  const rows = await scenesOf(s, run.id);
+  expect(rows).toHaveLength(scenes.length);
+  for (const [i, sc] of scenes.entries())
+    await s.caller.pipeline.updateScene({
+      sceneId: rows[i]!.id,
+      keywords: sc.keywords,
+      visualPrompt: sc.visualPrompt ?? `calm abstract scene number ${i}`,
+    });
+  await s.caller.pipeline.continue({ projectId });
+  return { projectId, runId: run.id, sceneIds: rows.map((r) => r.id) };
+}
+
+const sceneRow = async (s: App, id: string) =>
+  (await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, id)))[0]!;
+const settled = (st: string) => st === 'ready' || st === 'failed';
+const V = { timeout: 30_000 };
+const OTHER = [{ keywords: ['абстракція'] }, { keywords: ['абстракція'] }];
+
+describe('pipeline.visual', () => {
+  it('library asset with strong match is used, source library, no generation row', async () => {
+    const s = await visualApp();
+    const sunset = await libraryImage(s, { title: 'Захід сонця над морем', tags: ['море', 'захід'] });
+    const { sceneIds } = await producedRun(s, [{ keywords: ['море', 'захід сонця'] }, ...OTHER]);
+    await expect.poll(async () => (await sceneRow(s, sceneIds[0]!)).status, V).toBe('ready');
+    expect(await sceneRow(s, sceneIds[0]!)).toMatchObject({
+      visualAssetId: sunset,
+      visualSource: 'library',
+      generationId: null,
+      error: null,
+    });
+    // інші сцени згенеровано; генерацій рівно дві (для сцени з бібліотеки — жодної)
+    await expect
+      .poll(async () => Promise.all(sceneIds.map(async (id) => settled((await sceneRow(s, id)).status))), V)
+      .toEqual([true, true, true]);
+    const gens = await s.deps.db
+      .select()
+      .from(generations)
+      .where(and(eq(generations.userId, s.userId), eq(generations.capability, 'image')));
+    expect(gens).toHaveLength(2);
+  }, 40_000);
+
+  it('weak matches land in suggestions and an image is generated', async () => {
+    const s = await visualApp();
+    const weak = await libraryImage(s, { title: 'Вода в склянці' });
+    const [m] = await matchAssets(s.deps, s.userId, { keywords: ['водоспад'], format: '9:16', exclude: [] });
+    expect(m).toMatchObject({ assetId: weak });
+    expect(m!.score).toBeLessThan(LIBRARY_MATCH_MIN);
+    const { projectId, sceneIds } = await producedRun(s, [{ keywords: ['водоспад'] }, ...OTHER]);
+    await expect.poll(async () => (await sceneRow(s, sceneIds[0]!)).status, V).toBe('ready');
+    const sc = await sceneRow(s, sceneIds[0]!);
+    expect(sc.suggestions).toContain(weak);
+    expect(sc.visualSource).toBe('generated');
+    expect(sc.visualAssetId).not.toBe(weak);
+    expect(sc.generationId).toBeTruthy();
+    const view = await s.caller.pipeline.get({ projectId });
+    expect(view.scenes[0]!.suggestions.map((x) => x.assetId)).toContain(weak);
+  }, 40_000);
+
+  it('same library file is not used for two scenes', async () => {
+    const s = await visualApp();
+    const sunset = await libraryImage(s, { title: 'Захід сонця над морем', tags: ['море', 'захід'] });
+    const strong = { keywords: ['море', 'захід сонця'] };
+    const { sceneIds } = await producedRun(s, [strong, strong, strong]);
+    await expect
+      .poll(async () => Promise.all(sceneIds.map(async (id) => settled((await sceneRow(s, id)).status))), V)
+      .toEqual([true, true, true]);
+    const rows = await Promise.all(sceneIds.map((id) => sceneRow(s, id)));
+    expect(rows.filter((r) => r.visualAssetId === sunset)).toHaveLength(1);
+    expect(rows.filter((r) => r.visualSource === 'generated')).toHaveLength(2);
+  }, 40_000);
+
+  it('generated image is linked when asset.process finishes, scene ready, asset tagged конвеєр', async () => {
+    const s = await visualApp();
+    const { projectId, sceneIds } = await producedRun(s, [
+      { keywords: ['галактика', 'зорі'], visualPrompt: 'spiral galaxy in deep space' },
+      ...OTHER,
+    ]);
+    await expect.poll(async () => (await sceneRow(s, sceneIds[0]!)).status, V).toBe('ready');
+    const sc = await sceneRow(s, sceneIds[0]!);
+    const [g] = await s.deps.db.select().from(generations).where(eq(generations.id, sc.generationId!));
+    expect(g).toMatchObject({ status: 'done', prompt: 'spiral galaxy in deep space', capability: 'image' });
+    expect(g!.params).toMatchObject({ aspect: '9:16', n: 1 });
+    expect(sc).toMatchObject({ visualSource: 'generated', visualAssetId: g!.assetIds[0] });
+    const [a] = await s.deps.db.select().from(assets).where(eq(assets.id, sc.visualAssetId!));
+    expect(a!.status).toBe('ready');
+    const topic = (await runOf(s, projectId)).settings.topic;
+    const head = topic.trim().split(/\s+/).slice(0, 3).join(' ').toLowerCase();
+    expect(a!.tags).toEqual(expect.arrayContaining(['конвеєр', 'галактика', 'зорі', head]));
+  }, 40_000);
+
+  it('scene whose prompt contains FAIL is failed with provider message, other scenes ready', async () => {
+    const s = await visualApp();
+    const { sceneIds } = await producedRun(s, [{ keywords: ['галактика'], visualPrompt: 'FAIL please' }, ...OTHER]);
+    await expect
+      .poll(async () => Promise.all(sceneIds.map(async (id) => (await sceneRow(s, id)).status)), V)
+      .toEqual(['failed', 'ready', 'ready']);
+    expect((await sceneRow(s, sceneIds[0]!)).error).toBe('Fake: відмова');
+  }, 40_000);
+
+  it('regenerate visual skips library and creates a new generation', async () => {
+    const { ai, release } = holdingAi();
+    const s = await visualApp(ai);
+    try {
+      const sunset = await libraryImage(s, { title: 'Захід сонця над морем', tags: ['море', 'захід'] });
+      const { projectId, sceneIds } = await producedRun(s, [
+        { keywords: ['море', 'захід сонця'] },
+        { keywords: ['абстракція'], visualPrompt: 'HOLD this one' },
+        { keywords: ['абстракція'] },
+      ]);
+      await expect.poll(async () => (await sceneRow(s, sceneIds[0]!)).visualAssetId, V).toBe(sunset);
+      await s.caller.pipeline.regenerateScene({ sceneId: sceneIds[0]!, part: 'visual' });
+      expect(await sceneRow(s, sceneIds[0]!)).toMatchObject({ visualAssetId: null, visualSource: null });
+      await expect.poll(async () => (await sceneRow(s, sceneIds[0]!)).status, V).toBe('ready');
+      const sc = await sceneRow(s, sceneIds[0]!);
+      expect(sc.visualSource).toBe('generated');
+      expect(sc.visualAssetId).not.toBe(sunset);
+      expect(sc.generationId).toBeTruthy();
+      expect((await runOf(s, projectId)).stage).toBe('produce');
+    } finally {
+      release();
+    }
+  }, 40_000);
+
+  it('generateSceneVideo links fake video when ready', async () => {
+    const { ai, release } = holdingAi();
+    const s = await visualApp(ai);
+    try {
+      const { sceneIds } = await producedRun(s, [
+        { keywords: ['абстракція'] },
+        { keywords: ['абстракція'], visualPrompt: 'HOLD this one' },
+        { keywords: ['абстракція'] },
+      ]);
+      await expect.poll(async () => (await sceneRow(s, sceneIds[0]!)).status, V).toBe('ready');
+      await expect(
+        s.caller.pipeline.generateSceneVideo({ sceneId: sceneIds[0]!, model: 'fake/video', durationSec: 7 }),
+      ).rejects.toMatchObject({ cause: { code: 'VALIDATION' } });
+      expect((await sceneRow(s, sceneIds[0]!)).status).toBe('ready');
+      await s.caller.pipeline.generateSceneVideo({ sceneId: sceneIds[0]!, model: 'fake/video', durationSec: 2 });
+      expect((await sceneRow(s, sceneIds[0]!)).status).toBe('running');
+      await expect.poll(async () => (await sceneRow(s, sceneIds[0]!)).status, V).toBe('ready');
+      const sc = await sceneRow(s, sceneIds[0]!);
+      const [a] = await s.deps.db.select().from(assets).where(eq(assets.id, sc.visualAssetId!));
+      expect(a).toMatchObject({ kind: 'video', status: 'ready' });
+      expect(sc.visualSource).toBe('generated');
+      expect(a!.tags).toContain('конвеєр');
+    } finally {
+      release();
+    }
+  }, 40_000);
+
+  it("setSceneVisual rejects audio asset and someone else's asset", async () => {
+    const s = await pipelineApp();
+    const { runId } = await reviewRun(s);
+    const [sc] = await scenesOf(s, runId);
+    const audio = await insertAsset(s);
+    const [stranger] = await s.deps.db.insert(users).values({ name: 'Чужий візуал' }).returning();
+    freshUsers.push(stranger!.id);
+    const foreign = await insertAsset(s, {
+      userId: stranger!.id,
+      kind: 'image',
+      mime: 'image/png',
+      width: 1080,
+      height: 1920,
+    });
+    const pending = await insertAsset(s, { kind: 'image', mime: 'image/png', status: 'processing' });
+    const own = await insertAsset(s, { kind: 'image', mime: 'image/png', width: 1080, height: 1920 });
+    const call = (assetId: string) => s.caller.pipeline.setSceneVisual({ sceneId: sc!.id, assetId });
+    await expect(call(audio)).rejects.toMatchObject({ cause: { code: 'VALIDATION' } });
+    await expect(call(pending)).rejects.toMatchObject({ cause: { code: 'VALIDATION' } });
+    await expect(call(foreign)).rejects.toMatchObject({ cause: { code: 'NOT_FOUND' } });
+    await expect(call('not-a-uuid')).rejects.toMatchObject({ cause: { code: 'NOT_FOUND' } });
+    const strangerCaller = appRouter.createCaller({ userId: stranger!.id, deps: s.deps });
+    await expect(strangerCaller.pipeline.setSceneVisual({ sceneId: sc!.id, assetId: foreign })).rejects.toMatchObject({
+      cause: { code: 'NOT_FOUND' },
+    });
+    expect((await sceneRow(s, sc!.id)).visualAssetId).toBeNull();
+    await call(own);
+    expect(await sceneRow(s, sc!.id)).toMatchObject({ visualAssetId: own, visualSource: 'manual', status: 'ready' });
+  });
+
+  it('visual job: aborted signal writes nothing; missing scene is a no-op', async () => {
+    const s = await pipelineApp();
+    const { runId } = await reviewRun(s);
+    await s.deps.db.update(pipelineRuns).set({ stage: 'produce', status: 'running' }).where(eq(pipelineRuns.id, runId));
+    const [sc] = await scenesOf(s, runId);
+    await s.deps.db.update(pipelineScenes).set({ status: 'queued' }).where(eq(pipelineScenes.id, sc!.id));
+    const ac = new AbortController();
+    ac.abort();
+    const ctx = { jobId: randomUUID(), userId: LOCAL_USER_ID, progress: async () => {}, signal: ac.signal };
+    const job = visualJob(s.deps);
+    expect(await job.handler({ sceneId: sc!.id }, ctx)).toEqual({ source: null });
+    expect(await sceneRow(s, sc!.id)).toMatchObject({ status: 'queued', generationId: null, visualAssetId: null });
+    const live = { ...ctx, signal: new AbortController().signal };
+    expect(await job.handler({ sceneId: randomUUID() }, live)).toEqual({ source: null });
+    // сцену видалено разом із проєктом посеред запуску — без винятку
+    const { projectId } = await reviewRun(s);
+    const [gone] = await scenesOf(s, (await runOf(s, projectId)).id);
+    await s.deps.db.delete(projects).where(eq(projects.id, projectId));
+    expect(await job.handler({ sceneId: gone!.id }, live)).toEqual({ source: null });
   });
 });

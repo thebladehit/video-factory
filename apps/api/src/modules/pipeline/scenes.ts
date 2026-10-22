@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '@vf/db';
-import { jobs, pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
-import { AppError, normalizeDoc } from '@vf/shared';
+import { assets, generations, jobs, pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
+import { AppError, normalizeDoc, type ModelRef } from '@vf/shared';
 import { estimateSceneSec, skeletonDoc } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
+import { generateVideo } from '../generate/service';
 import { clearFailure, MAX_LINE_CHARS, setText } from '../voice/service';
-import { ownRun } from './service';
+import { serialized } from './run-advance';
+import { advanceQuietly, ownRun } from './service';
 import type { RunRow, SceneRow } from './snapshot';
 
 /** Межі сценарію (як у перевірці відповіді моделі) */
@@ -250,4 +252,154 @@ export async function regenerateSceneText(deps: AppDeps, userId: string, sceneId
     .limit(1);
   if (live) return { jobId: live.id };
   return { jobId: await deps.jobs.queue.enqueue('pipeline.scene', { sceneId: scene.id }, { userId }) };
+}
+
+const liveStatuses = ['queued', 'running'] as ('queued' | 'running')[];
+
+/**
+ * Етапи, на яких можна змінювати візуал сцени. Генерація (знову / відео) — лише після перевірки сценарію, бо її файл
+ * прив'язує `advance`, а на перевірці він нічого не робить; вибір файлу — й на перевірці. Під час збірки — ні:
+ * збірка вже читає сцени.
+ */
+function checkVisualStage(run: RunRow, manual: boolean): void {
+  if (run.stage === 'script') throw new AppError('VALIDATION', 'Сценарій ще створюється — зачекайте');
+  if (run.stage === 'review' && !manual)
+    throw new AppError('VALIDATION', 'Візуал генерується після перевірки сценарію — натисніть «Продовжити»');
+  if (run.stage === 'assemble') throw new AppError('VALIDATION', 'Триває збірка чернетки — зачекайте');
+}
+
+/** Скасовує живу задачу візуалу сцени й живу генерацію її фото/відео (помилки — лише в журнал). */
+async function stopSceneWork(deps: AppDeps, scene: SceneRow): Promise<void> {
+  const ids: string[] = [];
+  if (scene.jobId && liveStatuses.includes(scene.status as 'queued')) ids.push(scene.jobId);
+  if (scene.generationId) {
+    const [g] = await deps.db
+      .select({ status: generations.status, jobId: generations.jobId })
+      .from(generations)
+      .where(eq(generations.id, scene.generationId));
+    if (g?.jobId && liveStatuses.includes(g.status as 'queued')) ids.push(g.jobId);
+  }
+  for (const id of ids) {
+    try {
+      await deps.jobs.queue.cancel(id);
+    } catch (e) {
+      deps.log.error({ err: e, jobId: id }, 'pipeline: не вдалося скасувати задачу візуалу сцени');
+    }
+  }
+}
+
+const freshScene = async (deps: AppDeps, sceneId: string): Promise<SceneRow> => {
+  const [s] = await deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, sceneId));
+  if (!s) throw sceneNotFound();
+  return s;
+};
+
+const clearedVisual = { visualAssetId: null, visualSource: null, generationId: null, jobId: null, error: null };
+
+/**
+ * «Згенерувати знову» (спека 4.2): поточна робота сцени скасовується, візуал і генерація очищуються, ставиться
+ * `pipeline.visual { sceneId, regenerate: true }` (без пошуку в бібліотеці). Проміжний стан «queued без id задачі»
+ * не бачить жоден `advance` — усе в черзі викликів запуску.
+ */
+export async function regenerateSceneVisual(
+  deps: AppDeps,
+  userId: string,
+  sceneId: string,
+): Promise<{ jobId: string }> {
+  const { run } = await ownScene(deps, userId, sceneId);
+  checkVisualStage(run, false);
+  const jobId = await serialized(run.id, async () => {
+    const cur = await freshScene(deps, sceneId);
+    await stopSceneWork(deps, cur);
+    await deps.db
+      .update(pipelineScenes)
+      .set({ ...clearedVisual, status: 'queued', updatedAt: new Date() })
+      .where(eq(pipelineScenes.id, sceneId));
+    const id = await deps.jobs.queue.enqueue('pipeline.visual', { sceneId, regenerate: true }, { userId });
+    await deps.db
+      .update(pipelineScenes)
+      .set({ jobId: id })
+      .where(
+        and(eq(pipelineScenes.id, sceneId), inArray(pipelineScenes.status, liveStatuses), isNull(pipelineScenes.jobId)),
+      );
+    return id;
+  });
+  return { jobId };
+}
+
+/**
+ * «Згенерувати відео»: наявний `generateVideo` (модель і тривалість перевіряє він — до будь-яких змін сцени),
+ * промпт — `visual_prompt`, aspect — формат проєкту; сцена `running` з новою генерацією, файл прив'язує `advance`.
+ */
+export async function generateSceneVideo(
+  deps: AppDeps,
+  userId: string,
+  i: { sceneId: string; model: ModelRef; durationSec?: number },
+): Promise<{ generationId: string }> {
+  const { run } = await ownScene(deps, userId, i.sceneId);
+  checkVisualStage(run, false);
+  const [project] = await deps.db
+    .select({ format: projects.format })
+    .from(projects)
+    .where(eq(projects.id, run.projectId));
+  if (!project) throw sceneNotFound();
+  const generationId = await serialized(run.id, async () => {
+    const cur = await freshScene(deps, i.sceneId);
+    const { generationId } = await generateVideo(deps, userId, {
+      model: i.model,
+      prompt: cur.visualPrompt,
+      aspect: project.format,
+      durationSec: i.durationSec,
+    });
+    await stopSceneWork(deps, cur);
+    await deps.db
+      .update(pipelineScenes)
+      .set({ ...clearedVisual, generationId, status: 'running', updatedAt: new Date() })
+      .where(eq(pipelineScenes.id, i.sceneId));
+    return generationId;
+  });
+  // генерація могла завершитись раніше, ніж сцена її отримала
+  await advanceQuietly(deps, run.id);
+  return { generationId };
+}
+
+/**
+ * «Вибрати з бібліотеки» / підказка: власний готовий фото- чи відеофайл → `visual_source='manual'`, сцена `ready`
+ * (поточна робота сцени скасовується). Чужий/неіснуючий файл → NOT_FOUND; аудіо чи не готовий → VALIDATION.
+ * Можна й на перевірці сценарію (тоді «Продовжити» цю сцену вже не генерує).
+ */
+export async function setSceneVisual(
+  deps: AppDeps,
+  userId: string,
+  i: { sceneId: string; assetId: string },
+): Promise<void> {
+  const { run } = await ownScene(deps, userId, i.sceneId);
+  const notFound = () => new AppError('NOT_FOUND', 'Файл не знайдено');
+  if (!isUuid(i.assetId)) throw notFound();
+  const [a] = await deps.db
+    .select({ kind: assets.kind, status: assets.status })
+    .from(assets)
+    .where(and(eq(assets.id, i.assetId), eq(assets.userId, userId)));
+  if (!a) throw notFound();
+  if ((a.kind !== 'image' && a.kind !== 'video') || a.status !== 'ready')
+    throw new AppError('VALIDATION', 'Візуал сцени — це готове фото або відео з бібліотеки');
+  checkVisualStage(run, true);
+  // T9: після `done` — точкова заміна кліпів сегмента (`replaceSegmentVisual`) разом зі сценою
+  if (run.stage === 'done')
+    throw new AppError('VALIDATION', 'Заміна візуалу після збірки ще недоступна — пересоберіть чернетку');
+  await serialized(run.id, async () => {
+    const cur = await freshScene(deps, i.sceneId);
+    await stopSceneWork(deps, cur);
+    await deps.db
+      .update(pipelineScenes)
+      .set({
+        ...clearedVisual,
+        visualAssetId: i.assetId,
+        visualSource: 'manual',
+        status: 'ready',
+        updatedAt: new Date(),
+      })
+      .where(eq(pipelineScenes.id, i.sceneId));
+  });
+  await advanceQuietly(deps, run.id);
 }
