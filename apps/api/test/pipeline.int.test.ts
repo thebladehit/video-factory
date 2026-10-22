@@ -871,6 +871,8 @@ describe('pipeline cancel, retry, recovery', () => {
       { userId: LOCAL_USER_ID },
     );
     const synth = (await baseLines(s, projectId)).map((l) => l.jobId!);
+    const [translate] = await projectJobs(s, 'voice.translate', projectId);
+    expect(translate!.status).toBe('queued');
     expect(synth.every(Boolean)).toBe(true);
 
     const stranger = appRouter.createCaller({ userId: randomUUID(), deps: s.deps });
@@ -883,6 +885,7 @@ describe('pipeline cancel, retry, recovery', () => {
     const after = await scenesOf(s, runId);
     expect(after.every((sc) => sc.status === 'empty' && sc.jobId === null)).toBe(true);
     expect(after[0]!.generationId).toBeNull();
+    expect(await status(translate!.id)).toBe('cancelled');
     await expect
       .poll(async () => (await baseLines(s, projectId)).map((l) => l.status), T)
       .toEqual(['empty', 'empty', 'empty']);
@@ -894,6 +897,51 @@ describe('pipeline cancel, retry, recovery', () => {
       true,
     );
     expect((await baseLines(s, projectId)).every((l) => l.status === 'queued')).toBe(true);
+    // скасований переклад поставлено знову
+    const translates = await projectJobs(s, 'voice.translate', projectId);
+    expect(translates).toHaveLength(2);
+    expect(translates.find((j) => j.id !== translate!.id)!.status).toBe('queued');
+  });
+
+  it('a runAdvance racing with retry cannot assemble before the failed scene and translate are reset', async () => {
+    const s = await pipelineApp();
+    const { projectId, runId } = await reviewRun(s);
+    const scenes = await scenesOf(s, runId);
+    await s.deps.db.update(pipelineScenes).set({ status: 'ready' }).where(eq(pipelineScenes.runId, runId));
+    await s.deps.db
+      .update(pipelineScenes)
+      .set({ status: 'failed', error: 'Fake: відмова' })
+      .where(eq(pipelineScenes.id, scenes[0]!.id));
+    await s.deps.db
+      .update(voiceLines)
+      .set({ status: 'ready' })
+      .where(and(eq(voiceLines.projectId, projectId), eq(voiceLines.language, 'uk')));
+    const failedTranslate = await s.deps.jobs.queue.enqueue(
+      'voice.translate',
+      { projectId, language: 'en' },
+      { userId: LOCAL_USER_ID },
+    );
+    await s.deps.db.update(jobs).set({ status: 'failed', error: 'Збій' }).where(eq(jobs.id, failedTranslate));
+    await s.deps.db
+      .update(pipelineRuns)
+      .set({ stage: 'produce', status: 'failed', error: 'Збій' })
+      .where(eq(pipelineRuns.id, runId));
+
+    // advance «з події» посеред retry — у момент постановки перекладу — і паралельні виклики
+    const queue = s.deps.jobs.queue;
+    const enqueue = queue.enqueue.bind(queue);
+    queue.enqueue = async (type, payload, opts) => {
+      if (type === 'voice.translate') await runAdvance(s.deps, runId);
+      return enqueue(type, payload, opts);
+    };
+    await Promise.all([s.caller.pipeline.retry({ projectId }), runAdvance(s.deps, runId), runAdvance(s.deps, runId)]);
+    await runAdvance(s.deps, runId);
+    expect(await projectJobs(s, 'pipeline.assemble', projectId)).toHaveLength(0);
+    expect(await runOf(s, projectId)).toMatchObject({ stage: 'produce', status: 'running', assembleJobId: null });
+    const [sc0] = await s.deps.db.select().from(pipelineScenes).where(eq(pipelineScenes.id, scenes[0]!.id));
+    expect(sc0).toMatchObject({ status: 'queued', error: null });
+    const translates = await projectJobs(s, 'voice.translate', projectId);
+    expect(translates.filter((j) => j.status === 'queued')).toHaveLength(1);
   });
 
   it('retry after a failed assemble: back to produce, failed scene and failed lines re-queued, translate again', async () => {

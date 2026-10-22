@@ -17,9 +17,8 @@ import { AppError, isAppError, type PipelineSettings, type VideoFormat } from '@
 import { estimateSceneSec, skeletonDoc } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { finishGeneration, isCancelled, startGeneration } from '../voice/job-utils';
+import { MAX_SCENES } from './scenes';
 
-/** Межа сцен усього сценарію (як у перевірці відповіді) */
-const MAX_SCENES = 60;
 const MAX_TITLE_CHARS = 200;
 /** Скільки останніх сцен передати розділу як контекст */
 const CONTEXT_SCENES = 3;

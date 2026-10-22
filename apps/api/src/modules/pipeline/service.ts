@@ -17,9 +17,9 @@ import {
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { ownProject } from '../projects/service';
-import { assertVoiceChoice, getVoice, parseVoice } from '../voice/service';
+import { assertVoiceChoice, enqueueTranslate, getVoice, parseVoice } from '../voice/service';
 import { estimatePipeline, type PipelineEstimate } from './estimate';
-import { executeAction, runAdvance } from './run-advance';
+import { runAdvance } from './run-advance';
 import { loadSnapshot, type RunRow } from './snapshot';
 
 export interface SceneView {
@@ -172,8 +172,8 @@ const live = ['queued', 'running'] as ('queued' | 'running')[];
 /**
  * «Скасувати»: запуск, що працює → cancelled (спершу стан — події скасованих задач уже не зрушать запуск), потім
  * скасовуються живі задачі: сценарій, збірка, візуали й перегенерація тексту сцен, генерації фото/відео сцен,
- * озвучка рядків проєкту (рядки звільняє наявний `releaseOnCancel`). Переклад мови не скасовується — дешевий,
- * а його результат знадобиться «Повторити». Сцени в роботі → empty; генерація, що не завершилась, відв'язується.
+ * переклади мов проєкту, озвучка рядків (рядки звільняє наявний `releaseOnCancel`); скасований переклад
+ * «Повторити» ставить знову. Сцени в роботі → empty; генерація, що не завершилась, відв'язується.
  */
 export async function cancelPipeline(deps: AppDeps, userId: string, projectId: string): Promise<void> {
   const run = await ownRun(deps, userId, projectId);
@@ -205,6 +205,16 @@ export async function cancelPipeline(deps: AppDeps, userId: string, projectId: s
           ),
         )
     : [];
+  const translateJobs = await deps.db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.type, 'voice.translate'),
+        inArray(jobs.status, live),
+        sql`${jobs.payload}->>'projectId' = ${run.projectId}`,
+      ),
+    );
   const lineJobs = await deps.db
     .select({ jobId: voiceLines.jobId })
     .from(voiceLines)
@@ -217,6 +227,7 @@ export async function cancelPipeline(deps: AppDeps, userId: string, projectId: s
       ...sceneTextJobs.map((j) => j.id),
       ...gens.filter((g) => live.includes(g.status as 'queued')).map((g) => g.jobId),
       ...lineJobs.map((l) => l.jobId),
+      ...translateJobs.map((j) => j.id),
     ].filter((id): id is string => !!id),
   );
   for (const id of toCancel) {
@@ -244,12 +255,15 @@ export async function cancelPipeline(deps: AppDeps, userId: string, projectId: s
  * «Повторити»: failed|cancelled → running (на review — awaiting_review). Задача етапу, що не завершилась успіхом,
  * обнуляється (`advance` поставить її знову); невдала збірка повертає етап на produce, щоб спершу повторились
  * невдалі сцени й рядки. Сцени failed → empty (невдала генерація й її файл відв'язуються); рядки failed → empty;
- * переклад мови, що впав задачею, ставиться знову. Далі — `runAdvance`.
+ * переклад мови, що впав (задачею чи постановкою), ставиться знову.
+ * Порядок важливий: переклади ставляться й скидання робляться, поки запуск ще failed|cancelled (advance із
+ * паралельних подій нічого не робить), а скидання й зміна стану — однією транзакцією під блокуванням рядка запуску;
+ * інакше advance міг би побачити «все кінцеве» й поставити збірку до скидання. Далі — `runAdvance`.
  */
 export async function retryPipeline(deps: AppDeps, userId: string, projectId: string): Promise<void> {
   const run = await ownRun(deps, userId, projectId);
-  if (run.status !== 'failed' && run.status !== 'cancelled')
-    throw new AppError('VALIDATION', 'Повторити можна лише запуск з помилкою або скасований');
+  const notRetryable = () => new AppError('VALIDATION', 'Повторити можна лише запуск з помилкою або скасований');
+  if (run.status !== 'failed' && run.status !== 'cancelled') throw notRetryable();
   const ids = [run.scriptJobId, run.assembleJobId].filter((id): id is string => !!id);
   const done = new Set(
     ids.length
@@ -262,60 +276,65 @@ export async function retryPipeline(deps: AppDeps, userId: string, projectId: st
       : [],
   );
   const keep = (id: string | null) => (id && done.has(id) ? id : null);
-  const assembleJobId = keep(run.assembleJobId);
-  const stage: PipelineStage = run.stage === 'assemble' && !assembleJobId ? 'produce' : run.stage;
-  const [moved] = await deps.db
-    .update(pipelineRuns)
-    .set({
-      stage,
-      status: stage === 'review' ? 'awaiting_review' : stage === 'done' ? 'done' : 'running',
-      error: null,
-      scriptJobId: keep(run.scriptJobId),
-      assembleJobId,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(pipelineRuns.id, run.id), inArray(pipelineRuns.status, ['failed', 'cancelled'])))
-    .returning({ id: pipelineRuns.id });
-  if (!moved) throw new AppError('VALIDATION', 'Повторити можна лише запуск з помилкою або скасований');
+  const stageAfter = (r: RunRow): PipelineStage =>
+    r.stage === 'assemble' && !keep(r.assembleJobId) ? 'produce' : r.stage;
 
-  await resetFailedScenes(deps, run.id);
-  await deps.db
-    .update(voiceLines)
-    .set({ status: 'empty', error: null, updatedAt: new Date() })
-    .where(and(eq(voiceLines.projectId, run.projectId), eq(voiceLines.status, 'failed')));
-
-  if (stage === 'produce') {
+  // переклад, що впав або скасований: нова задача поки запуск ще не працює — знімок далі бачить мову live
+  if (stageAfter(run) === 'produce') {
     const snap = await loadSnapshot(deps, run.id);
     for (const lang of snap?.langs ?? [])
       if (!lang.isBase && lang.translate === 'failed') {
         try {
-          await executeAction(deps, run.id, { type: 'enqueueTranslate', language: lang.language });
+          await enqueueTranslate(deps, run.userId, { projectId: run.projectId, language: lang.language });
         } catch (e) {
+          // не вдалося поставити — після скидання рядків advance спробує ще раз і позначить мову failed
           deps.log.error({ err: e, runId: run.id }, 'pipeline: не вдалося повторити переклад');
         }
       }
   }
+
+  await deps.db.transaction(async (tx) => {
+    const [locked] = await tx.select().from(pipelineRuns).where(eq(pipelineRuns.id, run.id)).for('update');
+    if (!locked || (locked.status !== 'failed' && locked.status !== 'cancelled')) throw notRetryable();
+    await resetFailedScenes(tx, run.id);
+    await tx
+      .update(voiceLines)
+      .set({ status: 'empty', error: null, updatedAt: new Date() })
+      .where(and(eq(voiceLines.projectId, locked.projectId), eq(voiceLines.status, 'failed')));
+    const stage = stageAfter(locked);
+    await tx
+      .update(pipelineRuns)
+      .set({
+        stage,
+        status: stage === 'review' ? 'awaiting_review' : stage === 'done' ? 'done' : 'running',
+        error: null,
+        scriptJobId: keep(locked.scriptJobId),
+        assembleJobId: keep(locked.assembleJobId),
+        updatedAt: new Date(),
+      })
+      .where(eq(pipelineRuns.id, run.id));
+  });
   await advanceQuietly(deps, run.id);
 }
 
+type Tx = Parameters<Parameters<AppDeps['db']['transaction']>[0]>[0];
+
 /** Сцени failed → empty; генерація, що не дала готового файлу, і згенерований візуал відв'язуються. */
-async function resetFailedScenes(deps: AppDeps, runId: string): Promise<void> {
-  const failed = await deps.db
+async function resetFailedScenes(tx: Tx, runId: string): Promise<void> {
+  const failed = await tx
     .select()
     .from(pipelineScenes)
     .where(and(eq(pipelineScenes.runId, runId), eq(pipelineScenes.status, 'failed')));
   for (const sc of failed) {
     let dropGeneration = false;
     if (sc.generationId) {
-      const [g] = await deps.db.select().from(generations).where(eq(generations.id, sc.generationId));
+      const [g] = await tx.select().from(generations).where(eq(generations.id, sc.generationId));
       const assetId = sc.visualAssetId ?? g?.assetIds[0];
-      const [a] = assetId
-        ? await deps.db.select({ status: assets.status }).from(assets).where(eq(assets.id, assetId))
-        : [];
+      const [a] = assetId ? await tx.select({ status: assets.status }).from(assets).where(eq(assets.id, assetId)) : [];
       dropGeneration = !g || g.status !== 'done' || !a || a.status === 'failed';
     }
     const dropVisual = dropGeneration && sc.visualSource === 'generated';
-    await deps.db
+    await tx
       .update(pipelineScenes)
       .set({
         status: 'empty',
