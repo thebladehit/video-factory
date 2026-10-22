@@ -10,6 +10,10 @@ export type EditorMode = { kind: 'edit' } | { kind: 'language'; language: string
 
 export const isReadOnlyMode = (m: EditorMode): boolean => m.kind === 'language' && !m.separated;
 
+/** Документ лише для читання: перегляд мови або заморожено (конвеєр ще збирає чернетку) */
+export const isReadOnlyState = (s: { mode: EditorMode; frozen: boolean }): boolean =>
+  s.frozen || isReadOnlyMode(s.mode);
+
 export interface EditorState {
   doc: TimelineDoc;
   /** Режим — поза історією zundo (`partialize`) */
@@ -17,6 +21,9 @@ export interface EditorState {
   /** Тимчасово лише для читання (перемикання режиму, відокремлення): зміни ігноруються, жест завершується */
   locked: boolean;
   setLocked(locked: boolean): void;
+  /** Заморожено, поки конвеєр збирає чернетку: як мовний перегляд, зміни ігноруються, жест завершується */
+  frozen: boolean;
+  setFrozen(frozen: boolean): void;
   /** Інший документ цілком (режим + документ атомарно); історія очищується, зберігання не запускається */
   switchMode(mode: EditorMode, doc: TimelineDoc): void;
   /** Чиста операція над документом; без змін — без кроку історії */
@@ -57,6 +64,13 @@ export function createEditorStore(initial: TimelineDoc) {
           set({ locked });
           store.temporal.getState().resume();
         },
+        frozen: false,
+        setFrozen(frozen) {
+          if (frozen) get().endGesture();
+          store.temporal.getState().pause();
+          set({ frozen });
+          store.temporal.getState().resume();
+        },
         switchMode(mode, doc) {
           gestureStart = null;
           store.temporal.getState().pause();
@@ -65,12 +79,12 @@ export function createEditorStore(initial: TimelineDoc) {
           store.temporal.getState().clear();
         },
         apply(op) {
-          if (get().locked || isReadOnlyMode(get().mode)) return;
+          if (get().locked || isReadOnlyState(get())) return;
           const next = op(get().doc);
           if (next !== get().doc) set({ doc: next });
         },
         beginGesture() {
-          if (gestureStart || get().locked || isReadOnlyMode(get().mode)) return;
+          if (gestureStart || get().locked || isReadOnlyState(get())) return;
           gestureStart = get().doc;
           store.temporal.getState().pause();
         },

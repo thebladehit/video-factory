@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { assets, projects } from '@vf/db';
+import { assets, pipelineRuns, projects } from '@vf/db';
 import { appRouter } from '../src/index';
 import { addClip } from '@vf/timeline';
-import type { TimelineDoc } from '@vf/shared';
+import { LOCAL_USER_ID, type PipelineSettings, type TimelineDoc } from '@vf/shared';
 import { mp4Bytes, pngBytes, toneMp4Bytes, upload, waitForAsset } from './assets-helpers';
 import { startApp } from './helpers';
 
@@ -227,5 +227,22 @@ describe('projects', () => {
     await expect(stranger.projects.save({ id, language: 'uk', timeline: doc, baseVersion: 2 })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
+  });
+
+  it('projects.get returns pipeline stage and status for a pipeline project and null otherwise', async () => {
+    const s = await startApp();
+    const plain = await s.caller.projects.create({ title: 'Без запуску', format: '9:16' });
+    expect((await s.caller.projects.get({ id: plain.id })).pipeline).toBeNull();
+    const { id } = await s.caller.projects.create({ title: 'Конвеєр', format: '9:16' });
+    await s.deps.db.insert(pipelineRuns).values({
+      userId: LOCAL_USER_ID,
+      projectId: id,
+      settings: {} as PipelineSettings,
+      stage: 'review',
+      status: 'awaiting_review',
+    });
+    expect((await s.caller.projects.get({ id })).pipeline).toEqual({ stage: 'review', status: 'awaiting_review' });
+    const stranger = appRouter.createCaller({ userId: randomUUID(), deps: s.deps });
+    await expect(stranger.projects.get({ id })).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });

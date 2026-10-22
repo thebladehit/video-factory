@@ -32,6 +32,8 @@ export interface ProjectView {
   timeline: TimelineDoc;
   version: number;
   assets: Record<string, EditorAsset>;
+  /** Запуск конвеєра (етап і стан); null — проєкт без запуску */
+  pipeline: { stage: PipelineStage; status: PipelineStatus } | null;
 }
 
 export type ProjectRow = typeof projects.$inferSelect;
@@ -227,7 +229,11 @@ export async function getProject(deps: AppDeps, userId: string, id: string, lang
   ];
   const list = await editorAssets(deps, userId, ids);
   await ensureAnalyzed(deps, userId, list);
-  return { id: p.id, title: p.title, format: p.format, timeline, version, assets: list };
+  const [run] = await deps.db
+    .select({ stage: pipelineRuns.stage, status: pipelineRuns.status })
+    .from(pipelineRuns)
+    .where(and(eq(pipelineRuns.projectId, p.id), eq(pipelineRuns.userId, userId)));
+  return { id: p.id, title: p.title, format: p.format, timeline, version, assets: list, pipeline: run ?? null };
 }
 
 const notSeparated = () => new AppError('NOT_FOUND', 'Мовну версію не відокремлено');

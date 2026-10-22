@@ -35,6 +35,25 @@ describe('editor store', () => {
     expect(startOf(store, clipId)).toBe(3);
   });
 
+  it('a frozen store (pipeline running) ignores apply and gestures, alone or with a language view; thaws back', () => {
+    const { store, clipId } = seeded();
+    store.getState().setFrozen(true);
+    store.getState().apply((d) => moveClip(d, clipId, 5, {}));
+    store.getState().beginGesture();
+    store.getState().apply((d) => moveClip(d, clipId, 6, {}));
+    store.getState().endGesture();
+    expect(startOf(store, clipId)).toBe(0);
+    expect(store.temporal.getState().pastStates).toHaveLength(0);
+    // мовний перегляд поверх заморожування: розморозка не знімає перегляд
+    store.getState().switchMode({ kind: 'language', language: 'en', separated: false }, store.getState().doc);
+    store.getState().setFrozen(false);
+    store.getState().apply((d) => moveClip(d, clipId, 5, {}));
+    expect(startOf(store, clipId)).toBe(0);
+    store.getState().switchMode({ kind: 'edit' }, store.getState().doc);
+    store.getState().apply((d) => moveClip(d, clipId, 5, {}));
+    expect(startOf(store, clipId)).toBe(5);
+  });
+
   it('an op that changes nothing is not a history step', () => {
     const { store } = seeded();
     store.getState().apply((d) => d);

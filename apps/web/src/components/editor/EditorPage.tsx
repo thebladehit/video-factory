@@ -20,6 +20,7 @@ import {
 import { SegmentStrip } from '@/components/voice/SegmentStrip';
 import { notReadyDetails } from '@/components/voice/StudioRenderMenu';
 import { ConflictDialog } from './ConflictDialog';
+import { PipelineBanner } from './PipelineBanner';
 import { LanguageBanner } from './LanguageBanner';
 import { LanguageSwitch } from './LanguageSwitch';
 import { Inspector } from './Inspector';
@@ -53,7 +54,9 @@ export function EditorPage({ project }: { project: ProjectView }) {
     const a = s.assets[c.assetId];
     return isPresent(a) && 'status' in a && a.status !== 'ready';
   });
-  const disabledReason = !clips.length
+  const disabledReason = s.pipelineLive
+    ? 'Конвеєр ще працює — рендер після збірки'
+    : !clips.length
     ? 'Додайте файли на таймлайн'
     : s.pendingUploads || processing
       ? 'Зачекайте, поки файли завантажаться й обробляться'
@@ -101,9 +104,10 @@ export function EditorPage({ project }: { project: ProjectView }) {
     }
   }
 
-  // рядки сітки: тулбар, [банер], прев'ю, [смуга сегментів], таймлайн, історія
+  // рядки сітки: тулбар, [банер конвеєра], [банер мови], прев'ю, [смуга сегментів], таймлайн, історія
   const rows = [
     'auto',
+    ...(s.pipelineLive ? ['auto'] : []),
     ...(mode.kind === 'language' ? ['auto'] : []),
     'minmax(0,1fr)',
     ...(mode.kind === 'edit' && hasVoice ? ['auto'] : []),
@@ -125,6 +129,7 @@ export function EditorPage({ project }: { project: ProjectView }) {
         saveState={s.saveState}
         onRetrySave={() => void s.activeAutosave()?.flush()}
         readOnly={s.readOnly}
+        hasPipeline={project.pipeline !== null}
         modeSwitch={
           hasVoice && (
             <LanguageSwitch
@@ -144,6 +149,7 @@ export function EditorPage({ project }: { project: ProjectView }) {
           onRender={(p, l) => void render(p, l)}
         />
       </Toolbar>
+      {s.pipelineLive && <PipelineBanner projectId={project.id} />}
       {mode.kind === 'language' && (
         <LanguageBanner
           language={mode.language}
