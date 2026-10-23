@@ -89,3 +89,25 @@ test('reset removes transform', async ({ page }) => {
   await expect(field(page, 'transform-x')).toHaveValue('50');
   await expect(field(page, 'transform-y')).toHaveValue('50');
 });
+
+test('play pressed mid-drag ends the gesture: the move is one undoable step', async ({ page }) => {
+  await photoProject(page);
+  const box = page.getByTestId('transform-box');
+  const b = (await box.boundingBox())!;
+  const x = b.x + b.width / 2;
+  const y = b.y + b.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (let i = 1; i <= 5; i++) await page.mouse.move(x + 20 * i, y);
+  // пробіл посеред жесту — рамка зникає, pointerup уже нікому не прийде
+  await page.keyboard.press('Space');
+  await expect(box).toHaveCount(0);
+  await page.mouse.up();
+  await page.getByRole('button', { name: 'Пауза' }).click();
+  await expect(box).toBeVisible();
+  const moved = Number(await field(page, 'transform-x').inputValue());
+  expect(moved).toBeGreaterThan(50);
+  // історія не на паузі: скасування повертає позицію до жесту
+  await page.getByRole('button', { name: 'Скасувати' }).click();
+  await expect(field(page, 'transform-x')).toHaveValue('50');
+});

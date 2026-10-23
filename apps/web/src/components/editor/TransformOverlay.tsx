@@ -1,6 +1,6 @@
 import { DEFAULT_TRANSFORM, type ClipTransform, type MediaClip, type TimelineDoc } from '@vf/shared';
 import { coverRect, findClip, setClipTransform } from '@vf/timeline';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useStore } from 'zustand';
 import type { PreviewEngine } from '@/editor/preview-engine';
 import { isReadOnlyState, type EditorStore, type UiStore } from '@/editor/store';
@@ -50,9 +50,19 @@ export function TransformOverlay({
   const root = useRef<HTMLDivElement>(null);
 
   const clip = activeClip(doc, selected, playhead);
-  if (!clip || playing || readOnly) return null;
-  const asset = assets[clip.assetId];
-  if (!isPresent(asset)) return null;
+  const asset = clip ? assets[clip.assetId] : undefined;
+  const shown = !!clip && !playing && !readOnly && isPresent(asset);
+  // рамка зникла чи змінився кліп посеред жесту (пуск відтворення, зміна вибору, розмонтування) — pointerup
+  // уже не прийде: жест закривається, інакше історія лишилась би на паузі, а синхронізація озвучки — заблокованою
+  useEffect(
+    () => () => {
+      if (!gesture.current) return;
+      gesture.current = null;
+      store.getState().endGesture();
+    },
+    [shown, clip?.id, store],
+  );
+  if (!clip || !shown || !isPresent(asset)) return null;
   const src = { width: asset.width ?? doc.width, height: asset.height ?? doc.height };
   const r = coverRect(src, { width: doc.width, height: doc.height }, clip.fit, 1, 0.5, 0.5, clip.transform);
   const cur = clip.transform ?? DEFAULT_TRANSFORM;
