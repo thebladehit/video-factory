@@ -1,5 +1,14 @@
-import { deleteSegment, docDuration, mergeSegments, splitSegmentAt } from '@vf/timeline';
-import { Combine, Redo2, Scissors, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  deleteSegment,
+  docDuration,
+  mergeSegments,
+  restoreSegmentVoice,
+  splitSegmentAt,
+  syncVoiceTrack,
+  voiceTrackOf,
+  type VoiceTake,
+} from '@vf/timeline';
+import { Combine, Redo2, Scissors, Trash2, Undo2, Volume2, ZoomIn, ZoomOut } from 'lucide-react';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useStore } from 'zustand';
 import { Button } from '@/components/ui/button';
@@ -19,7 +28,8 @@ const label = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60))
 
 /**
  * Смуга сегментів над шкалою часу: межі тягнуться (снепінг 8 px до країв кліпів і плейхеда), розрізати під плейхедом,
- * злити з наступним, видалити. Усе — через стор документа (undo/redo — zundo, збереження — автозбереження).
+ * злити з наступним, видалити; кліп озвучки сегмента видалено вручну — «Повернути озвучку».
+ * Усе — через стор документа (undo/redo — zundo, збереження — автозбереження).
  * Спільна для студії й редактора: `pxPerSec` задано — масштаб редактора; інакше вписується в ширину (з масштабуванням).
  */
 export function SegmentStrip({
@@ -27,11 +37,14 @@ export function SegmentStrip({
   ui,
   pxPerSec,
   onSeek,
+  voice,
 }: {
   store: EditorStore;
   ui: UiStore;
   pxPerSec?: number;
   onSeek?(t: number): void;
+  /** Озвучка базової мови: її готові дублі (для «Повернути озвучку») */
+  voice?: { language: string; takes: VoiceTake[] };
 }) {
   const doc = useStore(store, (s) => s.doc);
   const playhead = useStore(ui, (s) => s.playhead);
@@ -97,6 +110,15 @@ export function SegmentStrip({
   const idx = segments.findIndex((s) => s.id === selected);
   const next = idx >= 0 ? segments[idx + 1] : undefined;
   const apply = (op: Parameters<ReturnType<EditorStore['getState']>['apply']>[0]) => store.getState().apply(op);
+  const voiceRemoved = new Set(voice ? (voiceTrackOf(doc, voice.language)?.removedSegments ?? []) : []);
+  /** Сегмент знову озвучується: зі списку вручну видалених і одразу кліп дубля — один крок історії */
+  const restoreVoice = (id: string) =>
+    voice &&
+    apply(
+      (d) =>
+        syncVoiceTrack(restoreSegmentVoice(d, voice.language, id), { language: voice.language, takes: voice.takes })
+          .doc,
+    );
 
   return (
     <div data-testid="segment-strip" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5">
@@ -130,6 +152,17 @@ export function SegmentStrip({
         >
           <Trash2 /> Видалити
         </Button>
+        {selected && voiceRemoved.has(selected) && (
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="restore-voice"
+            title="Кліп озвучки цього сегмента видалено вручну — повернути його на доріжку"
+            onClick={() => restoreVoice(selected)}
+          >
+            <Volume2 /> Повернути озвучку
+          </Button>
+        )}
         <span className="ml-auto flex items-center">
           <Button
             variant="ghost"
@@ -203,6 +236,8 @@ export function SegmentStrip({
               data-testid="strip-segment"
               data-id={s.id}
               data-selected={s.id === selected}
+              data-voice-removed={voiceRemoved.has(s.id) || undefined}
+              title={voiceRemoved.has(s.id) ? 'Озвучку сегмента видалено вручну' : undefined}
               className={`absolute top-4 h-10 overflow-hidden rounded border text-[10px] leading-none ${
                 s.id === selected ? 'border-primary bg-primary/30' : 'border-sky-500/60 bg-sky-500/20'
               }`}

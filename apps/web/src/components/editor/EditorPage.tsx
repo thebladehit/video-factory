@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import type { ProjectView } from '@vf/api';
 import { useState } from 'react';
 import { useStore } from 'zustand';
@@ -41,10 +41,10 @@ export function EditorPage({ project }: { project: ProjectView }) {
     language: string;
     count: number;
   } | null>(null);
-  const voice = useQuery(trpc.voice.get.queryOptions({ projectId: project.id }));
-  const languages = voice.data?.languages ?? [];
-  const separated = voice.data?.separated ?? [];
-  const hasVoice = languages.length > 1 || (voice.data?.segments.length ?? 0) > 0;
+  const voice = s.voice;
+  const languages = voice?.languages ?? [];
+  const separated = voice?.separated ?? [];
+  const hasVoice = languages.length > 1 || (voice?.segments.length ?? 0) > 0;
   const mode = useStore(s.store, (st) => st.mode);
 
   const pps = useStore(s.ui, (st) => st.pxPerSec);
@@ -174,12 +174,19 @@ export function EditorPage({ project }: { project: ProjectView }) {
       </div>
       {mode.kind === 'edit' && hasVoice && (
         <div className="min-w-0 pl-28" data-testid="editor-segment-strip">
-          <SegmentStrip store={s.store} ui={s.ui} pxPerSec={pps} onSeek={s.seek} />
+          <SegmentStrip
+            store={s.store}
+            ui={s.ui}
+            pxPerSec={pps}
+            onSeek={s.seek}
+            voice={voice && { language: voice.base, takes: voice.baseTakes }}
+          />
         </div>
       )}
       <div className="flex min-h-0 flex-col [&>*]:min-h-0 [&>*]:flex-1">
         <Timeline
           segmentKeys={mode.kind === 'edit' && hasVoice}
+          voiceLanguage={mode.kind === 'edit' ? voice?.base : undefined}
           store={s.store}
           ui={s.ui}
           assets={s.assets}

@@ -1,7 +1,9 @@
 import type { AudioClip, MediaClip } from '@vf/shared';
 import { cn } from 'cn';
+import { TriangleAlert } from 'lucide-react';
 import type { PointerEvent } from 'react';
 import { isPresent, type AnyAsset } from '@/editor/types';
+import { overflowHint } from '@/editor/voice-sync';
 import { Waveform } from './Waveform';
 
 export type ClipGesture = 'move' | 'trim-l' | 'trim-r' | 'transition';
@@ -15,6 +17,7 @@ export function TimelineClip({
   pxPerSec,
   selected,
   invalid,
+  overflow,
   hasPrevious,
   onPointerDown,
 }: {
@@ -24,6 +27,8 @@ export function TimelineClip({
   pxPerSec: number;
   selected: boolean;
   invalid: boolean;
+  /** Озвучка виходить за кінець свого сегмента (с) — попередження */
+  overflow?: number;
   /** На доріжці є попередній кліп — показати ручку переходу */
   hasPrevious: boolean;
   onPointerDown(e: PointerEvent, kind: ClipGesture): void;
@@ -45,12 +50,15 @@ export function TimelineClip({
       data-start={clip.start}
       data-duration={clip.duration}
       data-selected={selected || undefined}
+      data-overflow={overflow !== undefined || undefined}
+      title={overflow !== undefined ? overflowHint(overflow) : undefined}
       className={cn(
         'absolute top-1 bottom-1 cursor-grab touch-none overflow-hidden rounded-md border text-xs text-white select-none active:cursor-grabbing',
         trackKind === 'video' ? 'border-sky-700 bg-sky-600' : 'border-emerald-700 bg-emerald-600',
         missing && 'border-red-700 bg-red-600/90',
         selected && 'ring-2 ring-amber-400 ring-offset-1',
         invalid && 'ring-2 ring-red-500 ring-offset-1',
+        overflow !== undefined && 'border-2 border-amber-400',
       )}
       style={{ left: clip.start * pxPerSec, width }}
       onPointerDown={(e) => onPointerDown(e, 'move')}
@@ -73,6 +81,13 @@ export function TimelineClip({
       <span className="pointer-events-none absolute top-0.5 left-1.5 max-w-[calc(100%-12px)] truncate drop-shadow">
         {missing ? 'файл видалено' : local ? `завантаження ${Math.round(local.progress)} %` : present?.title}
       </span>
+      {overflow !== undefined && (
+        <TriangleAlert
+          data-testid="clip-overflow"
+          aria-hidden
+          className="pointer-events-none absolute top-0.5 right-2 size-3.5 text-amber-300 drop-shadow"
+        />
+      )}
       <div
         data-testid="clip-handle-l"
         className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-white/30 hover:bg-white/70"
