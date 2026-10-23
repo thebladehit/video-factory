@@ -2,7 +2,15 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { captionPages, toAss, toSrt, toVtt, type CaptionStyle, type TranscriptWords } from '@vf/captions';
 import { projectLanguageTimelines, transcripts, voiceLines } from '@vf/db';
 import { AppError, languageInfo, normalizeDoc, type TimelineDoc } from '@vf/shared';
-import { fitSegment, localize, quantize, voiceTrackOf, withoutForeignVoice, type SegmentFit } from '@vf/timeline';
+import {
+  fitSegment,
+  localize,
+  quantize,
+  syncVoiceTrack,
+  voiceTrackOf,
+  withoutForeignVoice,
+  type SegmentFit,
+} from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { editorAssets, isUuid, type EditorAsset } from '../projects/editor-assets';
 import { languageTimeline, ownProject, timelineAssetIds, type ProjectRow } from '../projects/service';
@@ -82,7 +90,7 @@ async function resolveLocalized(
     };
   }
 
-  const base = normalizeDoc(p.timeline);
+  let base = normalizeDoc(p.timeline);
   const segments = base.segments ?? [];
   const segIds = new Set(segments.map((s) => s.id));
   const isBase = language === p.baseLanguage;
@@ -102,6 +110,9 @@ async function resolveLocalized(
   const voice = await voiceForLanguage(deps, userId, p, language);
 
   const { takes, notReady } = collectTakes(rows, segments, { language, isBase, baseText, voice });
+  // доріжка озвучки базової мови в документі синхронізується на копії (як у `startRender`): переозвучені
+  // рядки — нові дублі, нові — нові кліпи. Доріжки немає — поведінка без змін (підгонка, спека §3.3).
+  if (isBase && voiceTrackOf(base, language)) base = syncVoiceTrack(base, { language, takes }).doc;
 
   // доріжка озвучки мови в документі (базова мова) — `localize` бере її як є, навіть без готових дублів
   const ownTrack = (voiceTrackOf(base, language)?.clips.length ?? 0) > 0;

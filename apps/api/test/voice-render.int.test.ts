@@ -137,6 +137,37 @@ describe('voice.localized', () => {
     expect(voiceClips(de.timeline)).toEqual([]);
   }, 60_000);
 
+  it('base language: a re-voiced line after the track was saved → the new take with its captions, position kept', async () => {
+    const s = await startApp();
+    const { projectId, base, version } = await dubbed(s, { uk: true });
+    const { baseTakes } = await s.caller.voice.get({ projectId });
+    const synced = syncVoiceTrack(base, { language: 'uk', takes: baseTakes }).doc;
+    const moved: TimelineDoc = {
+      ...synced,
+      tracks: synced.tracks.map((t) =>
+        t.kind === 'audio' && t.role === 'voiceover' ? { ...t, clips: t.clips.map((c) => ({ ...c, start: 1 })) } : t,
+      ),
+    };
+    await s.caller.projects.save({ id: projectId, timeline: moved, baseVersion: version });
+    await s.caller.voice.setCaptions({ projectId, language: 'uk', enabled: true, styleId: 'preset:classic' });
+    // переозвучка s1 (новий текст) і новий рядок s2 — після збереження доріжки
+    await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'uk', text: 'Привіт друзі' });
+    await s.caller.voice.setText({ projectId, segmentId: 's2', language: 'uk', text: 'Як справи' });
+    const done = await waitJobs(s, (await s.caller.voice.synthesize({ projectId, language: 'uk' })).jobIds);
+    expect(done.every((j) => j.status === 'done')).toBe(true);
+    const { baseTakes: fresh } = await s.caller.voice.get({ projectId });
+    expect(fresh.map((t) => t.segmentId)).toEqual(['s1', 's2']);
+    expect(fresh[0]!.assetId).not.toBe(baseTakes[0]!.assetId);
+
+    const uk = await s.caller.voice.localized({ projectId, language: 'uk' });
+    const clips = voiceClips(uk.timeline);
+    expect(clips.map((c) => c.assetId)).toEqual(fresh.map((t) => t.assetId));
+    expect(clips[0]!.start).toBe(1); // зсув користувача лишається
+    const caps = uk.timeline.tracks.flatMap((t) => (t.kind === 'captions' ? t.clips : []));
+    expect(caps.map((c) => c.transcriptId).sort()).toEqual(fresh.map((t) => t.transcriptId).sort());
+    expect(uk.subtitles).toMatch(/друзі/i);
+  }, 90_000);
+
   it('a language outside the project → VALIDATION; foreign project → NOT_FOUND', async () => {
     const s = await startApp();
     const { projectId } = await dubbed(s);
