@@ -25,12 +25,13 @@ import {
   type VoiceChoice,
   type Word,
 } from '@vf/shared';
-import { addClip, audioPlan, fitSegment, quantize, type SegmentFit } from '@vf/timeline';
+import { addClip, audioPlan, fitSegment, quantize, type SegmentFit, type VoiceTake } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { firstVisualAsset, ownProject, timelineAssetIds, type ProjectRow } from '../projects/service';
 import { pickModel, textModel, userDefaults } from './job-utils';
 import { lineState, translationStale, type LineFacts, type LineState } from './stale';
+import { collectTakes } from './takes';
 
 /** Максимум символів у тексті рядка */
 export const MAX_LINE_CHARS = 1500;
@@ -76,6 +77,8 @@ export interface VoiceView {
   fits: Record<string, ({ segmentId: string } & Omit<SegmentFit, 'segmentId'>)[]>;
   styles: { id: string; name: string; style: CaptionStyle }[];
   estimate: Record<string, { chars: number; usd: number }>;
+  /** Готові дублі базової мови (для синхронізації доріжки озвучки в редакторі) */
+  baseTakes: VoiceTake[];
 }
 
 export interface VoiceProjectCard {
@@ -225,6 +228,13 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
     estimate[lang] = { chars: chars[lang]!, usd: chars[lang]! ? usd : 0 };
   }
 
+  const { takes: baseTakes } = collectTakes(rows, segments, {
+    language: p.baseLanguage,
+    isBase: true,
+    baseText,
+    voice: voiceFor(p.baseLanguage),
+  });
+
   const styles = (await listCaptionStyles(deps, userId)).map(({ id, name, style }) => ({ id, name, style }));
   const separated = (
     await deps.db
@@ -246,6 +256,7 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
     fits,
     styles,
     estimate,
+    baseTakes,
   };
 }
 

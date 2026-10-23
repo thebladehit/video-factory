@@ -2,6 +2,7 @@ import type { AudioClip, CaptionClip, Effect, MediaClip, OriginalSound, Timeline
 import { addLinkedAudio, cutEnvelope, findClip, insertTrack } from './ops';
 import { sourceTimeAt } from './evaluate';
 import { docDuration, quantize, quantizeDown } from './time';
+import { voiceTrackOf, withoutForeignVoice } from './voice-track';
 
 /** Пауза перед озвучкою сегмента й після неї (с). */
 export const LEAD = 0.15;
@@ -252,6 +253,9 @@ function clipEnvelope(curve: Envelope, start: number, duration: number): Envelop
 /**
  * Документ мови: відео підлаштовується під озвучку кожного сегмента (голос не прискорюється).
  * Вихід — звичайний `TimelineDoc` без `segments` + кусково-лінійна карта часу «база → мова». Вхід не мутується.
+ * Доріжки `voiceover` інших мов прибираються. Якщо в документі є доріжка озвучки цієї мови (базова мова,
+ * спека §3.3) — підгонки немає, доріжка лишається як є, а приглушення й субтитри будуються за її кліпами
+ * (`transcriptId` — з дубля з тим самим `assetId`).
  */
 export function localize(
   input: TimelineDoc,
@@ -260,12 +264,14 @@ export function localize(
   const fps = input.fps;
   const frame = 1 / fps;
   const newId = opts.newId ?? defaultId;
-  const doc = withOwnSoundLinked(input, newId);
+  const doc = withOwnSoundLinked(withoutForeignVoice(input, opts.language), newId);
   const baseDur = docDuration(doc);
+  const voiceTrack = voiceTrackOf(doc, opts.language);
 
   // 1. Сегменти в межах документа (частини за `docDuration` відкидаються) і їхня підгонка
   const takes = new Map<string, VoiceTake>();
-  for (const t of opts.takes) if (!takes.has(t.segmentId)) takes.set(t.segmentId, t);
+  // доріжка озвучки є — дублі не підганяють сегменти
+  if (!voiceTrack) for (const t of opts.takes) if (!takes.has(t.segmentId)) takes.set(t.segmentId, t);
   const segs = [...(doc.segments ?? [])]
     .sort((a, b) => a.start - b.start)
     .map((s) => ({
@@ -294,6 +300,21 @@ export function localize(
   const voiceClips: AudioClip[] = [];
   const captionClips: CaptionClip[] = [];
   const langStart = new Map(fitted.map((s) => [s.id, map(s.start)]));
+  if (voiceTrack) {
+    const byAsset = new Map<string, VoiceTake>();
+    for (const t of opts.takes) if (!byAsset.has(t.assetId)) byAsset.set(t.assetId, t);
+    for (const clip of voiceTrack.clips) {
+      voiceClips.push(clip);
+      const take = byAsset.get(clip.assetId);
+      if (take && opts.captions?.enabled)
+        captionClips.push({
+          id: newId(),
+          audioClipId: clip.id,
+          transcriptId: take.transcriptId,
+          styleId: opts.captions.styleId,
+        });
+    }
+  }
   for (const s of fitted) {
     if (!s.take) continue;
     const clip: AudioClip = {
@@ -419,7 +440,7 @@ export function localize(
   }
 
   let out: TimelineDoc = { schemaVersion: 1, width: doc.width, height: doc.height, fps, tracks };
-  if (voiceClips.length)
+  if (voiceClips.length && !voiceTrack)
     out = insertTrack(out, {
       id: newId(),
       kind: 'audio',

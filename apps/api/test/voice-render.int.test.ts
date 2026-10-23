@@ -3,7 +3,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { assets, jobs, renders } from '@vf/db';
 import type { TimelineDoc, VoiceChoice } from '@vf/shared';
-import { docDuration } from '@vf/timeline';
+import { docDuration, syncVoiceTrack } from '@vf/timeline';
 import { appRouter } from '../src/index';
 import { toneMp4Bytes, upload, waitForAsset } from './assets-helpers';
 import { startApp } from './helpers';
@@ -106,6 +106,31 @@ describe('voice.localized', () => {
     expect(l.timeline).toEqual((await s.caller.projects.get({ id: projectId })).timeline);
     expect(docDuration(l.timeline)).toBeCloseTo(docDuration(base), 6);
     expect(l.subtitles).toBeNull();
+  }, 60_000);
+
+  it('base voice track in the document: base uses it as is; other languages drop it (spec §3.3)', async () => {
+    const s = await startApp();
+    const { projectId, base, version } = await dubbed(s, { uk: true });
+    const { baseTakes } = await s.caller.voice.get({ projectId });
+    expect(baseTakes.map((t) => t.segmentId)).toEqual(['s1']);
+    const synced = syncVoiceTrack(base, { language: 'uk', takes: baseTakes }).doc;
+    // кліп озвучки зсунуто вручну
+    const moved: TimelineDoc = {
+      ...synced,
+      tracks: synced.tracks.map((t) =>
+        t.kind === 'audio' && t.role === 'voiceover' ? { ...t, clips: t.clips.map((c) => ({ ...c, start: 1 })) } : t,
+      ),
+    };
+    await s.caller.projects.save({ id: projectId, timeline: moved, baseVersion: version });
+
+    const uk = await s.caller.voice.localized({ projectId, language: 'uk' });
+    expect(uk.fits.every((f) => f.speed === 1 && f.hold === 0)).toBe(true);
+    expect(voiceClips(uk.timeline).map((c) => [c.assetId, c.start])).toEqual([[baseTakes[0]!.assetId, 1]]);
+    const en = await s.caller.voice.localized({ projectId, language: 'en' });
+    const enTracks = en.timeline.tracks.filter((t) => t.kind === 'audio' && t.role === 'voiceover');
+    expect(enTracks.map((t) => (t.kind === 'audio' ? t.language : null))).toEqual(['en']);
+    const de = await s.caller.voice.localized({ projectId, language: 'de' });
+    expect(voiceClips(de.timeline)).toEqual([]);
   }, 60_000);
 
   it('a language outside the project → VALIDATION; foreign project → NOT_FOUND', async () => {

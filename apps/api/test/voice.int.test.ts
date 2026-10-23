@@ -257,6 +257,19 @@ describe('voice texts and staleness', () => {
     expect(v.fits.en!.every((f) => f.speed === 1)).toBe(true);
   });
 
+  it('voice.get returns baseTakes for ready base lines only', async () => {
+    const s = await startApp();
+    const projectId = await voiceProject(s);
+    await s.caller.voice.setVoice({ projectId, language: 'uk', voice: VOICE });
+    await s.caller.voice.setVoice({ projectId, language: 'en', voice: VOICE });
+    const a1 = await readyLine(s, projectId, { segmentId: 's1', language: 'uk', text: 'Привіт', durationMs: 1500 });
+    // застарілий базовий рядок (озвучено іншим текстом) і готовий переклад — не дублі бази
+    await readyLine(s, projectId, { segmentId: 's2', language: 'uk', text: 'Світ', voicedHash: 'old' });
+    await readyLine(s, projectId, { segmentId: 's1', language: 'en', text: 'Hello' });
+    const v = await s.caller.voice.get({ projectId });
+    expect(v.baseTakes).toEqual([{ segmentId: 's1', assetId: a1, durationSec: 1.5, transcriptId: '' }]);
+  });
+
   it('includes transcript words and timing for voiced lines', async () => {
     const s = await startApp();
     const projectId = await voiceProject(s);

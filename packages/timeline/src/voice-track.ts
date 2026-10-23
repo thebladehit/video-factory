@@ -13,6 +13,13 @@ export function voiceTrackOf(doc: TimelineDoc, language: string): AudioTrack | n
   return doc.tracks.find((t): t is AudioTrack => isVoice(t, language)) ?? null;
 }
 
+/** Без доріжок `voiceover` іншої мови (доріжки без мови — користувацькі, лишаються). Нічого прибирати — той самий документ. */
+export function withoutForeignVoice(doc: TimelineDoc, language: string): TimelineDoc {
+  const foreign = (t: Track) =>
+    t.kind === 'audio' && t.role === 'voiceover' && t.language !== undefined && t.language !== language;
+  return doc.tracks.some(foreign) ? { ...doc, tracks: doc.tracks.filter((t) => !foreign(t)) } : doc;
+}
+
 /** Прибирає сегмент зі списку вручну видалених («Повернути озвучку»). */
 export function restoreSegmentVoice(doc: TimelineDoc, language: string, segmentId: string): TimelineDoc {
   const track = voiceTrackOf(doc, language);
