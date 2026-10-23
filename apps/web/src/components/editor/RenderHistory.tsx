@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { RenderView } from '@vf/api';
-import { ChevronDown, ChevronUp, Download } from 'lucide-react';
+import { ChevronDown, ChevronUp, Download, Send } from 'lucide-react';
 import { useState } from 'react';
 import { formatDuration } from '@/components/library/format';
+import { PublishDialog } from '@/components/publish/PublishDialog';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useJobFeed } from '@/lib/job-feed';
@@ -17,10 +18,13 @@ const STATUS: Record<RenderView['status'], string> = {
   cancelled: 'Скасовано',
 };
 
-export function RenderHistory({ projectId }: { projectId: string }) {
+/** `baseLanguage` — мова рендеру без явної мови (базовий документ проєкту) */
+export function RenderHistory({ projectId, baseLanguage }: { projectId: string; baseLanguage?: string }) {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const [open, setOpen] = useState(true);
+  /** Мова рендеру, з якого відкрито діалог публікації; undefined — діалог закрито */
+  const [publishLang, setPublishLang] = useState<string | null | undefined>(undefined);
   const key = trpc.renders.list.queryKey({ projectId });
   const list = useQuery(trpc.renders.list.queryOptions({ projectId }));
   const refresh = () => qc.invalidateQueries({ queryKey: key });
@@ -82,6 +86,16 @@ export function RenderHistory({ projectId }: { projectId: string }) {
                       Відкрити в бібліотеці
                     </Link>
                   </Button>
+                  {r.preset === 'final' && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid="render-publish"
+                      onClick={() => setPublishLang(r.language ?? baseLanguage ?? null)}
+                    >
+                      <Send /> Опублікувати…
+                    </Button>
+                  )}
                 </>
               )}
               {(r.status === 'failed' || r.status === 'cancelled') && (
@@ -100,6 +114,12 @@ export function RenderHistory({ projectId }: { projectId: string }) {
           ))}
         </ul>
       )}
+      <PublishDialog
+        open={publishLang !== undefined}
+        onOpenChange={(o) => !o && setPublishLang(undefined)}
+        projectId={projectId}
+        language={publishLang ?? undefined}
+      />
     </section>
   );
 }

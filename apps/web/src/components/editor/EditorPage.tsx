@@ -261,7 +261,7 @@ export function EditorPage({ project }: { project: ProjectView }) {
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
-      <RenderHistory projectId={project.id} />
+      <RenderHistory projectId={project.id} baseLanguage={voice?.base} />
       <AlertDialog open={!!forcePending} onOpenChange={(o) => !o && setForcePending(null)}>
         <AlertDialogContent data-testid="render-force">
           <AlertDialogHeader>
