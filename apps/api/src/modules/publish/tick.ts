@@ -7,8 +7,10 @@ import { accessTokenFor } from './accounts';
 import { enqueuePublish, publishErrorMessage } from './job';
 import { markProjectPublished } from './service';
 
-/** Опитування обробки — не частіше ніж раз на хвилину на рядок */
+/** Опитування обробки — не частіше ніж раз на хвилину на рядок (коротший тік e2e — частіше) */
 const POLL_EVERY_MS = 60_000;
+/** Типовий період тіку (`PUBLISH_TICK_MS`) */
+const DEFAULT_TICK_MS = 60_000;
 const PROCESSING_TIMEOUT_MS = 2 * 3_600_000;
 const TIMEOUT_MESSAGE = 'YouTube не завершив обробку за 2 год';
 
@@ -32,10 +34,14 @@ export interface TickPlan {
   toTimeout: string[];
 }
 
-/** Чисте рішення тіку (спека §5.2): що робити з кожним рядком у момент now */
-export function planTick(rows: TickRow[], now: Date): TickPlan {
+/**
+ * Чисте рішення тіку (спека §5.2): що робити з кожним рядком у момент now.
+ * `tickMs` — період тіку: опитування обробки не рідше одного тіку й не частіше ніж раз на хвилину в продакшні.
+ */
+export function planTick(rows: TickRow[], now: Date, tickMs = DEFAULT_TICK_MS): TickPlan {
   const plan: TickPlan = { toAwaiting: [], toEnqueue: [], toPoll: [], toTimeout: [] };
   const t = now.getTime();
+  const pollEveryMs = Math.min(POLL_EVERY_MS, tickMs);
   for (const r of rows) {
     if (r.method === 'manual') {
       if (r.status === 'scheduled' && (!r.scheduledAt || r.scheduledAt.getTime() <= t)) plan.toAwaiting.push(r.id);
@@ -45,14 +51,14 @@ export function planTick(rows: TickRow[], now: Date): TickPlan {
     if (r.status === 'scheduled' && !r.jobLive) plan.toEnqueue.push(r.id);
     else if (r.status === 'processing') {
       if (r.processingSince && r.processingSince.getTime() <= t - PROCESSING_TIMEOUT_MS) plan.toTimeout.push(r.id);
-      else if (r.updatedAt.getTime() <= t - POLL_EVERY_MS) plan.toPoll.push(r.id);
+      else if (r.updatedAt.getTime() <= t - pollEveryMs) plan.toPoll.push(r.id);
     }
   }
   return plan;
 }
 
 /** Тік планувальника: ідемпотентний, кожен перехід — умовний UPDATE за поточним статусом */
-export async function publishTick(deps: AppDeps, now = new Date()): Promise<void> {
+export async function publishTick(deps: AppDeps, now = new Date(), tickMs = DEFAULT_TICK_MS): Promise<void> {
   const rows: TickRow[] = await deps.db
     .select({
       id: publications.id,
@@ -67,7 +73,7 @@ export async function publishTick(deps: AppDeps, now = new Date()): Promise<void
     })
     .from(publications)
     .where(inArray(publications.status, ['scheduled', 'processing']));
-  const plan = planTick(rows, now);
+  const plan = planTick(rows, now, tickMs);
   const byId = new Map(rows.map((r) => [r.id, r]));
 
   if (plan.toAwaiting.length) {
@@ -115,7 +121,7 @@ export async function publishTick(deps: AppDeps, now = new Date()): Promise<void
 
 async function pollProcessing(deps: AppDeps, r: TickRow, now: Date) {
   const processing = and(eq(publications.id, r.id), eq(publications.status, 'processing'));
-  // відмітка опитування: наступне — не раніше ніж за хвилину, навіть якщо це впаде
+  // відмітка опитування: наступне — не раніше ніж за період опитування, навіть якщо це впаде
   const [pub] = await deps.db.update(publications).set({ updatedAt: now }).where(processing).returning({
     accountId: publications.accountId,
     projectId: publications.projectId,

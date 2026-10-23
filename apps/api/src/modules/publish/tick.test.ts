@@ -44,6 +44,20 @@ describe('planTick', () => {
     expect(planTick([row({ ...processing, updatedAt: ago(61_000) })], now)).toEqual({ ...empty, toPoll: ['p1'] });
   });
 
+  it('short tick (e2e, 2 s) → poll throttle follows the tick interval', () => {
+    const processing = { status: 'processing' as const, processingSince: ago(10_000) };
+    expect(planTick([row({ ...processing, updatedAt: ago(1_000) })], now, 2_000)).toEqual(empty);
+    expect(planTick([row({ ...processing, updatedAt: ago(2_000) })], now, 2_000)).toEqual({
+      ...empty,
+      toPoll: ['p1'],
+    });
+    // довший за хвилину тік не послаблює обмеження «раз на 60 с»
+    expect(planTick([row({ ...processing, updatedAt: ago(61_000) })], now, 300_000)).toEqual({
+      ...empty,
+      toPoll: ['p1'],
+    });
+  });
+
   it('processing since 2 h 1 min → toTimeout', () => {
     const plan = planTick(
       [row({ status: 'processing', processingSince: ago(121 * 60_000), updatedAt: ago(61_000) })],

@@ -206,7 +206,9 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
         runOnStart: true,
       });
       // після відновлення: перервані завантаження вже знову scheduled
-      scheduler.every('publish.tick', cfg.publishTickMs, () => publishTick(deps), { runOnStart: true });
+      scheduler.every('publish.tick', cfg.publishTickMs, () => publishTick(deps, new Date(), cfg.publishTickMs), {
+        runOnStart: true,
+      });
     },
     async close() {
       if (closed) return;

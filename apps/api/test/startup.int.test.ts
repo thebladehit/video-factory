@@ -62,6 +62,21 @@ describe('startup', () => {
     });
     expect(loadConfig({ ...base, YOUTUBE_CLIENT_ID: '' })).toMatchObject({ tokenKey: undefined, publishFake: false });
   });
+
+  it('loadConfig: PUBLISH_TICK_MS — positive integer ≥ 1000, otherwise 60000', () => {
+    const base = {
+      DATABASE_URL: 'postgres://x',
+      S3_ENDPOINT: 'http://s3',
+      S3_ACCESS_KEY_ID: 'a',
+      S3_SECRET_ACCESS_KEY: 'b',
+      S3_BUCKET: 'c',
+    };
+    const tick = (v?: string) => loadConfig({ ...base, PUBLISH_TICK_MS: v }).publishTickMs;
+    expect(tick(undefined)).toBe(60_000);
+    expect(tick('2000')).toBe(2_000);
+    expect(tick('1000')).toBe(1_000);
+    for (const bad of ['', '999', '0', '-5000', '1500.5', 'abc', '2s']) expect(tick(bad)).toBe(60_000);
+  });
 });
 
 describe('job recovery', () => {

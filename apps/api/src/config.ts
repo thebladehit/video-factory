@@ -80,8 +80,16 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     },
     tokenKey,
     publishFake: env.PUBLISH_FAKE === '1',
-    publishTickMs: Number(env.PUBLISH_TICK_MS) || 60_000,
+    publishTickMs: parseTickMs(env.PUBLISH_TICK_MS),
   };
+}
+
+/** Ціле число мілісекунд ≥ 1000; інше (порожнє, дробове, менше секунди) — типові 60 000 */
+function parseTickMs(raw: string | undefined): number {
+  const v = raw?.trim();
+  if (!v || !/^\d+$/.test(v)) return 60_000;
+  const ms = Number(v);
+  return ms >= 1_000 ? ms : 60_000;
 }
 
 /** base64 → рівно 32 байти, інакше undefined (саме значення ключа в помилки не потрапляє) */
