@@ -24,6 +24,7 @@ describe('Gemini TTS', () => {
     expect((calls[0]!.init.headers as Record<string, string>)['x-goog-api-key']).toBe('k');
     const body = JSON.parse(calls[0]!.init.body as string);
     expect(body.generationConfig.responseModalities).toEqual(['AUDIO']);
+    expect(body.generationConfig.temperature).toBe(0.4); // request body has generationConfig.temperature 0.4
     expect(body.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe('Kore');
     expect(body.contents[0].parts[0].text).toContain('cheerful');
     expect(body.contents[0].parts[0].text).toContain('Привіт');

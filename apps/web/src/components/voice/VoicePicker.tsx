@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { ModelRef } from '@vf/shared';
+import { deliveryFor, type ModelRef } from '@vf/shared';
 import { Loader2, Play, Square } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -160,11 +160,24 @@ export function VoicePicker({
             maxLength={1000}
             disabled={!effective}
             value={instructions}
-            placeholder="Напр.: спокійно, дружньо, трохи повільніше"
+            placeholder={deliveryFor(language)}
             className="min-h-0 resize-none text-sm"
             onChange={(e) => setInstructions(e.target.value)}
             onBlur={saveInstructions}
           />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="justify-self-start"
+            disabled={!effective}
+            onClick={() => {
+              const text = deliveryFor(language);
+              setInstructions(text);
+              if (effective) onChange({ model: effective.model, voiceId: effective.voiceId, instructions: text });
+            }}
+          >
+            Вставити типову
+          </Button>
         </div>
       )}
     </div>

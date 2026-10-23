@@ -23,9 +23,9 @@ import { firstVisualAsset, ownProject, timelineAssetIds, type ProjectRow } from 
 import { pickModel, textModel, userDefaults } from './job-utils';
 import { lineState, translationStale, type LineFacts, type LineState } from './stale';
 import { collectTakes } from './takes';
-import { parseVoice, userVoiceDefaults, voiceForLanguage } from './choice';
+import { parseVoice, userVoiceDefaults, voiceForLanguage, withDelivery } from './choice';
 
-export { parseVoice, userVoiceDefaults, voiceForLanguage } from './choice';
+export { parseVoice, userVoiceDefaults, voiceForLanguage, withDelivery } from './choice';
 
 /** Максимум символів у тексті рядка */
 export const MAX_LINE_CHARS = 1500;
@@ -142,7 +142,8 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
   const tById = new Map(tRows.map((t) => [t.id, t]));
 
   const defaults = await userVoiceDefaults(deps, userId);
-  const voiceFor = (lang: string): VoiceChoice | null => voice.languages[lang]?.voice ?? defaults[lang] ?? null;
+  const voiceFor = (lang: string): VoiceChoice | null =>
+    withDelivery(voice.languages[lang]?.voice ?? defaults[lang], lang);
   const baseText = new Map(rows.filter((r) => r.language === p.baseLanguage).map((r) => [r.segmentId, r.text]));
 
   const lines: VoiceView['lines'] = {};
@@ -284,7 +285,7 @@ export async function listVoiceProjects(deps: AppDeps, userId: string): Promise<
       thumbUrl,
       base: p.baseLanguage,
       languages: projectLanguages(p).map((code) => {
-        const current = voice.languages[code]?.voice ?? defaults[code] ?? null;
+        const current = withDelivery(voice.languages[code]?.voice ?? defaults[code], code);
         const states = segs.flatMap((s) => {
           const line = own.find((l) => l.segmentId === s.id && l.language === code);
           if (!line?.text.trim()) return [];

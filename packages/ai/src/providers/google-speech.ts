@@ -1,5 +1,6 @@
 import { AppError } from '@vf/shared';
 import { TTS_MAX_CHARS, type TTS } from '../types';
+import { GEMINI_TTS_TEMPERATURE } from '../delivery';
 import { assertTtsLength, requestWithRetry } from './http';
 import { pcmToWav, wavDurationMs } from './wav';
 
@@ -35,6 +36,7 @@ export function createGeminiTts(opts: {
             contents: [{ parts: [{ text: input }] }],
             generationConfig: {
               responseModalities: ['AUDIO'],
+              temperature: GEMINI_TTS_TEMPERATURE,
               speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceId } } },
             },
           }),

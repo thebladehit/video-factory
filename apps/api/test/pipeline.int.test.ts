@@ -30,7 +30,7 @@ import { executeAction, runAdvance } from '../src/modules/pipeline/run-advance';
 import { keywordsFrom } from '../src/modules/pipeline/scenes';
 import { handlePipelineEvent, pipelineEvents } from '../src/modules/pipeline/events';
 import { loadSnapshot } from '../src/modules/pipeline/snapshot';
-import { getVoice } from '../src/modules/voice/service';
+import { getVoice, withDelivery } from '../src/modules/voice/service';
 import { voicedHash } from '../src/modules/voice/stale';
 import { tools } from './assets-helpers';
 import { testConfig } from './helpers';
@@ -1028,7 +1028,7 @@ describe('pipeline.scene and event listener', () => {
     const audio = await insertAsset(s);
     await s.deps.db
       .update(voiceLines)
-      .set({ status: 'ready', audioAssetId: audio, voice: VOICE, voicedHash: voicedHash(old!.text, VOICE) })
+      .set({ status: 'ready', audioAssetId: audio, voice: VOICE, voicedHash: voicedHash(old!.text, withDelivery(VOICE, 'uk')) })
       .where(eq(voiceLines.id, old!.id));
     expect((await getVoice(s.deps, LOCAL_USER_ID, projectId)).lines[target.segmentId]!.uk!.state).toBe('ready');
 

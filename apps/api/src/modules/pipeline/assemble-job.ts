@@ -7,7 +7,7 @@ import { assembleTimeline, estimateSceneSec, syncVoiceTrack, type AssembleScene,
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { timelineAssetIds } from '../projects/service';
-import { parseVoice } from '../voice/service';
+import { parseVoice, withDelivery } from '../voice/service';
 import { lineState } from '../voice/stale';
 import { baseTakesOf } from '../voice/takes';
 import { ensureBlankAsset } from './blank';
@@ -48,8 +48,10 @@ export function assembleJob(deps: AppDeps): JobDef<{ projectId: string }, { vers
         .orderBy(asc(pipelineScenes.position));
       const voice = parseVoice(project.voice);
       // один голос і для тривалостей сцен, і для дублів доріжки (проєкт ще може не мати голосу — його пише ця збірка)
-      const baseVoice =
-        voice.languages[project.baseLanguage]?.voice ?? run.settings.voices[project.baseLanguage] ?? null;
+      const baseVoice = withDelivery(
+        voice.languages[project.baseLanguage]?.voice ?? run.settings.voices[project.baseLanguage],
+        project.baseLanguage,
+      );
       const lines = await deps.db
         .select()
         .from(voiceLines)

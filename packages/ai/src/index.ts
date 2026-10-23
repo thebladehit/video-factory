@@ -20,3 +20,4 @@ export {
   type ScriptResult,
 } from './prompts/script';
 export { solidPng } from './fake/png';
+export { DEFAULT_DELIVERY, deliveryFor, GEMINI_TTS_TEMPERATURE } from './delivery';
