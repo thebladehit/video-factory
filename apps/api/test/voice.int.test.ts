@@ -15,6 +15,7 @@ import { assets, generations, jobs, projects, transcripts, userSettings, voiceLi
 import { RESTART_ERROR } from '@vf/jobs';
 import { LOCAL_USER_ID, type VoiceChoice } from '@vf/shared';
 import { appRouter } from '../src/index';
+import { withDelivery } from '../src/modules/voice/choice';
 import { textHash, voicedHash } from '../src/modules/voice/stale';
 import { releaseCancelledLines, synthesizeJob } from '../src/modules/voice/synthesize-job';
 import { chunkRanges, languageCode, sanitizeSegments, stitchParts } from '../src/modules/voice/transcribe-job';
@@ -70,7 +71,7 @@ async function readyLine(
     typeof voiceLines.$inferInsert
   >,
 ) {
-  const { segmentId, language, text, voice = VOICE, ...rest } = o;
+  const { segmentId, language, text, voice = withDelivery(VOICE, language), ...rest } = o;
   const audio = await insertAsset(s, { kind: 'audio', mime: 'audio/wav', width: null, height: null });
   await s.deps.db.insert(voiceLines).values({
     userId: LOCAL_USER_ID,
@@ -192,6 +193,36 @@ describe('voice texts and staleness', () => {
     expect((await s.caller.voice.get({ projectId })).lines.s1!.uk!.state).toBe('stale');
   });
 
+  it('voice without instructions gets default delivery; its ready lines become stale', async () => {
+    const s = await startApp();
+    const projectId = await voiceProject(s);
+    await s.caller.voice.setVoice({ projectId, language: 'uk', voice: VOICE });
+    // рядок, озвучений без подачі (як до появи типової), більше не збігається з голосом, що діє
+    const audio = await insertAsset(s, { kind: 'audio', mime: 'audio/wav', width: null, height: null });
+    await s.deps.db.insert(voiceLines).values({
+      userId: LOCAL_USER_ID,
+      projectId,
+      segmentId: 's1',
+      language: 'uk',
+      text: 'Привіт',
+      voice: VOICE,
+      voicedHash: voicedHash('Привіт', VOICE),
+      audioAssetId: audio,
+      durationMs: 2000,
+      status: 'ready',
+    });
+    expect((await s.caller.voice.get({ projectId })).lines.s1!.uk!.state).toBe('stale');
+  });
+
+  it('voice with own instructions keeps voicedHash (line stays ready)', async () => {
+    const s = await startApp();
+    const projectId = await voiceProject(s);
+    const own = { ...VOICE, instructions: 'Говори повільно' };
+    await s.caller.voice.setVoice({ projectId, language: 'uk', voice: own });
+    await readyLine(s, projectId, { segmentId: 's1', language: 'uk', text: 'Привіт', voice: own });
+    expect((await s.caller.voice.get({ projectId })).lines.s1!.uk!.state).toBe('ready');
+  });
+
   it('changing the voice makes ready lines stale', async () => {
     const s = await startApp();
     const projectId = await voiceProject(s);
@@ -255,6 +286,19 @@ describe('voice texts and staleness', () => {
     expect(v.fits.uk![0]!.trimmed).toBeCloseTo(0.133, 2);
     expect(v.fits.uk![1]).toMatchObject({ segmentId: 's2', base: 2, target: 2, speed: 1 });
     expect(v.fits.en!.every((f) => f.speed === 1)).toBe(true);
+  });
+
+  it('voice.get returns baseTakes for ready base lines only', async () => {
+    const s = await startApp();
+    const projectId = await voiceProject(s);
+    await s.caller.voice.setVoice({ projectId, language: 'uk', voice: VOICE });
+    await s.caller.voice.setVoice({ projectId, language: 'en', voice: VOICE });
+    const a1 = await readyLine(s, projectId, { segmentId: 's1', language: 'uk', text: 'Привіт', durationMs: 1500 });
+    // застарілий базовий рядок (озвучено іншим текстом) і готовий переклад — не дублі бази
+    await readyLine(s, projectId, { segmentId: 's2', language: 'uk', text: 'Світ', voicedHash: 'old' });
+    await readyLine(s, projectId, { segmentId: 's1', language: 'en', text: 'Hello' });
+    const v = await s.caller.voice.get({ projectId });
+    expect(v.baseTakes).toEqual([{ segmentId: 's1', assetId: a1, durationSec: 1.5, transcriptId: '' }]);
   });
 
   it('includes transcript words and timing for voiced lines', async () => {
@@ -447,7 +491,7 @@ describe('voice.list', () => {
       const audio = await insertAsset(s, { kind: 'audio', mime: 'audio/wav' });
       await set(language, seg, {
         voice: VOICE,
-        voicedHash: voicedHash(`${language}-${seg}`, VOICE),
+        voicedHash: voicedHash(`${language}-${seg}`, withDelivery(VOICE, language)),
         audioAssetId: audio,
         durationMs: 1000,
         status: 'ready',
@@ -508,6 +552,37 @@ describe('voice.preview', () => {
     const s = await startApp();
     await expect(s.caller.voice.preview({ model: 'fake/tts', voiceId: 'nope', language: 'en' })).rejects.toMatchObject({
       cause: { code: 'VALIDATION' },
+    });
+  });
+});
+
+describe('voice.audition', () => {
+  const base = { model: 'fake/tts', voiceId: 'fake-voice', language: 'en' } as const;
+
+  it('audition caches by text and take: second call does not hit TTS', async () => {
+    const s = await startApp();
+    const tts = await s.deps.ai.tts(LOCAL_USER_ID, 'fake/tts');
+    const spy = vi.spyOn(tts, 'synthesize');
+    try {
+      const text = `Hello audition ${Date.now()}`;
+      const a = await s.caller.voice.audition({ ...base, text, take: 1 });
+      await s.caller.voice.audition({ ...base, text, take: 1 });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(a.url).toContain('voice-samples/audition');
+      await s.caller.voice.audition({ ...base, text, take: 2 });
+      expect(spy).toHaveBeenCalledTimes(2);
+      await s.caller.voice.audition({ ...base, text: `${text}!`, take: 1 });
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('audition rejects text of 301 chars and unavailable model', async () => {
+    const s = await startApp();
+    await expect(s.caller.voice.audition({ ...base, text: 'x'.repeat(301), take: 1 })).rejects.toBeDefined();
+    await expect(s.caller.voice.audition({ ...base, model: 'nope/tts', text: 'hi', take: 1 })).rejects.toMatchObject({
+      cause: { code: 'MODEL_NOT_FOUND' },
     });
   });
 });
@@ -671,7 +746,7 @@ describe('voice.synthesize', () => {
       error: null,
       durationMs: 1200,
       voice: VOICE,
-      voicedHash: voicedHash('Привіт усім друзі', VOICE),
+      voicedHash: voicedHash('Привіт усім друзі', withDelivery(VOICE, 'uk')),
     });
     const [a] = await s.deps.db.select().from(assets).where(eq(assets.id, line.audioAssetId!));
     expect(a).toMatchObject({ kind: 'audio', source: 'generated', status: 'ready', language: 'uk', mime: 'audio/wav' });
@@ -726,7 +801,11 @@ describe('voice.synthesize', () => {
     release();
     await waitJobs(s, jobIds);
     const line = await lineOf(s, projectId, 's1', 'uk');
-    expect(line).toMatchObject({ status: 'ready', text: 'Новий текст', voicedHash: voicedHash('Старий текст', VOICE) });
+    expect(line).toMatchObject({
+      status: 'ready',
+      text: 'Новий текст',
+      voicedHash: voicedHash('Старий текст', withDelivery(VOICE, 'uk')),
+    });
     expect((await s.caller.voice.get({ projectId })).lines.s1!.uk!.state).toBe('stale');
     // «Озвучити все» бере застарілий рядок знову
     await waitJobs(s, (await s.caller.voice.synthesize({ projectId })).jobIds);
@@ -745,7 +824,11 @@ describe('voice.synthesize', () => {
       },
     );
     const projectId = await textProject(s, { s1: 'погане слово', s2: 'добре слово' });
-    await waitJobs(s, (await s.caller.voice.synthesize({ projectId })).jobIds);
+    // по рядку: два рядки разом пішли б однією пакетною задачею (voice-batch.int)
+    const ids: string[] = [];
+    for (const segmentId of ['s1', 's2'])
+      ids.push(...(await s.caller.voice.synthesize({ projectId, segmentIds: [segmentId] })).jobIds);
+    await waitJobs(s, ids);
     const v = (await s.caller.voice.get({ projectId })).lines;
     expect(v.s1!.uk).toMatchObject({ state: 'failed', error: 'Контент-політика провайдера' });
     expect(v.s2!.uk!.state).toBe('ready');

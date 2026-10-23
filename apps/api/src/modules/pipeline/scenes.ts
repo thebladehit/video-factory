@@ -402,18 +402,20 @@ export async function setSceneVisual(
     const fresh = await freshVisualStage(deps, run.id, true);
     const cur = await freshScene(deps, i.sceneId);
     await stopSceneWork(deps, cur);
-    await deps.db
-      .update(pipelineScenes)
-      .set({
-        ...clearedVisual,
-        visualAssetId: i.assetId,
-        visualSource: 'manual',
-        status: 'ready',
-        updatedAt: new Date(),
-      })
-      .where(eq(pipelineScenes.id, i.sceneId));
-    // після збірки — точкова заміна кліпу сегмента (немає сегмента — документ не змінюється)
-    if (fresh.stage === 'done') await applySceneVisual(deps, i.sceneId);
+    // після збірки — точкова заміна кліпу сегмента (немає сегмента — документ не змінюється), разом із `ready`
+    await deps.db.transaction(async (tx) => {
+      await tx
+        .update(pipelineScenes)
+        .set({
+          ...clearedVisual,
+          visualAssetId: i.assetId,
+          visualSource: 'manual',
+          status: 'ready',
+          updatedAt: new Date(),
+        })
+        .where(eq(pipelineScenes.id, i.sceneId));
+      if (fresh.stage === 'done') await applySceneVisual(deps, i.sceneId, tx);
+    });
   });
   await advanceQuietly(deps, run.id);
 }

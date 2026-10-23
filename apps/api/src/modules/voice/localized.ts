@@ -2,12 +2,20 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { captionPages, toAss, toSrt, toVtt, type CaptionStyle, type TranscriptWords } from '@vf/captions';
 import { projectLanguageTimelines, transcripts, voiceLines } from '@vf/db';
 import { AppError, languageInfo, normalizeDoc, type TimelineDoc } from '@vf/shared';
-import { fitSegment, localize, quantize, type SegmentFit, type VoiceTake } from '@vf/timeline';
+import {
+  fitSegment,
+  localize,
+  quantize,
+  syncVoiceTrack,
+  voiceTrackOf,
+  withoutForeignVoice,
+  type SegmentFit,
+} from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { editorAssets, isUuid, type EditorAsset } from '../projects/editor-assets';
 import { languageTimeline, ownProject, timelineAssetIds, type ProjectRow } from '../projects/service';
 import { listCaptionStyles, parseVoice, projectLanguages, voiceForLanguage } from './service';
-import { lineState } from './stale';
+import { collectTakes } from './takes';
 
 export interface Localized {
   timeline: TimelineDoc;
@@ -55,8 +63,8 @@ const hasCaptions = (doc: TimelineDoc) => doc.tracks.some((t) => t.kind === 'cap
 
 /**
  * Документ мови. Відокремлена мова → її збережений документ. Інакше `localize(base, озвучка ready-рядків)`;
- * мова без жодної готової озвучки → базовий документ без змін. `captions: 'always'` — субтитри будуються
- * навіть якщо вони вимкнені для мови (для завантаження srt/vtt).
+ * мова без жодної готової озвучки й без своєї доріжки озвучки → базовий документ без доріжок озвучки інших мов.
+ * `captions: 'always'` — субтитри будуються навіть якщо вони вимкнені для мови (для завантаження srt/vtt).
  */
 async function resolveLocalized(
   deps: AppDeps,
@@ -82,7 +90,7 @@ async function resolveLocalized(
     };
   }
 
-  const base = normalizeDoc(p.timeline);
+  let base = normalizeDoc(p.timeline);
   const segments = base.segments ?? [];
   const segIds = new Set(segments.map((s) => s.id));
   const isBase = language === p.baseLanguage;
@@ -101,29 +109,14 @@ async function resolveLocalized(
   const baseText = new Map(rows.filter((r) => r.language === p.baseLanguage).map((r) => [r.segmentId, r.text]));
   const voice = await voiceForLanguage(deps, userId, p, language);
 
-  const own = new Map(rows.filter((r) => r.language === language).map((r) => [r.segmentId, r]));
+  const { takes, pending, notReady } = collectTakes(rows, segments, { language, isBase, baseText, voice });
+  // доріжка озвучки базової мови в документі синхронізується на копії (як у `startRender`): переозвучені
+  // рядки — нові дублі, нові — нові кліпи. Доріжки немає — поведінка без змін (підгонка, спека §3.3).
+  if (isBase && voiceTrackOf(base, language)) base = syncVoiceTrack(base, { language, takes, pending }).doc;
 
-  const takes: VoiceTake[] = [];
-  const notReady: string[] = [];
-  for (const s of segments) {
-    const r = own.get(s.id);
-    if (!r?.text.trim()) {
-      // базовий текст є, а перекладу немає — сегмент не готовий (інакше мова вийшла б без голосу)
-      if (!isBase && baseText.get(s.id)?.trim()) notReady.push(s.id);
-      continue;
-    }
-    const state = lineState(r, isBase ? undefined : baseText.get(s.id), voice);
-    if (state === 'ready' && r.audioAssetId && r.durationMs !== null)
-      takes.push({
-        segmentId: s.id,
-        assetId: r.audioAssetId,
-        durationSec: r.durationMs / 1000,
-        transcriptId: r.transcriptId ?? '',
-      });
-    else notReady.push(s.id);
-  }
-
-  if (!takes.length) {
+  // доріжка озвучки мови в документі (базова мова) — `localize` бере її як є, навіть без готових дублів
+  const ownTrack = (voiceTrackOf(base, language)?.clips.length ?? 0) > 0;
+  if (!takes.length && !ownTrack) {
     const fits = segments.map((s) => ({
       segmentId: s.id,
       ...fitSegment(Math.max(1 / base.fps, quantize(s.end - s.start, base.fps)), null, base.fps),
@@ -131,7 +124,8 @@ async function resolveLocalized(
     return {
       project: p,
       version: p.timelineVersion,
-      timeline: base,
+      // озвучка інших мов (доріжка базової мови) у цій мові не звучить
+      timeline: withoutForeignVoice(base, language),
       fits,
       notReady,
       separated: false,

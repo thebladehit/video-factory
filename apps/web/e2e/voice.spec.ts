@@ -284,6 +284,20 @@ test('dub: OS video → recognise → EN → translate → voice all → caption
   await expect(page.getByTestId('mode-switch')).toBeVisible();
   const clip = page.getByTestId('track-video').locator('[data-clip-id]').first();
   await expect(clip).toBeVisible();
+  // «Монтаж» спершу синхронізує доріжку озвучки базової мови (3 дублі → 3 кліпи) й автозберігає її —
+  // це очікуване збереження; далі в перегляді мови збережень бути не повинно
+  await expect(page.locator('[data-testid=track-audio][data-role=voiceover] [data-clip-id]')).toHaveCount(3);
+  await expect
+    .poll(
+      async () => {
+        const doc = await trpc<{ timeline: { tracks: { role?: string; clips: unknown[] }[] } }>(page, 'projects.get', {
+          id: projectId,
+        });
+        return doc.timeline.tracks.find((t) => t.role === 'voiceover')?.clips.length ?? 0;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(3);
   const saves: string[] = [];
   page.on('request', (r) => r.url().includes('projects.save') && saves.push(r.url()));
   await page.getByTestId('mode-en').click();

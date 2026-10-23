@@ -1,22 +1,15 @@
+import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { estimateCost, type CatalogItem } from '@vf/ai';
 import { PRESETS, captionStyleSchema, type CaptionStyle } from '@vf/captions';
-import {
-  assets,
-  captionStyles,
-  projectLanguageTimelines,
-  projects,
-  transcripts,
-  userSettings,
-  voiceLines,
-} from '@vf/db';
+import { assets, captionStyles, projectLanguageTimelines, projects, transcripts, voiceLines } from '@vf/db';
 import {
   AppError,
+  deliveryFor,
   emptyTimeline,
   languageInfo,
   normalizeDoc,
   projectVoiceSchema,
-  voiceDefaultsSchema,
   type ModelRef,
   type OriginalSound,
   type ProjectVoice,
@@ -25,12 +18,16 @@ import {
   type VoiceChoice,
   type Word,
 } from '@vf/shared';
-import { addClip, audioPlan, fitSegment, quantize, type SegmentFit } from '@vf/timeline';
+import { addClip, audioPlan, fitSegment, quantize, type SegmentFit, type VoiceTake } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { firstVisualAsset, ownProject, timelineAssetIds, type ProjectRow } from '../projects/service';
 import { pickModel, textModel, userDefaults } from './job-utils';
 import { lineState, translationStale, type LineFacts, type LineState } from './stale';
+import { collectTakes } from './takes';
+import { parseVoice, userVoiceDefaults, voiceForLanguage, withDelivery } from './choice';
+
+export { parseVoice, userVoiceDefaults, voiceForLanguage, withDelivery } from './choice';
 
 /** Максимум символів у тексті рядка */
 export const MAX_LINE_CHARS = 1500;
@@ -76,6 +73,10 @@ export interface VoiceView {
   fits: Record<string, ({ segmentId: string } & Omit<SegmentFit, 'segmentId'>)[]>;
   styles: { id: string; name: string; style: CaptionStyle }[];
   estimate: Record<string, { chars: number; usd: number }>;
+  /** Готові дублі базової мови (для синхронізації доріжки озвучки в редакторі) */
+  baseTakes: VoiceTake[];
+  /** Сегменти базової мови з дублем у роботі/застарілим — їхні кліпи синхронізація не чіпає */
+  basePending: string[];
 }
 
 export interface VoiceProjectCard {
@@ -87,34 +88,9 @@ export interface VoiceProjectCard {
   languages: { code: string; state: 'ready' | 'stale' | 'failed' | 'partial' | 'empty' }[];
 }
 
-/** `projects.voice` має DB-замовчування `{}` — завжди проходить через схему. */
-export function parseVoice(raw: unknown): ProjectVoice {
-  const r = projectVoiceSchema.safeParse(raw);
-  return r.success ? r.data : projectVoiceSchema.parse({});
-}
-
 /** Мови проєкту; базова завжди перша серед них. */
 export const projectLanguages = (p: ProjectRow) =>
   p.languages.includes(p.baseLanguage) ? p.languages : [p.baseLanguage, ...p.languages];
-
-export async function userVoiceDefaults(deps: AppDeps, userId: string) {
-  const [row] = await deps.db
-    .select({ voices: userSettings.voices })
-    .from(userSettings)
-    .where(eq(userSettings.userId, userId));
-  const r = voiceDefaultsSchema.safeParse(row?.voices ?? {});
-  return r.success ? r.data : {};
-}
-
-/** Голос мови проєкту: вибраний у проєкті, інакше голос користувача за замовчуванням (як у `getVoice`). */
-export async function voiceForLanguage(
-  deps: AppDeps,
-  userId: string,
-  p: Pick<ProjectRow, 'voice'>,
-  language: string,
-): Promise<VoiceChoice | null> {
-  return parseVoice(p.voice).languages[language]?.voice ?? (await userVoiceDefaults(deps, userId))[language] ?? null;
-}
 
 /** Модель озвучки існує, голос є в її списку. */
 export async function assertVoiceChoice(deps: AppDeps, userId: string, voice: VoiceChoice): Promise<CatalogItem> {
@@ -170,7 +146,8 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
   const tById = new Map(tRows.map((t) => [t.id, t]));
 
   const defaults = await userVoiceDefaults(deps, userId);
-  const voiceFor = (lang: string): VoiceChoice | null => voice.languages[lang]?.voice ?? defaults[lang] ?? null;
+  const voiceFor = (lang: string): VoiceChoice | null =>
+    withDelivery(voice.languages[lang]?.voice ?? defaults[lang], lang);
   const baseText = new Map(rows.filter((r) => r.language === p.baseLanguage).map((r) => [r.segmentId, r.text]));
 
   const lines: VoiceView['lines'] = {};
@@ -225,6 +202,13 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
     estimate[lang] = { chars: chars[lang]!, usd: chars[lang]! ? usd : 0 };
   }
 
+  const { takes: baseTakes, pending: basePending } = collectTakes(rows, segments, {
+    language: p.baseLanguage,
+    isBase: true,
+    baseText,
+    voice: voiceFor(p.baseLanguage),
+  });
+
   const styles = (await listCaptionStyles(deps, userId)).map(({ id, name, style }) => ({ id, name, style }));
   const separated = (
     await deps.db
@@ -246,6 +230,8 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
     fits,
     styles,
     estimate,
+    baseTakes,
+    basePending,
   };
 }
 
@@ -304,7 +290,7 @@ export async function listVoiceProjects(deps: AppDeps, userId: string): Promise<
       thumbUrl,
       base: p.baseLanguage,
       languages: projectLanguages(p).map((code) => {
-        const current = voice.languages[code]?.voice ?? defaults[code] ?? null;
+        const current = withDelivery(voice.languages[code]?.voice ?? defaults[code], code);
         const states = segs.flatMap((s) => {
           const line = own.find((l) => l.segmentId === s.id && l.language === code);
           if (!line?.text.trim()) return [];
@@ -511,16 +497,58 @@ export async function previewVoice(
   languageInfo(input.language);
   await assertVoiceChoice(deps, userId, { model: input.model, voiceId: input.voiceId });
   const key = `u/${userId}/voice-samples/${input.model}/${input.voiceId}/${input.language}.wav`;
+  return cachedSample(deps, userId, key, input.model, {
+    text: SAMPLE_PHRASES[input.language]!,
+    voiceId: input.voiceId,
+    language: input.language,
+  });
+}
+
+/** Кеш зразка в сховищі за ключем: синтез лише коли файлу немає; повертає підписаний URL. */
+async function cachedSample(
+  deps: AppDeps,
+  userId: string,
+  key: string,
+  model: ModelRef,
+  req: { text: string; voiceId: string; language: string; instructions?: string },
+): Promise<{ url: string }> {
   if (!(await deps.storage.head(key))) {
-    const tts = await deps.ai.tts(userId, input.model);
-    const { audio } = await tts.synthesize({
-      text: SAMPLE_PHRASES[input.language]!,
-      voiceId: input.voiceId,
-      language: input.language,
-    });
+    const tts = await deps.ai.tts(userId, model);
+    const { audio } = await tts.synthesize(req);
     await deps.storage.put(key, audio.bytes, { contentType: audio.mime });
   }
   return { url: await deps.storage.presignGet(key, { expiresSec: URL_TTL_SEC }) };
+}
+
+/** Максимум символів фрази порівняння голосів */
+export const AUDITION_MAX_CHARS = 300;
+
+/**
+ * Порівняння голосів: фраза користувача, дубль 1 або 2 (кожен синтезується окремо — звучання різне);
+ * кеш за (модель, голос, мова, текст, інструкції) і номером дубля.
+ */
+export async function audition(
+  deps: AppDeps,
+  userId: string,
+  input: { model: ModelRef; voiceId: string; language: string; text: string; instructions?: string; take: 1 | 2 },
+): Promise<{ url: string }> {
+  languageInfo(input.language);
+  const text = input.text.trim();
+  if (!text || text.length > AUDITION_MAX_CHARS)
+    throw new AppError('VALIDATION', `Фраза має містити від 1 до ${AUDITION_MAX_CHARS} символів`);
+  await assertVoiceChoice(deps, userId, { model: input.model, voiceId: input.voiceId });
+  const instructions = input.instructions?.trim() ?? '';
+  const hash = createHash('sha256')
+    .update([input.model, input.voiceId, input.language, text, instructions].join('|'))
+    .digest('hex');
+  // v2: зразки Gemini до c40beab читали інструкцію стилю вголос — старий кеш не використовується
+  const key = `u/${userId}/voice-samples/audition/v2/${hash}/${input.take}.wav`;
+  return cachedSample(deps, userId, key, input.model, {
+    text,
+    voiceId: input.voiceId,
+    language: input.language,
+    instructions: instructions || deliveryFor(input.language),
+  });
 }
 
 /**
@@ -535,7 +563,7 @@ export function voicedByAll(line: LineFacts, voice: VoiceChoice | null): boolean
 }
 
 /**
- * «Озвучити»: задача на кожен рядок. Без `segmentIds` — рядки з текстом у станах «не озвучено», «помилка»,
+ * «Озвучити»: для мови з ≥ 2 рядками — одна `voice.synthesizeBatch` (спека 4.3), інакше задача на рядок. Без `segmentIds` — рядки з текстом у станах «не озвучено», «помилка»,
  * «застарілий»; із `segmentIds` — усі рядки з текстом цих сегментів, крім тих, що вже в черзі чи в роботі.
  */
 export async function enqueueSynthesize(
@@ -566,6 +594,8 @@ export async function enqueueSynthesize(
   });
 
   const catalog = await deps.ai.catalog(userId);
+  const whisper = catalog.some((e) => e.ref === STT_MODEL && e.capability === 'stt' && e.available);
+  const batchable = new Set<string>();
   for (const lang of new Set(todo.map((r) => r.language))) {
     const voice = voices.get(lang);
     if (!voice) throw new AppError('VALIDATION', `Не вибрано голос для мови «${languageInfo(lang).name}»`);
@@ -574,24 +604,60 @@ export async function enqueueSynthesize(
       throw new AppError('MODEL_UNAVAILABLE', `Модель озвучки ${voice.model} недоступна — додайте ключ`, {
         model: voice.model,
       });
+    // пакет ріжеться по мітках слів: без них (TTS без міток і без whisper) кожен рядок пішов би окремо вдруге
+    if (entry.wordTimestamps || whisper) batchable.add(lang);
   }
 
-  const jobIds: string[] = [];
-  for (const r of todo) {
-    // атомарно «в черзі» (паралельний запит, що вже поставив рядок, виграє), потім задача;
-    // обробник сам запише свій job_id, коли забере рядок
-    const [won] = await deps.db
-      .update(voiceLines)
-      .set({ status: 'queued', jobId: null, error: null, updatedAt: new Date() })
-      .where(and(eq(voiceLines.id, r.id), notInArray(voiceLines.status, ['queued', 'running'])))
-      .returning({ id: voiceLines.id });
-    if (!won) continue;
-    const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: r.id }, { userId });
-    await deps.db
+  // атомарно «в черзі» (паралельний запит, що вже поставив рядок, виграє), потім задача;
+  // обробник сам запише свій job_id, коли забере рядок
+  const claim = async (id: string) =>
+    (
+      await deps.db
+        .update(voiceLines)
+        .set({ status: 'queued', jobId: null, error: null, updatedAt: new Date() })
+        .where(and(eq(voiceLines.id, id), notInArray(voiceLines.status, ['queued', 'running'])))
+        .returning({ id: voiceLines.id })
+    ).length > 0;
+  const attach = (ids: string[], jobId: string) =>
+    deps.db
       .update(voiceLines)
       .set({ jobId })
-      .where(and(eq(voiceLines.id, r.id), eq(voiceLines.status, 'queued'), isNull(voiceLines.jobId)));
-    jobIds.push(jobId);
+      .where(and(inArray(voiceLines.id, ids), eq(voiceLines.status, 'queued'), isNull(voiceLines.jobId)));
+
+  const order = new Map((normalizeDoc(p.timeline).segments ?? []).map((s, i) => [s.id, i]));
+  const jobIds: string[] = [];
+  for (const lang of languages) {
+    const own = todo
+      .filter((r) => r.language === lang)
+      .sort((a, b) => (order.get(a.segmentId) ?? Infinity) - (order.get(b.segmentId) ?? Infinity));
+    if (!own.length) continue;
+    if (own.length >= 2 && batchable.has(lang)) {
+      // ≥ 2 рядків мови — один дубль на весь сценарій (спека 4.3)
+      const won: string[] = [];
+      for (const r of own) if (await claim(r.id)) won.push(r.id);
+      if (won.length >= 2) {
+        const jobId = await deps.jobs.queue.enqueue(
+          'voice.synthesizeBatch',
+          { projectId: p.id, language: lang, lineIds: won },
+          { userId },
+        );
+        await attach(won, jobId);
+        jobIds.push(jobId);
+        continue;
+      }
+      for (const id of won) {
+        const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: id }, { userId });
+        await attach([id], jobId);
+        jobIds.push(jobId);
+      }
+      continue;
+    }
+    for (const r of own) {
+      if (!(await claim(r.id))) continue;
+      const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: r.id }, { userId });
+      await attach([r.id], jobId);
+      jobIds.push(jobId);
+    }
   }
   return { jobIds };
 }

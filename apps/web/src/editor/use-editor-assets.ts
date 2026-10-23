@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { EditorAsset, ProjectView } from '@vf/api';
 import { kindForMime, TERMINAL_STATUSES, type TimelineDoc } from '@vf/shared';
 import { addClip, addLinkedAudio, allClips, deleteClips, findClip, type AssetInfo } from '@vf/timeline';
@@ -14,6 +14,7 @@ import { createCanvasPreviewEngine } from './preview-engine';
 import { bindAutosave } from './mode-sync';
 import { createEditorStore, createUiStore, isReadOnlyState, type EditorMode } from './store';
 import { isPresent, type AnyAsset, type LocalAsset } from './types';
+import { createVoiceSync } from './voice-sync';
 
 const REFRESH_BEFORE_MS = 5 * 60_000;
 export const PHOTO_SECONDS = 5;
@@ -157,6 +158,23 @@ export function useEditorSession(project: ProjectView) {
       off2();
     };
   }, [store, saves, fetchAssets]);
+
+  // доріжка озвучки базової мови ← готові дублі `voice.get` (спека §3.2, виклик 2): нові дані, «Монтаж», не заморожено
+  const voice = useQuery(trpc.voice.get.queryOptions({ projectId: project.id }));
+  const [voiceSync] = useState(createVoiceSync);
+  const lockedNow = useStore(store, (s) => s.locked);
+  const gesturing = useStore(store, (s) => s.gesturing);
+  useEffect(() => voiceSync.run(store, voice.data), [voiceSync, store, voice.data, mode, frozen, lockedNow, gesturing]);
+  // дубль з'явився чи зник (інша вкладка студії) — свіжі дані; задачі озвучки адресовані рядку (`subject.lineId`), пакетна — проєкту (`subject.projectId`)
+  const lineIds = useMemo(
+    () => new Set(Object.values(voice.data?.lines ?? {}).flatMap((byLang) => Object.values(byLang).map((l) => l.id))),
+    [voice.data],
+  );
+  useJobFeed((e) => {
+    if (!e.type.startsWith('voice.') || !TERMINAL_STATUSES.has(e.status)) return;
+    if (e.subject.projectId !== project.id && !(e.subject.lineId && lineIds.has(e.subject.lineId))) return;
+    void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId: project.id }) });
+  });
 
   const doc = useStore(store, (s) => s.doc);
   useEffect(() => engine.setDoc(doc, assets), [engine, doc, assets]);
@@ -378,6 +396,9 @@ export function useEditorSession(project: ProjectView) {
           if (existing) existing.reset(version);
           else saves.map.set(key, saves.make(key, version));
         }
+        // документ з сервера замість локального (конфлікт, збірка): синхронізація озвучки — знову;
+        // звичайне перемикання режиму пам'ять не скидає (скасована синхронізація лишається скасованою)
+        if (opts.discard) voiceSync.reset();
         engine.pause();
         ui.getState().set({ playing: false, selected: [], invalidClips: [] });
         activeKey.current = key;
@@ -386,7 +407,7 @@ export function useEditorSession(project: ProjectView) {
         store.getState().switchMode(nextMode, nextDoc);
         return true;
       }),
-    [project.id, store, merge, engine, ui, saves, activeAutosave, locked],
+    [project.id, store, merge, engine, ui, saves, activeAutosave, locked, voiceSync],
   );
 
   const switchTo = useCallback(
@@ -524,5 +545,6 @@ export function useEditorSession(project: ProjectView) {
     seek,
     togglePlay,
     pendingUploads,
+    voice: voice.data,
   };
 }

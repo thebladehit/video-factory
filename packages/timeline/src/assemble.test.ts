@@ -250,6 +250,31 @@ describe('replaceSegmentVisual', () => {
     expect(docDuration(out)).toBe(2);
   });
 
+  it('keeps the transform of the replaced clip (first by start) on every new clip', () => {
+    const doc = base();
+    const s2 = seg(doc, 's2');
+    const transform = { scale: 0.6, x: 0.3, y: 0.7 };
+    const withT: TimelineDoc = {
+      ...doc,
+      tracks: doc.tracks.map((t) =>
+        t.kind === 'video'
+          ? { ...t, clips: t.clips.map((c) => (Math.abs(c.start - s2.start) < 1e-9 ? { ...c, transform } : c)) }
+          : t,
+      ),
+    };
+    const video: SceneVisual = { assetId: 'vid', kind: 'video', durationSec: 1, width: 1080, height: 1920 };
+    const out = replaceSegmentVisual(withT, 's2', video, 1, seq());
+    const inside = vclips(out).filter((c) => c.start >= s2.start - 1e-9 && c.start < s2.end - 1e-9);
+    expect(inside.length).toBeGreaterThan(1);
+    expect(inside.every((c) => c.assetId === 'vid')).toBe(true);
+    for (const c of inside) expect(c.transform).toEqual(transform);
+    // в інших сегментах transform не з'являється
+    expect(vclips(out).filter((c) => c.start < s2.start - 1e-9).every((c) => c.transform === undefined)).toBe(true);
+    // без transform у старого кліпа — нові без нього
+    const plain = replaceSegmentVisual(doc, 's2', photo('x'), 1, seq());
+    expect(vclips(plain).every((c) => !('transform' in c))).toBe(true);
+  });
+
   it('on missing segment returns the same doc', () => {
     const doc = base();
     expect(replaceSegmentVisual(doc, 'nope', photo('x'), 0, seq())).toBe(doc);

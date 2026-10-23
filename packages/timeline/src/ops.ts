@@ -1,8 +1,10 @@
 import {
+  DEFAULT_TRANSFORM,
   EFFECT_DEFAULTS,
   FORMATS,
   type AudioClip,
   type AudioRole,
+  type ClipTransform,
   type Effect,
   type EffectType,
   type MediaClip,
@@ -480,13 +482,31 @@ export function deleteClips(doc: TimelineDoc, ids: string[]): TimelineDoc {
       for (const m of group(doc, id)) del.add(m.clip.id);
     } else orphanLinks.add(f.clip.linkId);
   }
-  return mapClips(doc, (c, track) => {
+  // Видалені кліпи озвучки запам'ятовуємо за сегментом, щоб синхронізація їх не повернула.
+  const removed = new Map<string, string[]>();
+  for (const track of clipTracks(doc)) {
+    if (track.kind !== 'audio' || track.role !== 'voiceover') continue;
+    const ids = (track.clips as AudioClip[]).filter((c) => del.has(c.id) && c.sceneId).map((c) => c.sceneId!);
+    if (ids.length) removed.set(track.id, ids);
+  }
+  const out = mapClips(doc, (c, track) => {
     if (del.has(c.id)) return null;
     if (track.kind === 'video' && c.linkId && orphanLinks.has(c.linkId)) {
       return { ...withoutLink(c), volume: 0 };
     }
     return c;
   });
+  if (!removed.size) return out;
+  return {
+    ...out,
+    tracks: out.tracks.map((t) => {
+      if (t.kind !== 'audio') return t;
+      // Лише якщо в доріжці не лишилось жодного кліпа цього сегмента (кліп могли розрізати).
+      const add = (removed.get(t.id) ?? []).filter((sid) => !t.clips.some((c) => c.sceneId === sid));
+      if (!add.length) return t;
+      return { ...t, removedSegments: [...new Set([...(t.removedSegments ?? []), ...add])] };
+    }),
+  };
 }
 
 function withoutLink<T extends AnyClip>(c: T): T {
@@ -505,6 +525,20 @@ export function unlink(doc: TimelineDoc, linkId: string): TimelineDoc {
 export function setVolume(doc: TimelineDoc, clipId: string, v: number): TimelineDoc {
   const volume = Math.min(2, Math.max(0, v));
   return mapClips(doc, (c) => (c.id === clipId ? { ...c, volume } : c));
+}
+
+/** Розмір і положення відео-кліпа; `null` чи значення за замовчуванням прибирає поле. Не-відео кліп — без змін. */
+export function setClipTransform(doc: TimelineDoc, clipId: string, t: ClipTransform | null): TimelineDoc {
+  const isDefault =
+    t === null || (t.scale === DEFAULT_TRANSFORM.scale && t.x === DEFAULT_TRANSFORM.x && t.y === DEFAULT_TRANSFORM.y);
+  return mapClips(doc, (c) => {
+    if (c.id !== clipId || !('fit' in c)) return c;
+    if (!isDefault) return { ...c, transform: t };
+    if (!('transform' in c)) return c;
+    const rest = { ...c } as Record<string, unknown>;
+    delete rest.transform;
+    return rest as AnyClip;
+  });
 }
 
 export function setEffect(doc: TimelineDoc, clipId: string, effect: Effect): TimelineDoc {

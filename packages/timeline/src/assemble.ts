@@ -179,6 +179,9 @@ export function replaceSegmentVisual(
   const eps = 1e-6;
   const inside = (c: { start: number; duration: number }) => c.start >= segment.start - eps && c.start + c.duration <= segment.end + eps;
   const removedLinks = new Set<string>();
+  const targetTrack = doc.tracks.find((t) => t.kind === 'video');
+  // transform користувача (перший за стартом видалений кліп цільової доріжки) переходить на нові кліпи
+  let firstRemoved: MediaClip | null = null;
   const kept = doc.tracks.map((t) => {
     if (t.kind !== 'video') return t;
     return {
@@ -186,13 +189,17 @@ export function replaceSegmentVisual(
       clips: t.clips.filter((c) => {
         if (!inside(c)) return true;
         if (c.linkId) removedLinks.add(c.linkId);
+        if (t === targetTrack && (!firstRemoved || c.start < firstRemoved.start)) firstRemoved = c;
         return false;
       }),
     };
   });
   const startFrame = Math.round(segment.start * fps);
   const frames = Math.max(1, Math.round(segment.end * fps) - startFrame);
-  const fresh = visualClips(visual, startFrame, frames, sceneIndex, doc, newId);
+  const transform = (firstRemoved as MediaClip | null)?.transform;
+  const fresh = visualClips(visual, startFrame, frames, sceneIndex, doc, newId).map((c) =>
+    transform ? { ...c, transform: { ...transform } } : c,
+  );
   const tracks = kept.map((t) =>
     t.kind === 'audio' && removedLinks.size ? { ...t, clips: t.clips.filter((c) => !c.linkId || !removedLinks.has(c.linkId)) } : t,
   );

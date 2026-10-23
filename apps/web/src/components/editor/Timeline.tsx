@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { sourceLengths } from '@/editor/sources';
 import type { EditorStore, UiStore } from '@/editor/store';
 import type { AnyAsset } from '@/editor/types';
+import { voiceOverflow } from '@/editor/voice-sync';
 import { TimelineClip, TRACK_HEIGHT, type ClipGesture } from './TimelineClip';
 
 export const ASSET_MIME = 'application/x-vf-asset';
@@ -90,6 +91,7 @@ export function Timeline({
   onDropAssets,
   onDropFiles,
   segmentKeys = false,
+  voiceLanguage,
 }: {
   store: EditorStore;
   ui: UiStore;
@@ -100,6 +102,8 @@ export function Timeline({
   onDropFiles(files: File[], at: number, trackId?: string): void;
   /** Смуга сегментів видима: ⇧S ріже сегмент (інакше ⇧S, як і S, ріже кліпи) */
   segmentKeys?: boolean;
+  /** Базова мова в «Монтажі»: кліпи її озвучки, довші за свій сегмент, підсвічуються */
+  voiceLanguage?: string;
 }) {
   const doc = useStore(store, (s) => s.doc);
   const pps = useStore(ui, (s) => s.pxPerSec);
@@ -109,6 +113,10 @@ export function Timeline({
   const scroller = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
   const sources = useMemo(() => sourceLengths(assets), [assets]);
+  const overflow = useMemo(
+    () => (voiceLanguage ? voiceOverflow(doc, voiceLanguage) : new Map<string, number>()),
+    [doc, voiceLanguage],
+  );
   const rows = displayTracks(doc);
   const total = docDuration(doc);
   const contentW = Math.max((total + 30) * pps, (scroller.current?.clientWidth ?? 800) - LABEL_W);
@@ -388,6 +396,7 @@ export function Timeline({
                       pxPerSec={pps}
                       selected={selected.includes(clip.id)}
                       invalid={invalid.includes(clip.id)}
+                      overflow={overflow.get(clip.id)}
                       hasPrevious={i > 0}
                       onPointerDown={(e, kind) => onClipPointerDown(e, clip, kind)}
                     />

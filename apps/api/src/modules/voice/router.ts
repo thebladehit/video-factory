@@ -3,6 +3,7 @@ import type { ModelRef, OriginalSound, VoiceChoice } from '@vf/shared';
 import { procedure, router } from '../../trpc';
 import { getLocalized, languageSubtitles, separateLanguage, unseparateLanguage } from './localized';
 import {
+  audition,
   createFromAsset,
   enqueueSynthesize,
   enqueueTranscribe,
@@ -66,6 +67,18 @@ export const voiceRouter = router({
   preview: procedure
     .input(z.object({ model: z.string(), voiceId: z.string(), language }))
     .mutation(({ ctx, input }) => previewVoice(ctx.deps, ctx.userId, { ...input, model: input.model as ModelRef })),
+  audition: procedure
+    .input(
+      z.object({
+        model: z.string(),
+        voiceId: z.string(),
+        language,
+        text: z.string().min(1).max(300),
+        instructions: z.string().max(1000).optional(),
+        take: z.union([z.literal(1), z.literal(2)]),
+      }),
+    )
+    .mutation(({ ctx, input }) => audition(ctx.deps, ctx.userId, { ...input, model: input.model as ModelRef })),
   localized: procedure
     .input(z.object({ projectId, language }))
     .query(({ ctx, input }) => getLocalized(ctx.deps, ctx.userId, input)),

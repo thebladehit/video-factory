@@ -41,6 +41,16 @@ export type ProjectVoice = z.output<typeof projectVoiceSchema>;
 
 export const voiceDefaultsSchema = z.record(
   z.string(),
-  z.object({ model: modelRefSchema, voiceId: z.string().min(1) }),
+  z.object({ model: modelRefSchema, voiceId: z.string().min(1), instructions: z.string().max(1000).optional() }),
 );
 export type VoiceDefaults = z.output<typeof voiceDefaultsSchema>;
+
+/** Типова подача озвучки: рівний нейтральний диктор, щоб дубли одного відео звучали однаково. */
+export const DEFAULT_DELIVERY: Record<string, string> = {
+  uk: 'Рівний спокійний голос оповідача. Помірний сталий темп, нейтральна впевнена інтонація, однакова гучність. Без драматизму, шепоту, сміху й різких пауз.',
+  en: 'Steady, calm narrator voice. Moderate consistent pace, neutral confident intonation, even volume. No drama, whispering, laughter or abrupt pauses.',
+};
+
+export function deliveryFor(language: string): string {
+  return DEFAULT_DELIVERY[language] ?? DEFAULT_DELIVERY.en!;
+}

@@ -86,10 +86,15 @@ function spread(tokens: Token[], startMs: number, endMs: number): { startMs: num
  * інтерпольовані мітки між сусідами. Результат монотонний і лежить у межах мовлення STT.
  */
 export function alignWords(script: string, stt: Word[]): Word[] {
+  return alignWordsDetailed(script, stt).words;
+}
+
+/** Як `alignWords`, але `matched[i]` = false для слів з інтерпольованими мітками (не зіставлених зі STT). */
+export function alignWordsDetailed(script: string, stt: Word[]): { words: Word[]; matched: boolean[] } {
   const tokens = tokenize(script);
   const n = tokens.length;
   const m = stt.length;
-  if (!n) return [];
+  if (!n) return { words: [], matched: [] };
   const sn = stt.map((w) => normalize(w.text));
 
   const f: number[][] = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(Infinity));
@@ -150,6 +155,8 @@ export function alignWords(script: string, stt: Word[]): Word[] {
     }
   }
 
+  const matched = spans.map((sp) => sp !== null);
+
   // інтерполяція незіставлених між сусідами
   const lo = m ? stt[0]!.startMs : 0;
   const hi = m ? stt[m - 1]!.endMs : 0;
@@ -182,13 +189,14 @@ export function alignWords(script: string, stt: Word[]): Word[] {
 
   // монотонність і межі
   let prevStart = lo;
-  return tokens.map((t, q) => {
+  const words = tokens.map((t, q) => {
     const s = spans[q]!;
     const startMs = Math.min(hi, Math.max(prevStart, lo, s.startMs));
     const endMs = Math.min(hi, Math.max(startMs, s.endMs));
     prevStart = startMs;
     return { text: t.text, startMs, endMs };
   });
+  return { words, matched };
 }
 
 /**

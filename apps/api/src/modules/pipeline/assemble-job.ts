@@ -3,12 +3,13 @@ import { PRESETS } from '@vf/captions';
 import { assets, pipelineRuns, pipelineScenes, projects, voiceLines } from '@vf/db';
 import type { JobDef } from '@vf/jobs';
 import { type VideoFormat } from '@vf/shared';
-import { assembleTimeline, estimateSceneSec, type AssembleScene, type SceneVisual } from '@vf/timeline';
+import { assembleTimeline, estimateSceneSec, syncVoiceTrack, type AssembleScene, type SceneVisual } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
 import { timelineAssetIds } from '../projects/service';
-import { parseVoice } from '../voice/service';
+import { parseVoice, withDelivery } from '../voice/service';
 import { lineState } from '../voice/stale';
+import { baseTakesOf } from '../voice/takes';
 import { ensureBlankAsset } from './blank';
 import { sceneVisualOf } from './visual-swap';
 
@@ -46,7 +47,11 @@ export function assembleJob(deps: AppDeps): JobDef<{ projectId: string }, { vers
         .where(eq(pipelineScenes.runId, run.id))
         .orderBy(asc(pipelineScenes.position));
       const voice = parseVoice(project.voice);
-      const baseVoice = voice.languages[project.baseLanguage]?.voice ?? null;
+      // один голос і для тривалостей сцен, і для дублів доріжки (проєкт ще може не мати голосу — його пише ця збірка)
+      const baseVoice = withDelivery(
+        voice.languages[project.baseLanguage]?.voice ?? run.settings.voices[project.baseLanguage],
+        project.baseLanguage,
+      );
       const lines = await deps.db
         .select()
         .from(voiceLines)
@@ -90,7 +95,10 @@ export function assembleJob(deps: AppDeps): JobDef<{ projectId: string }, { vers
           music = { assetId: m.id, durationSec: m.durationMs / 1000 };
       }
 
-      const doc = assembleTimeline({ format: project.format, fps: project.fps, scenes: input, music });
+      const assembled = assembleTimeline({ format: project.format, fps: project.fps, scenes: input, music });
+      // доріжка озвучки базової мови: по кліпу на озвучену сцену (дублі беруться за сегментами нового документа)
+      const voiceTakes = await baseTakesOf(deps, run.userId, { ...project, timeline: assembled }, baseVoice);
+      const doc = syncVoiceTrack(assembled, { language: project.baseLanguage, ...voiceTakes }).doc;
       await ctx.progress(80, 'Зберігаю чернетку');
       if (ctx.signal.aborted) return none;
 

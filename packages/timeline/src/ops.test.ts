@@ -8,6 +8,7 @@ import {
   findClip,
   moveClip,
   setEffect,
+  setClipTransform,
   setFormat,
   setTransition,
   setVolume,
@@ -230,6 +231,26 @@ describe('splitAt', () => {
 });
 
 describe('delete, unlink, volume, effects', () => {
+  const withTrack = (role: 'voiceover' | 'music'): TimelineDoc => ({
+    ...emptyTimeline('9:16'),
+    tracks: [
+      {
+        id: 't1',
+        kind: 'audio',
+        role,
+        language: 'uk',
+        clips: [{ id: 'c1', assetId: 'a', start: 0, duration: 1, in: 0, volume: 1, sceneId: 's1' }],
+      },
+    ],
+  });
+  it('deleteClips on voiceover clip records removedSegments', () => {
+    const d = deleteClips(withTrack('voiceover'), ['c1']);
+    expect(d.tracks[0]).toMatchObject({ clips: [], removedSegments: ['s1'] });
+  });
+  it('deleteClips on music clip does not', () => {
+    const d = deleteClips(withTrack('music'), ['c1']);
+    expect(d.tracks[0]).not.toHaveProperty('removedSegments');
+  });
   it('deleteClips(video) removes its linked audio', () => {
     const { doc, clipIds } = add(emptyTimeline('9:16'), vid, 0);
     const d = deleteClips(doc, [clipIds[0]!]);
@@ -268,6 +289,19 @@ describe('delete, unlink, volume, effects', () => {
     const { doc, clipIds } = add(emptyTimeline('9:16'), song, 0);
     expect(audio(setVolume(doc, clipIds[0]!, 3), clipIds[0]!).volume).toBe(2);
     expect(audio(setVolume(doc, clipIds[0]!, 0.5), clipIds[0]!).volume).toBe(0.5);
+  });
+
+  it('setClipTransform sets, null removes, default removes, audio clip unchanged', () => {
+    const { doc, clipIds } = add(emptyTimeline('9:16'), img, 0);
+    const t = { scale: 0.5, x: 0.2, y: 0.8 };
+    const d = setClipTransform(doc, clipIds[0]!, t);
+    expect(media(d, clipIds[0]!).transform).toEqual(t);
+    for (const reset of [null, { scale: 1, x: 0.5, y: 0.5 }]) {
+      const r = setClipTransform(d, clipIds[0]!, reset);
+      expect('transform' in media(r, clipIds[0]!)).toBe(false);
+    }
+    const a = add(emptyTimeline('9:16'), song, 0);
+    expect(setClipTransform(a.doc, a.clipIds[0]!, t)).toBe(a.doc);
   });
 
   it('setEffect replaces an effect of the same type', () => {

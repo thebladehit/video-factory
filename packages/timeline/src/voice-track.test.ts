@@ -1,0 +1,175 @@
+import { describe, expect, it } from 'vitest';
+import { emptyTimeline, normalizeDoc, type AudioClip, type TimelineDoc } from '@vf/shared';
+import { deleteClips, LEAD, quantize, restoreSegmentVoice, syncVoiceTrack, voiceTrackOf, type VoiceTake } from './index';
+
+const seq = () => {
+  let i = 0;
+  return () => `n${++i}`;
+};
+const base = (): TimelineDoc => ({
+  ...emptyTimeline('9:16'),
+  segments: [
+    { id: 's1', start: 0, end: 3 },
+    { id: 's2', start: 3, end: 6 },
+  ],
+});
+const take = (segmentId: string, durationSec = 2, assetId = `v-${segmentId}`): VoiceTake => ({
+  segmentId,
+  assetId,
+  durationSec,
+  transcriptId: `t-${segmentId}`,
+});
+const sync = (doc: TimelineDoc, takes: VoiceTake[]) => syncVoiceTrack(doc, { language: 'uk', takes, newId: seq() });
+const clips = (doc: TimelineDoc) => (voiceTrackOf(doc, 'uk')?.clips ?? []) as AudioClip[];
+
+describe('syncVoiceTrack', () => {
+  it('inserts clip at segment.start + LEAD with sceneId', () => {
+    const r = sync(base(), [take('s2', 2)]);
+    expect(r.changed).toBe(true);
+    expect(clips(r.doc)).toEqual([
+      expect.objectContaining({ sceneId: 's2', assetId: 'v-s2', start: quantize(3 + LEAD, 30), duration: 2, in: 0, volume: 1 }),
+    ]);
+    expect(normalizeDoc(r.doc)).toEqual(r.doc);
+  });
+  it('creates track language=base when absent and takes exist', () => {
+    const r = sync(base(), [take('s1')]);
+    expect(r.doc.tracks[0]).toMatchObject({ kind: 'audio', role: 'voiceover', language: 'uk' });
+  });
+  it('no takes and no track → same doc, changed false', () => {
+    const doc = base();
+    const r = sync(doc, []);
+    expect(r.changed).toBe(false);
+    expect(r.doc).toBe(doc);
+  });
+  it('new assetId keeps start, volume, fadeIn, fadeOut, envelope and resets in', () => {
+    let doc = sync(base(), [take('s1', 2)]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const env = [{ t: 0.5, gain: 0.5 }];
+    const edited = { ...tr.clips[0]!, start: 1, volume: 0.7, fadeIn: 0.1, fadeOut: 0.2, envelope: env, in: 0.4 };
+    doc = { ...doc, tracks: [{ ...tr, clips: [edited] }] };
+    const r = sync(doc, [take('s1', 1.5, 'new')]);
+    expect(r.changed).toBe(true);
+    expect(clips(r.doc)[0]).toMatchObject({
+      assetId: 'new',
+      duration: 1.5,
+      in: 0,
+      start: 1,
+      volume: 0.7,
+      fadeIn: 0.1,
+      fadeOut: 0.2,
+      envelope: env,
+    });
+  });
+  it('same assetId → changed false (referential equality)', () => {
+    const doc = sync(base(), [take('s1'), take('s2')]).doc;
+    const r = sync(doc, [take('s1'), take('s2')]);
+    expect(r.changed).toBe(false);
+    expect(r.doc).toBe(doc);
+  });
+  it('take gone → clip removed', () => {
+    const doc = sync(base(), [take('s1'), take('s2')]).doc;
+    const r = sync(doc, [take('s2')]);
+    expect(clips(r.doc).map((c) => c.sceneId)).toEqual(['s2']);
+  });
+  it('segment gone → clip removed and id dropped from removedSegments', () => {
+    let doc = sync(base(), [take('s1'), take('s2')]).doc;
+    const c2 = clips(doc).find((c) => c.sceneId === 's2')!;
+    doc = deleteClips(doc, [c2.id]);
+    expect(voiceTrackOf(doc, 'uk')!.removedSegments).toEqual(['s2']);
+    doc = { ...doc, segments: [{ id: 's1', start: 0, end: 3 }] };
+    const r = sync(doc, [take('s1')]);
+    expect(r.changed).toBe(true);
+    expect(voiceTrackOf(r.doc, 'uk')).not.toHaveProperty('removedSegments');
+    const r2 = sync({ ...doc, segments: [{ id: 'x', start: 0, end: 3 }] }, [take('s1')]);
+    expect(clips(r2.doc)).toEqual([]);
+  });
+  it('removed segment is not re-added after new take', () => {
+    let doc = sync(base(), [take('s1')]).doc;
+    doc = deleteClips(doc, [clips(doc)[0]!.id]);
+    const r = sync(doc, [take('s1', 2, 'newer')]);
+    expect(r.changed).toBe(false);
+    expect(clips(r.doc)).toEqual([]);
+  });
+  it('restoreSegmentVoice + sync → clip back', () => {
+    let doc = sync(base(), [take('s1')]).doc;
+    doc = deleteClips(doc, [clips(doc)[0]!.id]);
+    doc = restoreSegmentVoice(doc, 'uk', 's1');
+    expect(voiceTrackOf(doc, 'uk')).not.toHaveProperty('removedSegments');
+    expect(clips(sync(doc, [take('s1')]).doc)).toHaveLength(1);
+    expect(restoreSegmentVoice(doc, 'uk', 's1')).toBe(doc);
+  });
+  const split = (): TimelineDoc => {
+    const doc = sync(base(), [take('s1', 2)]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const c = tr.clips[0]!;
+    const a = { ...c, duration: 1, volume: 0.6 };
+    const b = { ...c, id: 'half-b', start: c.start + 1, duration: 1, in: 1 };
+    return { ...doc, tracks: [{ ...tr, clips: [a, b] }] };
+  };
+  it('split clip + new take → single clip at first piece start with new asset', () => {
+    const doc = split();
+    const first = clips(doc)[0]!;
+    const r = sync(doc, [take('s1', 3, 'fresh')]);
+    expect(clips(r.doc)).toEqual([
+      expect.objectContaining({ id: first.id, assetId: 'fresh', start: first.start, duration: 3, in: 0, volume: 0.6 }),
+    ]);
+  });
+  it('split clip + same take → unchanged (same doc)', () => {
+    const doc = split();
+    const r = sync(doc, [take('s1', 2)]);
+    expect(r.changed).toBe(false);
+    expect(r.doc).toBe(doc);
+  });
+  it('split clip + take gone → both removed', () => {
+    expect(clips(sync(split(), []).doc)).toEqual([]);
+  });
+  it('deleting one half of a split clip does not record removedSegments; deleting the last half does', () => {
+    const doc = split();
+    const [a, b] = clips(doc);
+    const d1 = deleteClips(doc, [a!.id]);
+    expect(voiceTrackOf(d1, 'uk')).not.toHaveProperty('removedSegments');
+    expect(voiceTrackOf(deleteClips(d1, [b!.id]), 'uk')!.removedSegments).toEqual(['s1']);
+  });
+  it('voiceover clip without sceneId survives sync', () => {
+    const doc = sync(base(), [take('s1')]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const own: AudioClip = { id: 'own', assetId: 'x', start: 5, duration: 1, in: 0, volume: 1 };
+    const d = { ...doc, tracks: [{ ...tr, clips: [...tr.clips, own] }] };
+    expect(clips(sync(d, [take('s1', 2, 'new')]).doc).map((c) => c.id)).toContain('own');
+  });
+  it('pending segment keeps clip untouched (no remove, no insert, no replace)', () => {
+    let doc = sync(base(), [take('s1'), take('s2')]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const edited = { ...tr.clips[0]!, start: 1, volume: 0.6, fadeIn: 0.2 };
+    doc = { ...doc, tracks: [{ ...tr, clips: [edited, tr.clips[1]!] }] };
+    // s1 переозвучується (у черзі): дубля немає, але кліп лишається як є
+    const r = syncVoiceTrack(doc, { language: 'uk', takes: [take('s2')], pending: ['s1'], newId: seq() });
+    expect(r.changed).toBe(false);
+    expect(r.doc).toBe(doc);
+    // pending сегмент без кліпа — нічого не вставляється
+    const empty = syncVoiceTrack(base(), { language: 'uk', takes: [], pending: ['s1'], newId: seq() });
+    expect(empty.changed).toBe(false);
+    expect(voiceTrackOf(empty.doc, 'uk')).toBeNull();
+    // сегмент зник — кліп прибирається навіть якщо pending
+    const gone = syncVoiceTrack(
+      { ...doc, segments: [{ id: 's2', start: 3, end: 6 }] },
+      { language: 'uk', takes: [take('s2')], pending: ['s1'], newId: seq() },
+    );
+    expect(clips(gone.doc).map((c) => c.sceneId)).toEqual(['s2']);
+  });
+  it('pending then ready keeps start/volume/fades', () => {
+    let doc = sync(base(), [take('s1')]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const edited = { ...tr.clips[0]!, start: 1.2, volume: 0.5, fadeIn: 0.1, fadeOut: 0.3 };
+    doc = { ...doc, tracks: [{ ...tr, clips: [edited] }] };
+    doc = syncVoiceTrack(doc, { language: 'uk', takes: [], pending: ['s1'], newId: seq() }).doc;
+    const r = sync(doc, [take('s1', 1.4, 'new')]);
+    expect(clips(r.doc)).toEqual([
+      expect.objectContaining({ assetId: 'new', start: 1.2, volume: 0.5, fadeIn: 0.1, fadeOut: 0.3, duration: 1.4, in: 0 }),
+    ]);
+  });
+  it('duration is at least one frame', () => {
+    const r = sync(base(), [take('s1', 0.001)]);
+    expect(clips(r.doc)[0]!.duration).toBeCloseTo(1 / r.doc.fps);
+  });
+});

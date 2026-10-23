@@ -190,6 +190,29 @@ describe('segments, speed, hold, envelope', () => {
   });
 });
 
+describe('clip transform', () => {
+  const withTransform = (t: unknown) => {
+    const d = validDoc();
+    (d.tracks[0]!.clips[0] as Record<string, unknown>).transform = t;
+    return d;
+  };
+  it('accepts clip without transform and keeps it absent after normalizeDoc', () => {
+    const clip = normalizeDoc(validDoc()).tracks[0]!.clips[0]!;
+    expect('transform' in clip).toBe(false);
+  });
+  it('accepts a valid transform', () => {
+    expect(() => normalizeDoc(withTransform({ scale: 4, x: 0, y: 1 }))).not.toThrow();
+  });
+  it.each([
+    { scale: 0.05, x: 0.5, y: 0.5 },
+    { scale: 5, x: 0.5, y: 0.5 },
+    { scale: 1, x: -0.1, y: 0.5 },
+    { scale: 1, x: 0.5, y: 1.1 },
+  ])('rejects transform %j', (t) => {
+    expect(() => normalizeDoc(withTransform(t))).toThrow(expect.objectContaining({ code: 'VALIDATION' }));
+  });
+});
+
 describe('jobSubject lineId', () => {
   it('extracts lineId', () => {
     expect(jobSubject({ lineId: 'l1' })).toEqual({ lineId: 'l1' });

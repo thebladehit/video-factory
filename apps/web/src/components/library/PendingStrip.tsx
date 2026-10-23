@@ -48,7 +48,7 @@ export function PendingStrip() {
       <h2 className="text-sm font-medium text-muted-foreground">В роботі</h2>
       <ul className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2">
         {generations.map((g) => (
-          <li key={g.id} className="grid gap-1.5 rounded-lg border p-3 text-sm" data-testid="pending-generation">
+          <li key={g.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 rounded-lg border p-3 text-sm" data-testid="pending-generation">
             <div className="flex items-center gap-2">
               {g.capability === 'video' ? <Video className="size-4" /> : <ImageIcon className="size-4" />}
               <span className="min-w-0 flex-1 truncate" title={g.prompt}>
@@ -75,7 +75,7 @@ export function PendingStrip() {
           </li>
         ))}
         {assets.map((a) => (
-          <li key={a.id} className="grid gap-1.5 rounded-lg border p-3 text-sm" data-testid="pending-asset">
+          <li key={a.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 rounded-lg border p-3 text-sm" data-testid="pending-asset">
             <span className="truncate" title={a.title}>
               {a.title || 'Без назви'}
             </span>

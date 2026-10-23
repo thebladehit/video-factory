@@ -510,6 +510,97 @@ describe('localize — voiceover, original sound, captions', () => {
   });
 });
 
+describe('localize — voice track in the doc (spec §3.3)', () => {
+  const segs = [
+    { id: 's1', start: 0, end: 4 },
+    { id: 's2', start: 6, end: 8 },
+  ];
+  // кліп s1 зсунуто вручну з 0,15 на 1; `extra` — кліп без дубля
+  const voTrack = (language: string): Track => ({
+    id: 'VO',
+    kind: 'audio',
+    role: 'voiceover',
+    language,
+    clips: [
+      sound('c1', 1, 4.5, { assetId: 'voice-s1', sceneId: 's1' }),
+      sound('c2', 7.15, 1.1, { assetId: 'voice-s2', sceneId: 's2' }),
+      sound('extra', 9, 0.5, { assetId: 'free' }),
+    ],
+  });
+  const withTrack = (language: string) =>
+    mkDoc(
+      20,
+      [
+        vTrack('V', [video('v', 0, 10, { volume: 0, linkId: 'L' })]),
+        aTrack('O', 'original', [sound('o', 0, 10, { linkId: 'L' })]),
+        voTrack(language),
+      ],
+      segs,
+    );
+  const takes = [take('s1', 4.5), take('s2', 1.1)];
+
+  it('base language with voice track: no fitting, clips kept as is (moved clip stays moved)', () => {
+    const base = withTrack('en');
+    const out = localize(base, opts(takes));
+    expect(out.fits.map((f) => [f.segmentId, f.speed, f.hold, f.trimmed])).toEqual([
+      ['s1', 1, 0, 0],
+      ['s2', 1, 0, 0],
+    ]);
+    const voices = out.doc.tracks.filter((t) => t.kind === 'audio' && t.role === 'voiceover');
+    expect(voices).toEqual([base.tracks.find((t) => t.id === 'VO')]);
+    expect((clipsOf(out.doc, 'V') as MediaClip[]).map((c) => [c.start, c.duration, c.speed])).toEqual([
+      [0, 10, undefined],
+    ]);
+    expect(out.map(6)).toBe(6);
+    expectValid(out.doc);
+  });
+
+  it('base with track: captions reference track clip ids and take transcriptIds', () => {
+    const out = localize(withTrack('en'), opts(takes, { captions: { enabled: true, styleId: 'st' } }));
+    const caps = out.doc.tracks.find((t) => t.kind === 'captions');
+    expect(caps).toMatchObject({ language: 'en' });
+    expect((caps!.clips as CaptionClip[]).map((c) => [c.audioClipId, c.transcriptId, c.styleId])).toEqual([
+      ['c1', 'tr-s1', 'st'],
+      ['c2', 'tr-s2', 'st'],
+    ]);
+    expectValid(out.doc);
+  });
+
+  it('base with track: duck curve follows track clips', () => {
+    const out = localize(withTrack('en'), opts(takes));
+    const o = clipsOf(out.doc, 'O') as AudioClip[];
+    expect(o).toHaveLength(1);
+    const r = Number((0.08 / 0.25).toFixed(6));
+    expect(o[0]!.envelope!.map((p) => [Number(p.t.toFixed(6)), Number(p.gain.toFixed(6))])).toEqual([
+      [0, 1],
+      [0.8, 1],
+      [1, r],
+      [5.5, r],
+      [5.7, 1],
+      [6.95, 1],
+      [7.15, r],
+      [8.25, r],
+      [8.45, 1],
+      [8.8, 1],
+      [9, r],
+      [9.5, r],
+      [9.7, 1],
+      [10, 1],
+    ]);
+  });
+
+  it('other language: base voice track removed, own track added, single voiceover track in result', () => {
+    const out = localize(withTrack('uk'), opts(takes));
+    const voices = out.doc.tracks.filter((t) => t.kind === 'audio' && t.role === 'voiceover');
+    expect(voices).toHaveLength(1);
+    expect(voices[0]).toMatchObject({ language: 'en' });
+    expect((voices[0]!.clips as AudioClip[]).map((c) => c.assetId)).toEqual(['voice-s1', 'voice-s2']);
+    // підгонка відбулася (s1: 4 с → 5 с)
+    expect(out.fits[0]).toMatchObject({ segmentId: 's1', speed: 0.8 });
+    expectValid(out.doc);
+  });
+});
+
 describe('localize — missing segments (Review Focus 4)', () => {
   it('ignores takes of segments that no longer exist', () => {
     const base = mkDoc(20, [vTrack('V', [video('v', 0, 10)])], [{ id: 's1', start: 0, end: 4 }]);

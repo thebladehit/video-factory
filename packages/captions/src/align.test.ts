@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alignWords, estimateWords, tokenize } from './index';
+import { alignWords, alignWordsDetailed, estimateWords, tokenize } from './index';
 
 const w = (text: string, startMs: number, endMs: number) => ({ text, startMs, endMs });
 
@@ -126,5 +126,15 @@ describe('estimateWords', () => {
 
   it('empty script gives no words', () => {
     expect(estimateWords('', 1000, [])).toEqual([]);
+  });
+});
+
+describe('alignWordsDetailed', () => {
+  it('marks interpolated words as unmatched; alignWords unchanged', () => {
+    const stt = [w('один', 0, 400), w('три', 800, 1200)];
+    const r = alignWordsDetailed('один два три', stt);
+    expect(r.matched).toEqual([true, false, true]);
+    expect(r.words).toHaveLength(3);
+    expect(r.words).toEqual(alignWords('один два три', stt));
   });
 });

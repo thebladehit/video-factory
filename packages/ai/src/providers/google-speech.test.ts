@@ -6,7 +6,9 @@ function mock(parts: unknown, status = 200) {
   const calls: { url: string; init: RequestInit }[] = [];
   const fn = (async (url: string, init: RequestInit) => {
     calls.push({ url, init });
-    return new Response(JSON.stringify(status === 200 ? { candidates: [{ content: { parts } }] } : parts), { status });
+    return new Response(JSON.stringify(status === 200 ? { steps: [{ type: 'model_output', content: parts }] } : parts), {
+      status,
+    });
   }) as unknown as typeof fetch;
   return { fn, calls };
 }
@@ -14,19 +16,25 @@ const tts = (f: typeof fetch) =>
   createGeminiTts({ apiKey: 'k', model: 'gemini-3.8-flash-tts', fetch: f, retryDelayMs: 1 });
 
 describe('Gemini TTS', () => {
-  it('sends generateContent with AUDIO modality + voice, wraps PCM into a 24 kHz mono 16-bit WAV', async () => {
+  it('sends an Interactions request: verbatim text, style as speech_metadata, voice; wraps PCM into a 24 kHz WAV', async () => {
     const pcm = Buffer.alloc(48000); // 1 s at 24 kHz mono 16-bit
     const { fn, calls } = mock([
-      { inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: pcm.toString('base64') } },
+      { type: 'audio', mime_type: 'audio/L16;codec=pcm;rate=24000', data: pcm.toString('base64') },
     ]);
     const res = await tts(fn).synthesize({ text: 'Привіт', voiceId: 'Kore', language: 'uk', instructions: 'cheerful' });
-    expect(calls[0]!.url).toContain('/models/gemini-3.8-flash-tts:generateContent');
+    expect(calls[0]!.url).toMatch(/\/v1beta\/interactions$/);
     expect((calls[0]!.init.headers as Record<string, string>)['x-goog-api-key']).toBe('k');
     const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.generationConfig.responseModalities).toEqual(['AUDIO']);
-    expect(body.generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe('Kore');
-    expect(body.contents[0].parts[0].text).toContain('cheerful');
-    expect(body.contents[0].parts[0].text).toContain('Привіт');
+    expect(body.model).toBe('gemini-3.8-flash-tts');
+    expect(body.response_format).toEqual({ type: 'audio' });
+    expect(body.generation_config.speech_config).toEqual([{ voice: 'Kore' }]);
+    expect(body.generation_config.temperature).toBe(0.4);
+    // текст — дослівний транскрипт: стиль не потрапляє в нього, інакше модель читає його вголос
+    expect(body.input[0].content[0]).toEqual({
+      type: 'text',
+      text: 'Привіт',
+      annotations: [{ type: 'speech_metadata', style: 'cheerful' }],
+    });
     const wav = Buffer.from(res.audio.bytes);
     expect(wav.toString('ascii', 0, 4)).toBe('RIFF');
     expect(wav.readUInt16LE(22)).toBe(1);
@@ -38,22 +46,22 @@ describe('Gemini TTS', () => {
 
   it('passes a ready WAV through unchanged', async () => {
     const wav = silentWav(500);
-    const { fn } = mock([{ inlineData: { mimeType: 'audio/wav', data: Buffer.from(wav).toString('base64') } }]);
+    const { fn } = mock([{ type: 'audio', mime_type: 'audio/wav', data: Buffer.from(wav).toString('base64') }]);
     const res = await tts(fn).synthesize({ text: 'x', voiceId: 'Kore', language: 'uk' });
     expect(Buffer.from(res.audio.bytes).equals(Buffer.from(wav))).toBe(true);
     expect(res.audio.durationMs).toBe(500);
   });
 
-  it('plain text without instructions is sent as is', async () => {
+  it('text without instructions is sent without annotations', async () => {
     const { fn, calls } = mock([
-      { inlineData: { mimeType: 'audio/L16;rate=24000', data: Buffer.alloc(480).toString('base64') } },
+      { type: 'audio', mime_type: 'audio/L16;rate=24000', data: Buffer.alloc(480).toString('base64') },
     ]);
     await tts(fn).synthesize({ text: 'просто', voiceId: 'Kore', language: 'uk' });
-    expect(JSON.parse(calls[0]!.init.body as string).contents[0].parts[0].text).toBe('просто');
+    expect(JSON.parse(calls[0]!.init.body as string).input[0].content[0]).toEqual({ type: 'text', text: 'просто' });
   });
 
   it('errors when no audio is returned', async () => {
-    const { fn } = mock([{ text: 'refused' }]);
+    const { fn } = mock([{ type: 'text', text: 'refused' }]);
     await expect(tts(fn).synthesize({ text: 'x', voiceId: 'Kore', language: 'uk' })).rejects.toMatchObject({
       code: 'PROVIDER_ERROR',
     });
@@ -73,13 +81,10 @@ describe('Gemini TTS', () => {
         ? new Response('{}', { status: 429 })
         : new Response(
             JSON.stringify({
-              candidates: [
+              steps: [
                 {
-                  content: {
-                    parts: [
-                      { inlineData: { mimeType: 'audio/L16;rate=24000', data: Buffer.alloc(480).toString('base64') } },
-                    ],
-                  },
+                  type: 'model_output',
+                  content: [{ type: 'audio', mime_type: 'audio/L16;rate=24000', data: Buffer.alloc(480).toString('base64') }],
                 },
               ],
             }),

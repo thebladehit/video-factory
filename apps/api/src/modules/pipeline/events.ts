@@ -3,7 +3,7 @@ import { generations, pipelineRuns, pipelineScenes, voiceLines } from '@vf/db';
 import { TERMINAL_STATUSES, type JobEvent, type JobSubject, type JobType } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
-import { releaseCancelledLines } from '../voice/synthesize-job';
+import { releaseForCancelledJob } from '../voice/synthesize-job';
 import { runAdvance } from './run-advance';
 
 /** Задачі, кінцеві події яких можуть зрушити запуск (спека 3.2) */
@@ -14,6 +14,7 @@ const WATCHED: ReadonlySet<JobType> = new Set<JobType>([
   'pipeline.assemble',
   'voice.translate',
   'voice.synthesize',
+  'voice.synthesizeBatch',
   'image.generate',
   'video.generate',
   'asset.process',
@@ -67,9 +68,8 @@ export async function runIdsFor(deps: AppDeps, subject: JobSubject): Promise<str
 export async function handlePipelineEvent(deps: AppDeps, e: JobEvent): Promise<void> {
   if (!TERMINAL_STATUSES.has(e.status) || !WATCHED.has(e.type)) return;
   try {
-    // слухач `releaseOnCancel` працює паралельно — звільняємо рядок тут теж (ідемпотентно), щоб advance бачив його
-    if (e.type === 'voice.synthesize' && e.status === 'cancelled' && e.subject.lineId && isUuid(e.subject.lineId))
-      await releaseCancelledLines(deps, [e.subject.lineId], e.jobId);
+    // слухач `releaseOnCancel` працює паралельно — звільняємо рядки тут теж (ідемпотентно), щоб advance бачив їх
+    await releaseForCancelledJob(deps, e);
     for (const runId of await runIdsFor(deps, e.subject)) {
       try {
         await runAdvance(deps, runId);
