@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  cutAudio,
   jpegOrientation,
   peaks,
   probe,
@@ -253,5 +254,23 @@ describe('speechIntervals', () => {
     const r = await speechIntervals(tools, file('tS.wav'));
     expect(r).toHaveLength(1);
     expect(Math.abs(r[0]!.endMs - 1000)).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('cutAudio', () => {
+  it('cuts [500, 1700] ms of a 3s wav into a 1.2s wav', async () => {
+    await synthAudio(tools, file('cut-in.wav'), { durationSec: 3, format: 'wav' });
+    await cutAudio(tools, file('cut-in.wav'), file('cut-out.wav'), 500, 1700);
+    const m = await probe(tools, file('cut-out.wav'));
+    expect(m.hasAudio).toBe(true);
+    expect(Math.abs(m.durationMs! - 1200)).toBeLessThanOrEqual(30);
+  });
+
+  it('aborted signal rejects', async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(
+      cutAudio(tools, file('cut-in.wav'), file('cut-x.wav'), 0, 100, { signal: ctrl.signal }),
+    ).rejects.toThrow();
   });
 });

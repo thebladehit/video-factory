@@ -62,7 +62,10 @@ async function dubbed(s: Started, o: { uk?: boolean } = {}) {
   await s.caller.voice.setCaptions({ projectId, language: 'en', enabled: true, styleId: 'preset:classic' });
   await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'en', text: 'Hello dear friends' });
   await s.caller.voice.setText({ projectId, segmentId: 's2', language: 'en', text: 'One two three four five six' });
-  const ids = (await s.caller.voice.synthesize({ projectId, language: 'en' })).jobIds;
+  // по рядку (окремі voice.synthesize): тривалості дублів — рівно слова fake-TTS, без пауз пакетної вирізки
+  const ids: string[] = [];
+  for (const segmentId of ['s1', 's2'])
+    ids.push(...(await s.caller.voice.synthesize({ projectId, language: 'en', segmentIds: [segmentId] })).jobIds);
   if (o.uk) {
     await s.caller.voice.setVoice({ projectId, language: 'uk', voice: VOICE });
     await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'uk', text: 'Привіт' });

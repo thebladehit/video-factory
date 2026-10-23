@@ -165,7 +165,7 @@ export function useEditorSession(project: ProjectView) {
   const lockedNow = useStore(store, (s) => s.locked);
   const gesturing = useStore(store, (s) => s.gesturing);
   useEffect(() => voiceSync.run(store, voice.data), [voiceSync, store, voice.data, mode, frozen, lockedNow, gesturing]);
-  // дубль з'явився чи зник (інша вкладка студії) — свіжі дані; задачі озвучки адресовані рядку (`subject.lineId`)
+  // дубль з'явився чи зник (інша вкладка студії) — свіжі дані; задачі озвучки адресовані рядку (`subject.lineId`), пакетна — проєкту (`subject.projectId`)
   const lineIds = useMemo(
     () => new Set(Object.values(voice.data?.lines ?? {}).flatMap((byLang) => Object.values(byLang).map((l) => l.id))),
     [voice.data],

@@ -1,4 +1,5 @@
 export type * from './types';
+export { TTS_MAX_CHARS } from './types';
 export { CATALOG, type CatalogEntry } from './catalog';
 export { createEnvCredentialStore, type CredentialStore } from './credentials';
 export { createAiRegistry, type AiRegistry, type CatalogItem } from './registry';
@@ -20,4 +21,5 @@ export {
   type ScriptResult,
 } from './prompts/script';
 export { solidPng } from './fake/png';
+export { createFakeTts } from './fake';
 export { DEFAULT_DELIVERY, deliveryFor, GEMINI_TTS_TEMPERATURE } from './delivery';

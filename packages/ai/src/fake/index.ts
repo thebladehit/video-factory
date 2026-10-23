@@ -46,16 +46,35 @@ export const fakeImage: ImageGen = {
   },
 };
 
-export const fakeTts: TTS = {
-  async synthesize({ text }) {
-    const words: Word[] = text
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((w, i) => ({ text: w, startMs: i * WORD_MS, endMs: (i + 1) * WORD_MS }));
-    const durationMs = words.at(-1)?.endMs ?? 0;
-    return { audio: { bytes: silentWav(durationMs), mime: 'audio/wav', durationMs }, words };
-  },
-};
+/** Пауза між абзацами (порожній рядок) у fake-озвучці — як природна пауза справжнього TTS. */
+const PARAGRAPH_PAUSE_MS = 600;
+
+/**
+ * Fake-TTS: тиша по 0,4 с на слово, між абзацами — пауза 0,6 с.
+ * `words: false` — без міток слів (як провайдер, що їх не дає: тоді мітки беруться з whisper чи оцінюються).
+ */
+export function createFakeTts(o: { words?: boolean } = {}): TTS {
+  return {
+    async synthesize({ text }) {
+      const words: Word[] = [];
+      let t = 0;
+      for (const para of text.split(/\n\s*\n/)) {
+        const parts = para.split(/\s+/).filter(Boolean);
+        if (!parts.length) continue;
+        if (words.length) t += PARAGRAPH_PAUSE_MS;
+        for (const w of parts) {
+          words.push({ text: w, startMs: t, endMs: t + WORD_MS });
+          t += WORD_MS;
+        }
+      }
+      const durationMs = words.at(-1)?.endMs ?? 0;
+      const audio = { bytes: silentWav(durationMs), mime: 'audio/wav', durationMs };
+      return o.words === false ? { audio } : { audio, words };
+    },
+  };
+}
+
+export const fakeTts: TTS = createFakeTts();
 
 export const fakeStt: STT = {
   async transcribe() {

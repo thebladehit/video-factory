@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { probe } from '@vf/media';
-import { createAiRegistry, createEnvCredentialStore } from '../index';
+import { createAiRegistry, createEnvCredentialStore, createFakeTts } from '../index';
 import { taggerPrompt, taggerSchema } from '../prompts/tagger';
 import { buildTranslatePrompt, translateSchema } from '../prompts/translate';
 import {
@@ -60,6 +60,23 @@ describe('fake provider', () => {
     expect(audio.mime).toBe('audio/wav');
     expect(audio.durationMs).toBe(1200);
     expect(Buffer.from(audio.bytes).toString('ascii', 0, 4)).toBe('RIFF');
+  });
+
+  it('tts pauses 600 ms between paragraphs (blank line)', async () => {
+    const tts = await registry.tts(u, 'fake/tts');
+    const { audio, words } = await tts.synthesize({ text: 'один два\n\nтри', voiceId: 'fake-voice', language: 'uk' });
+    expect(words).toEqual([
+      { text: 'один', startMs: 0, endMs: 400 },
+      { text: 'два', startMs: 400, endMs: 800 },
+      { text: 'три', startMs: 1400, endMs: 1800 },
+    ]);
+    expect(audio.durationMs).toBe(1800);
+  });
+
+  it('createFakeTts({ words: false }) returns audio without word timings', async () => {
+    const r = await createFakeTts({ words: false }).synthesize({ text: 'один два', voiceId: 'v', language: 'uk' });
+    expect(r.words).toBeUndefined();
+    expect(r.audio.durationMs).toBe(800);
   });
 
   it('stt returns three fixed phrases with segments and words', async () => {

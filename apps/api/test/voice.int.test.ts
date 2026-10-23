@@ -793,7 +793,11 @@ describe('voice.synthesize', () => {
       },
     );
     const projectId = await textProject(s, { s1: 'погане слово', s2: 'добре слово' });
-    await waitJobs(s, (await s.caller.voice.synthesize({ projectId })).jobIds);
+    // по рядку: два рядки разом пішли б однією пакетною задачею (voice-batch.int)
+    const ids: string[] = [];
+    for (const segmentId of ['s1', 's2'])
+      ids.push(...(await s.caller.voice.synthesize({ projectId, segmentIds: [segmentId] })).jobIds);
+    await waitJobs(s, ids);
     const v = (await s.caller.voice.get({ projectId })).lines;
     expect(v.s1!.uk).toMatchObject({ state: 'failed', error: 'Контент-політика провайдера' });
     expect(v.s2!.uk!.state).toBe('ready');

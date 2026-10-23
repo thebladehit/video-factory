@@ -5,3 +5,4 @@ export { synthAudio, synthImage, synthVideo } from './synth';
 export { peaks, PEAKS_PER_SECOND } from './peaks';
 export { jpegOrientation } from './exif';
 export { speechIntervals } from './silence';
+export { cutAudio } from './cut';

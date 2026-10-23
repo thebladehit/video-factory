@@ -3,24 +3,26 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { alignWords, estimateWords } from '@vf/captions';
+import { alignWordsDetailed, estimateWords } from '@vf/captions';
 import { assets, projects, transcripts, voiceLines } from '@vf/db';
-import type { JobDef } from '@vf/jobs';
+import type { JobContext, JobDef } from '@vf/jobs';
 import { probe, speechIntervals } from '@vf/media';
 import { assetKeys, languageInfo, normalizeTags, type JobEvent, type VoiceChoice, type Word } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { analyzeAsset } from '../assets/analyze-job';
+import { isUuid } from '../projects/editor-assets';
 import { finishGeneration, isCancelled, startGeneration } from './job-utils';
 import { STT_MODEL, voiceForLanguage } from './service';
 import { voicedHash } from './stale';
 
-type Timing = 'aligned' | 'estimated';
+export type Timing = 'aligned' | 'estimated';
 
 /**
  * Мітки слів (4.1): слова від TTS, якщо є; інакше whisper-1 по згенерованому аудіо + `alignWords`;
  * без whisper — `estimateWords` за інтервалами мовлення (`timing: 'estimated'`).
+ * `matched[i]` — мітка слова справжня: слова TTS — так; вирівняні whisper — за `alignWordsDetailed`; оцінені — ні.
  */
-async function wordTimings(
+export async function wordTimings(
   deps: AppDeps,
   req: {
     userId: string;
@@ -33,8 +35,8 @@ async function wordTimings(
     ttsWords?: Word[];
     signal: AbortSignal;
   },
-): Promise<{ words: Word[]; timing: Timing }> {
-  if (req.ttsWords?.length) return { words: req.ttsWords, timing: 'aligned' };
+): Promise<{ words: Word[]; timing: Timing; matched: boolean[] }> {
+  if (req.ttsWords?.length) return { words: req.ttsWords, timing: 'aligned', matched: req.ttsWords.map(() => true) };
   const whisper = (await deps.ai.catalog(req.userId)).find(
     (e) => e.ref === STT_MODEL && e.capability === 'stt' && e.available,
   );
@@ -62,7 +64,7 @@ async function wordTimings(
         entry: whisper,
         usage: { durationSec: req.durationMs / 1000 },
       });
-      if (r.words?.length) return { words: alignWords(req.text, r.words), timing: 'aligned' };
+      if (r.words?.length) return { ...alignWordsDetailed(req.text, r.words), timing: 'aligned' };
     } catch (e) {
       if (isCancelled(e, req.signal)) {
         await finishGeneration(deps, genId, { status: 'cancelled' });
@@ -79,7 +81,92 @@ async function wordTimings(
     // файл без аудіопотоку чи нечитабельний — слова рівномірно на всю тривалість
     if (isCancelled(e, req.signal)) throw e;
   }
-  return { words: estimateWords(req.text, req.durationMs, speech), timing: 'estimated' };
+  const words = estimateWords(req.text, req.durationMs, speech);
+  return { words, timing: 'estimated', matched: words.map(() => false) };
+}
+
+/**
+ * Готовий дубль рядка: wav у сховище → asset `audio` (ready, з аналізом звуку) → транскрипт `tts` → рядок `ready`
+ * з `voiced_hash` від знімка тексту й голосу. Рядок оновлюється, лише якщо досі належить задачі `ctx.jobId`.
+ * Повертає id asset; при збої прибирає завантажений об'єкт.
+ */
+export async function saveLineTake(
+  deps: AppDeps,
+  ctx: Pick<JobContext, 'jobId' | 'signal'>,
+  line: Pick<typeof voiceLines.$inferSelect, 'id' | 'userId' | 'language'>,
+  take: {
+    bytes: Uint8Array;
+    wavPath: string;
+    durationMs: number;
+    words: Word[];
+    timing: Timing;
+    voice: VoiceChoice;
+    text: string;
+    projectTitle: string;
+    generationId: string;
+  },
+): Promise<string> {
+  const assetId = randomUUID();
+  const key = assetKeys.original(line.userId, assetId, 'wav');
+  await deps.storage.put(key, take.bytes, { contentType: 'audio/wav' });
+  try {
+    const sound = await analyzeAsset(
+      deps,
+      { id: assetId, userId: line.userId, kind: 'audio' },
+      take.wavPath,
+      ctx.signal,
+    );
+    if (ctx.signal.aborted) throw new Error('Скасовано');
+    const lang = languageInfo(line.language);
+    await deps.db.transaction(async (tx) => {
+      await tx.insert(assets).values({
+        id: assetId,
+        userId: line.userId,
+        kind: 'audio',
+        source: 'generated',
+        status: 'ready',
+        storageKey: key,
+        mime: 'audio/wav',
+        sizeBytes: take.bytes.length,
+        durationMs: take.durationMs,
+        title: `${take.projectTitle} — озвучка (${lang.name.toLowerCase()})`,
+        tags: normalizeTags([line.language, 'озвучка', take.projectTitle]),
+        language: line.language,
+        generationId: take.generationId,
+        ...sound,
+      });
+      const [t] = await tx
+        .insert(transcripts)
+        .values({
+          userId: line.userId,
+          assetId,
+          language: line.language,
+          source: 'tts',
+          text: take.text,
+          words: take.words,
+          timing: take.timing,
+        })
+        .returning({ id: transcripts.id });
+      await tx
+        .update(voiceLines)
+        .set({
+          voice: take.voice,
+          voicedHash: voicedHash(take.text, take.voice),
+          audioAssetId: assetId,
+          transcriptId: t!.id,
+          durationMs: take.durationMs,
+          status: 'ready',
+          error: null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(voiceLines.id, line.id), eq(voiceLines.jobId, ctx.jobId)));
+    });
+  } catch (e) {
+    // об'єкт ще не належить asset
+    await deps.storage.delete(key).catch(() => {});
+    throw e;
+  }
+  return assetId;
 }
 
 /**
@@ -147,7 +234,6 @@ export function synthesizeJob(deps: AppDeps): JobDef<{ lineId: string }, { asset
 
       const dir = await mkdtemp(join(tmpdir(), 'vf-tts-'));
       let genId: string | null = null;
-      let uploadedKey: string | null = null;
       try {
         const entry = (await deps.ai.catalog(line.userId)).find((e) => e.ref === voice.model && e.capability === 'tts');
         const tts = await deps.ai.tts(line.userId, voice.model);
@@ -186,55 +272,18 @@ export function synthesizeJob(deps: AppDeps): JobDef<{ lineId: string }, { asset
         });
 
         await ctx.progress(80, 'Зберігаю');
-        const assetId = randomUUID();
-        const key = assetKeys.original(line.userId, assetId, 'wav');
-        await deps.storage.put(key, audio.bytes, { contentType: 'audio/wav' });
-        uploadedKey = key;
-        const sound = await analyzeAsset(
-          deps,
-          { id: assetId, userId: line.userId, kind: 'audio' },
-          wavPath,
-          ctx.signal,
-        );
-        if (ctx.signal.aborted) throw new Error('Скасовано');
-        const lang = languageInfo(line.language);
         const gid = genId;
-        await deps.db.transaction(async (tx) => {
-          await tx.insert(assets).values({
-            id: assetId,
-            userId: line.userId,
-            kind: 'audio',
-            source: 'generated',
-            status: 'ready',
-            storageKey: key,
-            mime: 'audio/wav',
-            sizeBytes: audio.bytes.length,
-            durationMs,
-            title: `${p.title} — озвучка (${lang.name.toLowerCase()})`,
-            tags: normalizeTags([line.language, 'озвучка', p.title]),
-            language: line.language,
-            generationId: gid,
-            ...sound,
-          });
-          const [t] = await tx
-            .insert(transcripts)
-            .values({ userId: line.userId, assetId, language: line.language, source: 'tts', text, words, timing })
-            .returning({ id: transcripts.id });
-          await tx
-            .update(voiceLines)
-            .set({
-              voice,
-              voicedHash: hash,
-              audioAssetId: assetId,
-              transcriptId: t!.id,
-              durationMs,
-              status: 'ready',
-              error: null,
-              updatedAt: new Date(),
-            })
-            .where(and(eq(voiceLines.id, lineId), eq(voiceLines.jobId, ctx.jobId)));
+        const assetId = await saveLineTake(deps, ctx, line, {
+          bytes: audio.bytes,
+          wavPath,
+          durationMs,
+          words,
+          timing,
+          voice,
+          text,
+          projectTitle: p.title,
+          generationId: gid,
         });
-        uploadedKey = null; // об'єкт тепер належить asset
         await finishGeneration(deps, gid, {
           status: 'done',
           entry,
@@ -244,7 +293,6 @@ export function synthesizeJob(deps: AppDeps): JobDef<{ lineId: string }, { asset
         await ctx.progress(100, 'Готово');
         return { assetId };
       } catch (e) {
-        if (uploadedKey) await deps.storage.delete(uploadedKey).catch(() => {});
         // скасування чи зупинка сервера: рядок відновлює подія скасування (або відновлення після рестарту)
         if (isCancelled(e, ctx.signal)) {
           if (genId) await finishGeneration(deps, genId, { status: 'cancelled' });
@@ -283,10 +331,32 @@ export async function releaseCancelledLines(deps: AppDeps, lineIds: string[], jo
     );
 }
 
-/** Слухач подій черги: скасований `voice.synthesize` (у черзі чи в роботі) звільняє свій рядок. */
+/**
+ * Скасований `voice.synthesizeBatch`: усі рядки, що досі належать задачі й не дійшли до `ready`, — як у
+ * `releaseCancelledLines` (рядки, вже записані `ready`, і рядки, передані окремим `voice.synthesize`, не чіпаються).
+ */
+export async function releaseJobLines(deps: AppDeps, jobId: string): Promise<void> {
+  await deps.db
+    .update(voiceLines)
+    .set({
+      status: sql`case when ${voiceLines.audioAssetId} is not null and ${voiceLines.voicedHash} is not null then 'ready' else 'empty' end`,
+      error: null,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(voiceLines.jobId, jobId), inArray(voiceLines.status, ['queued', 'running'])));
+}
+
+/** Скасована задача озвучки звільняє свої рядки (обидві задачі — ідемпотентно). */
+export async function releaseForCancelledJob(deps: AppDeps, e: JobEvent): Promise<void> {
+  if (e.status !== 'cancelled') return;
+  if (e.type === 'voice.synthesize' && e.subject.lineId && isUuid(e.subject.lineId))
+    await releaseCancelledLines(deps, [e.subject.lineId], e.jobId);
+  if (e.type === 'voice.synthesizeBatch') await releaseJobLines(deps, e.jobId);
+}
+
+/** Слухач подій черги: скасований `voice.synthesize` (у черзі чи в роботі) звільняє свій рядок, пакетна — свої. */
 export const releaseOnCancel =
   (deps: AppDeps) =>
   (e: JobEvent): void => {
-    if (e.type !== 'voice.synthesize' || e.status !== 'cancelled' || !e.subject.lineId) return;
-    void releaseCancelledLines(deps, [e.subject.lineId], e.jobId).catch(() => {});
+    void releaseForCancelledJob(deps, e).catch(() => {});
   };

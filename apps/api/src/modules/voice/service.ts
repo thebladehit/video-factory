@@ -516,7 +516,7 @@ export function voicedByAll(line: LineFacts, voice: VoiceChoice | null): boolean
 }
 
 /**
- * «Озвучити»: задача на кожен рядок. Без `segmentIds` — рядки з текстом у станах «не озвучено», «помилка»,
+ * «Озвучити»: для мови з ≥ 2 рядками — одна `voice.synthesizeBatch` (спека 4.3), інакше задача на рядок. Без `segmentIds` — рядки з текстом у станах «не озвучено», «помилка»,
  * «застарілий»; із `segmentIds` — усі рядки з текстом цих сегментів, крім тих, що вже в черзі чи в роботі.
  */
 export async function enqueueSynthesize(
@@ -547,6 +547,8 @@ export async function enqueueSynthesize(
   });
 
   const catalog = await deps.ai.catalog(userId);
+  const whisper = catalog.some((e) => e.ref === STT_MODEL && e.capability === 'stt' && e.available);
+  const batchable = new Set<string>();
   for (const lang of new Set(todo.map((r) => r.language))) {
     const voice = voices.get(lang);
     if (!voice) throw new AppError('VALIDATION', `Не вибрано голос для мови «${languageInfo(lang).name}»`);
@@ -555,24 +557,60 @@ export async function enqueueSynthesize(
       throw new AppError('MODEL_UNAVAILABLE', `Модель озвучки ${voice.model} недоступна — додайте ключ`, {
         model: voice.model,
       });
+    // пакет ріжеться по мітках слів: без них (TTS без міток і без whisper) кожен рядок пішов би окремо вдруге
+    if (entry.wordTimestamps || whisper) batchable.add(lang);
   }
 
-  const jobIds: string[] = [];
-  for (const r of todo) {
-    // атомарно «в черзі» (паралельний запит, що вже поставив рядок, виграє), потім задача;
-    // обробник сам запише свій job_id, коли забере рядок
-    const [won] = await deps.db
-      .update(voiceLines)
-      .set({ status: 'queued', jobId: null, error: null, updatedAt: new Date() })
-      .where(and(eq(voiceLines.id, r.id), notInArray(voiceLines.status, ['queued', 'running'])))
-      .returning({ id: voiceLines.id });
-    if (!won) continue;
-    const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: r.id }, { userId });
-    await deps.db
+  // атомарно «в черзі» (паралельний запит, що вже поставив рядок, виграє), потім задача;
+  // обробник сам запише свій job_id, коли забере рядок
+  const claim = async (id: string) =>
+    (
+      await deps.db
+        .update(voiceLines)
+        .set({ status: 'queued', jobId: null, error: null, updatedAt: new Date() })
+        .where(and(eq(voiceLines.id, id), notInArray(voiceLines.status, ['queued', 'running'])))
+        .returning({ id: voiceLines.id })
+    ).length > 0;
+  const attach = (ids: string[], jobId: string) =>
+    deps.db
       .update(voiceLines)
       .set({ jobId })
-      .where(and(eq(voiceLines.id, r.id), eq(voiceLines.status, 'queued'), isNull(voiceLines.jobId)));
-    jobIds.push(jobId);
+      .where(and(inArray(voiceLines.id, ids), eq(voiceLines.status, 'queued'), isNull(voiceLines.jobId)));
+
+  const order = new Map((normalizeDoc(p.timeline).segments ?? []).map((s, i) => [s.id, i]));
+  const jobIds: string[] = [];
+  for (const lang of languages) {
+    const own = todo
+      .filter((r) => r.language === lang)
+      .sort((a, b) => (order.get(a.segmentId) ?? 0) - (order.get(b.segmentId) ?? 0));
+    if (!own.length) continue;
+    if (own.length >= 2 && batchable.has(lang)) {
+      // ≥ 2 рядків мови — один дубль на весь сценарій (спека 4.3)
+      const won: string[] = [];
+      for (const r of own) if (await claim(r.id)) won.push(r.id);
+      if (won.length >= 2) {
+        const jobId = await deps.jobs.queue.enqueue(
+          'voice.synthesizeBatch',
+          { projectId: p.id, language: lang, lineIds: won },
+          { userId },
+        );
+        await attach(won, jobId);
+        jobIds.push(jobId);
+        continue;
+      }
+      for (const id of won) {
+        const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: id }, { userId });
+        await attach([id], jobId);
+        jobIds.push(jobId);
+      }
+      continue;
+    }
+    for (const r of own) {
+      if (!(await claim(r.id))) continue;
+      const jobId = await deps.jobs.queue.enqueue('voice.synthesize', { lineId: r.id }, { userId });
+      await attach([r.id], jobId);
+      jobIds.push(jobId);
+    }
   }
   return { jobIds };
 }

@@ -14,6 +14,7 @@ export type JobType =
   | 'voice.transcribe'
   | 'voice.translate'
   | 'voice.synthesize'
+  | 'voice.synthesizeBatch'
   | 'pipeline.script'
   | 'pipeline.scene'
   | 'pipeline.visual'

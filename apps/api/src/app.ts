@@ -32,6 +32,7 @@ import { scriptJob } from './modules/pipeline/script-job';
 import { visualJob } from './modules/pipeline/visual-job';
 import { renderJob } from './modules/renders/render-job';
 import { releaseOnCancel, synthesizeJob } from './modules/voice/synthesize-job';
+import { synthesizeBatchJob } from './modules/voice/synthesize-batch-job';
 import { transcribeJob } from './modules/voice/transcribe-job';
 import { translateJob } from './modules/voice/translate-job';
 import { tagAfterProcess } from './modules/assets/tagger';
@@ -120,6 +121,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(renderJob(deps, { fontsDir: cfg.captionsFontsDir }));
   deps.jobs.runtime.register(videoGenerateJob(deps, { pollMs: cfg.videoPollMs, timeoutMs: cfg.videoTimeoutMs }));
   deps.jobs.runtime.register(synthesizeJob(deps));
+  deps.jobs.runtime.register(synthesizeBatchJob(deps));
   deps.jobs.runtime.register(translateJob(deps));
   deps.jobs.runtime.register(transcribeJob(deps));
   deps.jobs.runtime.register(scriptJob(deps));
