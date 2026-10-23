@@ -541,7 +541,8 @@ export async function audition(
   const hash = createHash('sha256')
     .update([input.model, input.voiceId, input.language, text, instructions].join('|'))
     .digest('hex');
-  const key = `u/${userId}/voice-samples/audition/${hash}/${input.take}.wav`;
+  // v2: зразки Gemini до c40beab читали інструкцію стилю вголос — старий кеш не використовується
+  const key = `u/${userId}/voice-samples/audition/v2/${hash}/${input.take}.wav`;
   return cachedSample(deps, userId, key, input.model, {
     text,
     voiceId: input.voiceId,
