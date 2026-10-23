@@ -15,7 +15,7 @@ export const takesKey = (takes: VoiceTake[]): string => takes.map((t) => `${t.se
  * Синхронізація доріжки озвучки базової мови в редакторі (спека §3.2, виклик 2): звичайна операція стору
  * (крок історії, автозбереження). Лише в «Монтажі», не заморожено/не заблоковано. Той самий набір дублів
  * застосовується один раз: undo синхронізації не відкочується назад наступним оновленням тих самих даних.
- * Пропущений (режим, заморожено) набір не запам'ятовується — застосується при наступному виклику.
+ * Пропущений (режим, заморожено, відкритий жест) набір не запам'ятовується — застосується при наступному виклику.
  */
 export function createVoiceSync() {
   let lastKey: string | null = null;
@@ -23,11 +23,16 @@ export function createVoiceSync() {
     run(store: EditorStore, view: VoiceSyncView | undefined) {
       if (!view) return;
       const s = store.getState();
-      if (s.mode.kind !== 'edit' || s.locked || isReadOnlyState(s)) return;
+      // відкритий жест перебудовує документ зі стану до жесту — синхронізація загубилась би; повтор — після жесту
+      if (s.mode.kind !== 'edit' || s.locked || s.gesturing || isReadOnlyState(s)) return;
       const key = `${view.base}#${takesKey(view.baseTakes)}`;
       if (key === lastKey) return;
       lastKey = key;
       s.apply((d) => syncVoiceTrack(d, { language: view.base, takes: view.baseTakes }).doc);
+    },
+    /** Документ замінено серверним (перезавантаження після конфлікту): той самий набір дублів застосовується знову */
+    reset() {
+      lastKey = null;
     },
   };
 }

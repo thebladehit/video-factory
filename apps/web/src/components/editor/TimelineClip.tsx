@@ -58,7 +58,7 @@ export function TimelineClip({
         missing && 'border-red-700 bg-red-600/90',
         selected && 'ring-2 ring-amber-400 ring-offset-1',
         invalid && 'ring-2 ring-red-500 ring-offset-1',
-        overflow !== undefined && 'border-2 border-amber-400',
+        overflow !== undefined && !missing && 'border-2 border-amber-400',
       )}
       style={{ left: clip.start * pxPerSec, width }}
       onPointerDown={(e) => onPointerDown(e, 'move')}

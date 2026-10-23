@@ -31,6 +31,8 @@ export interface EditorState {
   /** Жест (рух, трім, повзунок) — один крок історії: проміжні оновлення не записуються */
   beginGesture(): void;
   endGesture(): void;
+  /** Жест відкритий (поза історією): проміжні оновлення документа перезапишуться наступним рухом */
+  gesturing: boolean;
   /** Документ з сервера (перезавантаження після конфлікту) — історія очищується */
   replaceDoc(doc: TimelineDoc): void;
   /** Файл з ОС отримав id у бібліотеці: `local:…` → uuid у документі й у всій історії (не крок історії) */
@@ -65,6 +67,7 @@ export function createEditorStore(initial: TimelineDoc) {
           store.temporal.getState().resume();
         },
         frozen: false,
+        gesturing: false,
         setFrozen(frozen) {
           if (frozen) get().endGesture();
           store.temporal.getState().pause();
@@ -74,7 +77,7 @@ export function createEditorStore(initial: TimelineDoc) {
         switchMode(mode, doc) {
           gestureStart = null;
           store.temporal.getState().pause();
-          set({ mode, doc });
+          set({ mode, doc, gesturing: false });
           store.temporal.getState().resume();
           store.temporal.getState().clear();
         },
@@ -87,6 +90,7 @@ export function createEditorStore(initial: TimelineDoc) {
           if (gestureStart || get().locked || isReadOnlyState(get())) return;
           gestureStart = get().doc;
           store.temporal.getState().pause();
+          set({ gesturing: true });
         },
         endGesture() {
           const start = gestureStart;
@@ -94,7 +98,7 @@ export function createEditorStore(initial: TimelineDoc) {
           gestureStart = null;
           const final = get().doc;
           // історія бачить один перехід: стан до жесту → стан після
-          set({ doc: start });
+          set({ doc: start, gesturing: false });
           store.temporal.getState().resume();
           if (final !== start) set({ doc: final });
         },
@@ -110,7 +114,7 @@ export function createEditorStore(initial: TimelineDoc) {
         replaceDoc(doc) {
           gestureStart = null;
           store.temporal.getState().pause();
-          set({ doc });
+          set({ doc, gesturing: false });
           store.temporal.getState().resume();
           store.temporal.getState().clear();
         },

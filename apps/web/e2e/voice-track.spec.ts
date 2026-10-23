@@ -34,9 +34,18 @@ const savedDoc = async (page: Page, projectId: string) =>
 const rows = (page: Page) => page.getByTestId('segment-row');
 const voiceClips = (page: Page) => page.locator('[data-testid=track-audio][data-role=voiceover] [data-clip-id]');
 
-async function saved(page: Page) {
-  await page.waitForTimeout(1700);
-  await expect(page.getByTestId('save-state')).toHaveAttribute('data-state', 'saved', { timeout: 10_000 });
+/** Збережена доріжка озвучки, коли вона задовольнить умову (автозбереження з затримкою — опитування сервера). */
+async function savedTrackWhen(page: Page, ok: (t: NonNullable<ReturnType<typeof voiceTrack>>) => boolean) {
+  await expect
+    .poll(
+      async () => {
+        const t = voiceTrack(await savedDoc(page, projectId));
+        return !!t && ok(t);
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  return { doc: await savedDoc(page, projectId), track: voiceTrack(await savedDoc(page, projectId))! };
 }
 
 async function allRowsReady(page: Page, count: number) {
@@ -81,9 +90,7 @@ test.describe.serial('voice track in the editor', () => {
     // «Монтаж»: доріжка озвучки з'являється з готових дублів і зберігається
     await page.goto(`/projects/${projectId}`);
     await expect(voiceClips(page)).toHaveCount(3, { timeout: 30_000 });
-    await saved(page);
-    const doc = await savedDoc(page, projectId);
-    const track = voiceTrack(doc)!;
+    const { doc, track } = await savedTrackWhen(page, (t) => t.clips.length === 3);
     expect(track.clips.map((c) => c.sceneId).sort()).toEqual(doc.segments!.map((s) => s.id).sort());
 
     // прев'ю грає саме файл першого дубля
@@ -116,7 +123,7 @@ test.describe.serial('voice track in the editor', () => {
     await page.locator(`[data-clip-id="${first.id}"]`).click();
     await page.keyboard.press('Delete');
     await expect(voiceClips(page)).toHaveCount(2);
-    await saved(page);
+    await savedTrackWhen(page, (t) => t.clips.length === 2);
     expect(voiceTrack(await savedDoc(page, projectId))!.removedSegments).toEqual([first.sceneId]);
 
     // новий текст рядка в студії → переозвучити → новий дубль, але кліп не повертається
@@ -132,8 +139,8 @@ test.describe.serial('voice track in the editor', () => {
     expect(view.baseTakes.find((t) => t.segmentId === first.sceneId)?.assetId).not.toBe(first.assetId);
 
     await page.goto(`/projects/${projectId}`);
-    await expect(voiceClips(page)).toHaveCount(2, { timeout: 30_000 });
-    await page.waitForTimeout(1500);
+    // смуга сегментів з'являється з даними voice.get — у тому ж коміті ефект синхронізації вже відпрацював
+    await expect(page.getByTestId('editor-segment-strip')).toBeVisible({ timeout: 30_000 });
     await expect(voiceClips(page)).toHaveCount(2);
     const after = voiceTrack(await savedDoc(page, projectId))!;
     expect(after.clips.some((c) => c.sceneId === first.sceneId)).toBe(false);
@@ -157,8 +164,7 @@ test.describe.serial('voice track in the editor', () => {
     await page.getByTestId('restore-voice').click();
     await expect(voiceClips(page)).toHaveCount(3);
     await expect(page.getByTestId('restore-voice')).toHaveCount(0);
-    await saved(page);
-    const track = voiceTrack(await savedDoc(page, projectId))!;
+    const { track } = await savedTrackWhen(page, (t) => t.clips.length === 3);
     expect(track.removedSegments).toBeUndefined();
     expect(track.clips.some((c) => c.sceneId === removed)).toBe(true);
   });

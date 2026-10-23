@@ -83,6 +83,34 @@ describe('createVoiceSync', () => {
     expect(voiceClips(store.getState().doc).map((c) => c.sceneId)).toEqual(['s1']);
   });
 
+  it('sync during open gesture is skipped and applied after gesture ends', () => {
+    const store = createEditorStore(base());
+    const sync = createVoiceSync();
+    const start = store.getState().doc;
+    store.getState().beginGesture();
+    sync.run(store, view([take('s1')]));
+    expect(voiceTrackOf(store.getState().doc, 'uk')).toBeNull();
+    // жест перебудовує документ зі стану до жесту (як Timeline/SegmentStrip на кожен рух)
+    store.getState().apply(() => ({ ...start, segments: [...start.segments!] }));
+    store.getState().endGesture();
+    expect(store.getState().gesturing).toBe(false);
+    sync.run(store, view([take('s1')]));
+    expect(voiceClips(store.getState().doc).map((c) => c.sceneId)).toEqual(['s1']);
+  });
+
+  it('reset() makes the same takes apply again (conflict reload)', () => {
+    const store = createEditorStore(base());
+    const sync = createVoiceSync();
+    sync.run(store, view([take('s1')]));
+    // «Перезавантажити»: серверний документ без доріжки
+    store.getState().switchMode({ kind: 'edit' }, base());
+    sync.run(store, view([take('s1')]));
+    expect(voiceTrackOf(store.getState().doc, 'uk')).toBeNull();
+    sync.reset();
+    sync.run(store, view([take('s1')]));
+    expect(voiceClips(store.getState().doc).map((c) => c.sceneId)).toEqual(['s1']);
+  });
+
   it('no view → nothing happens', () => {
     const store = createEditorStore(base());
     createVoiceSync().run(store, undefined);
