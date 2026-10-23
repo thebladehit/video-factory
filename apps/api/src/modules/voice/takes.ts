@@ -1,7 +1,11 @@
-import type { voiceLines } from '@vf/db';
-import type { Segment, VoiceChoice } from '@vf/shared';
+import { and, eq } from 'drizzle-orm';
+import { voiceLines } from '@vf/db';
+import { normalizeDoc, type Segment, type VoiceChoice } from '@vf/shared';
 import type { VoiceTake } from '@vf/timeline';
+import type { AppDeps } from '../../app';
+import type { ProjectRow } from '../projects/service';
 import { lineState } from './stale';
+import { voiceForLanguage } from './service';
 
 type VoiceLineRow = typeof voiceLines.$inferSelect;
 
@@ -37,4 +41,19 @@ export function collectTakes(
     else notReady.push(s.id);
   }
   return { takes, notReady };
+}
+
+/** Готові дублі базової мови проєкту за сегментами його документа (`p.timeline`). */
+export async function baseTakesOf(deps: AppDeps, userId: string, p: ProjectRow): Promise<VoiceTake[]> {
+  const rows = await deps.db
+    .select()
+    .from(voiceLines)
+    .where(and(eq(voiceLines.projectId, p.id), eq(voiceLines.language, p.baseLanguage)));
+  const baseText = new Map(rows.map((r) => [r.segmentId, r.text]));
+  return collectTakes(rows, normalizeDoc(p.timeline).segments ?? [], {
+    language: p.baseLanguage,
+    isBase: true,
+    baseText,
+    voice: await voiceForLanguage(deps, userId, p, p.baseLanguage),
+  }).takes;
 }

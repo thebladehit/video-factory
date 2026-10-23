@@ -183,7 +183,12 @@ describe('pipeline flow: assemble', () => {
     const musicClips = doc.tracks.flatMap((t) => (t.kind === 'audio' && t.role === 'music' ? t.clips : []));
     expect(musicClips.length).toBeGreaterThan(0);
     expect(musicClips.every((c) => c.assetId === musicId)).toBe(true);
-    expect(p.assetIds.sort()).toEqual([...new Set([...scenes.map((sc) => sc.visualAssetId!), musicId])].sort());
+    const voiceIds = doc.tracks.flatMap((t) =>
+      t.kind === 'audio' && t.role === 'voiceover' ? t.clips.map((c) => c.assetId) : [],
+    );
+    expect(p.assetIds.sort()).toEqual(
+      [...new Set([...scenes.map((sc) => sc.visualAssetId!), musicId, ...voiceIds])].sort(),
+    );
     expectFullDuration(doc);
 
     const voice = await s.caller.voice.get({ projectId });
@@ -204,6 +209,20 @@ describe('pipeline flow: assemble', () => {
     expect(en.timeline.tracks.some((t) => t.kind === 'audio' && t.role === 'voiceover' && t.clips.length)).toBe(true);
     expect(en.timeline.tracks.some((t) => t.kind === 'captions' && t.clips.length)).toBe(true);
     expect(en.subtitles).toBeTruthy();
+  }, 90_000);
+
+  it('assembled timeline has voiceover track of base language with one clip per voiced scene', async () => {
+    const s = await flowApp();
+    const { projectId } = await s.caller.pipeline.start(settings());
+    await waitDone(s, projectId);
+    const run = await runOf(s, projectId);
+    const doc = await docOf(s, projectId);
+    const scenes = await scenesOf(s, run.id);
+    const tracks = doc.tracks.filter((t) => t.kind === 'audio' && t.role === 'voiceover');
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]).toMatchObject({ language: 'uk' });
+    const clips = tracks[0]!.kind === 'audio' ? tracks[0]!.clips : [];
+    expect(clips.map((c) => c.sceneId)).toEqual(scenes.map((sc) => sc.segmentId));
   }, 90_000);
 
   it('failed scene visual → blank asset clip, run still done; last scene blank keeps full duration', async () => {
