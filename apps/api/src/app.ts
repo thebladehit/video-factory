@@ -30,6 +30,8 @@ import { cleanupStaleUploads } from './modules/assets/cleanup';
 import { assetAnalyzeJob } from './modules/assets/analyze-job';
 import { assetProcessJob } from './modules/assets/process-job';
 import { FAKE_TOKEN_KEY } from './modules/publish/crypto';
+import { publishJob } from './modules/publish/job';
+import { publishTick } from './modules/publish/tick';
 import { registerOAuthRoutes } from './modules/publish/oauth-route';
 import { reconcileAfterRestart } from './modules/recovery';
 import { assetsTagJob } from './modules/assets/tag-job';
@@ -174,6 +176,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(sceneJob(deps));
   deps.jobs.runtime.register(visualJob(deps));
   deps.jobs.runtime.register(assembleJob(deps));
+  deps.jobs.runtime.register(publishJob(deps));
   const offVoiceEvents = deps.jobs.queue.onEvent(releaseOnCancel(deps));
   const offPipelineEvents = deps.jobs.queue.onEvent(pipelineEvents(deps));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
@@ -202,6 +205,8 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
       scheduler.every('assets.cleanup', 3_600_000, async () => void (await cleanupStaleUploads(deps)), {
         runOnStart: true,
       });
+      // після відновлення: перервані завантаження вже знову scheduled
+      scheduler.every('publish.tick', cfg.publishTickMs, () => publishTick(deps), { runOnStart: true });
     },
     async close() {
       if (closed) return;

@@ -23,6 +23,8 @@ export interface AppConfig {
   tokenKey?: Buffer;
   /** Fake OAuth/публікатор замість YouTube (e2e, розробка без Google) */
   publishFake: boolean;
+  /** Період тіку публікацій (e2e — коротший, щоб не чекати хвилину) */
+  publishTickMs: number;
 }
 
 const REQUIRED = ['DATABASE_URL', 'S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET'] as const;
@@ -78,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     },
     tokenKey,
     publishFake: env.PUBLISH_FAKE === '1',
+    publishTickMs: Number(env.PUBLISH_TICK_MS) || 60_000,
   };
 }
 

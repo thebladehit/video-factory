@@ -8,10 +8,12 @@ import {
   type Platform,
   type PublicationMeta,
   type PublicationStatus,
+  type PublishMethod,
   type VideoFormat,
 } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import { isUuid } from '../projects/editor-assets';
+import { enqueuePublish } from './job';
 
 const LIVE = [...LIVE_PUBLICATION_STATUSES];
 const EDITABLE: PublicationStatus[] = ['scheduled', 'awaiting_manual'];
@@ -112,9 +114,10 @@ function mapUnique(e: unknown): never {
 
 export async function createPublications(deps: AppDeps, userId: string, items: CreateItem[]): Promise<string[]> {
   if (!items.length) throw new AppError('VALIDATION', 'Оберіть хоча б одну версію й акаунт');
+  let created: { id: string; method: PublishMethod }[];
   try {
-    return await deps.db.transaction(async (tx) => {
-      const ids: string[] = [];
+    created = await deps.db.transaction(async (tx) => {
+      const rows: { id: string; method: PublishMethod }[] = [];
       for (const item of items) {
         if (!isUuid(item.renderId) || !isUuid(item.accountId))
           throw new AppError('NOT_FOUND', 'Версію чи акаунт не знайдено');
@@ -147,7 +150,7 @@ export async function createPublications(deps: AppDeps, userId: string, items: C
         checkMeta(account.platform, item.meta);
         const at = parseTime(item.scheduledAt);
         checkYoutubeTime(account.platform, at);
-        // api: рядок лишається scheduled (задачу ставить окремий крок); manual «зараз» — одразу до ручної черги
+        // api: рядок у scheduled, задачу ставимо після коміту; manual «зараз» — одразу до ручної черги
         const status: PublicationStatus =
           account.method === 'manual' && (!at || at.getTime() <= Date.now()) ? 'awaiting_manual' : 'scheduled';
         const [row] = await tx
@@ -164,13 +167,25 @@ export async function createPublications(deps: AppDeps, userId: string, items: C
             scheduledAt: at,
             metadata: item.meta,
           })
-          .returning({ id: publications.id });
-        ids.push(row!.id);
+          .returning({ id: publications.id, method: publications.method });
+        rows.push(row!);
       }
-      return ids;
+      return rows;
     });
   } catch (e) {
     return mapUnique(e);
+  }
+  // задача ставиться одразу, «зараз» чи за розкладом (scheduled_at — час виходу на платформі)
+  for (const p of created) if (p.method === 'api') await startPublish(deps, { id: p.id, userId });
+  return created.map((p) => p.id);
+}
+
+/** Збій постановки не скасовує створення: тік поставить задачу для scheduled без живої задачі */
+async function startPublish(deps: AppDeps, pub: { id: string; userId: string }) {
+  try {
+    await enqueuePublish(deps, pub);
+  } catch (e) {
+    deps.log.error({ err: e, publicationId: pub.id }, 'publish: не вдалося поставити задачу');
   }
 }
 
@@ -311,21 +326,27 @@ export async function cancelPublication(deps: AppDeps, userId: string, id: strin
     .update(publications)
     .set({ status: 'cancelled', updatedAt: new Date() })
     .where(and(eq(publications.id, pub.id), inArray(publications.status, LIVE)))
-    .returning({ id: publications.id });
-  if (row && pub.status === 'uploading' && pub.jobId) await deps.jobs.queue.cancel(pub.jobId);
+    .returning({ id: publications.id, jobId: publications.jobId });
+  if (!row) throw new AppError('CONFLICT', 'Публікація вже завершена');
+  // задача рядка (queued чи running) — за результатом UPDATE, не за попереднім читанням; завершену cancel не чіпає
+  if (row.jobId) await deps.jobs.queue.cancel(row.jobId);
 }
 
 export async function retryPublication(deps: AppDeps, userId: string, id: string) {
   const pub = await ownPublication(deps, userId, id);
   if (pub.status !== 'failed') throw new AppError('CONFLICT', 'Повторити можна лише невдалу публікацію');
+  let row: { id: string } | undefined;
   try {
-    await deps.db
+    [row] = await deps.db
       .update(publications)
       .set({ status: 'scheduled', error: null, updatedAt: new Date() })
-      .where(and(eq(publications.id, pub.id), eq(publications.status, 'failed')));
+      .where(and(eq(publications.id, pub.id), eq(publications.status, 'failed')))
+      .returning({ id: publications.id });
   } catch (e) {
     mapUnique(e);
   }
+  // upload_session зберігся: нова задача продовжить ту саму сесію
+  if (row && pub.method === 'api') await startPublish(deps, { id: pub.id, userId });
 }
 
 /** Захист видалення: проєкт чи файл рендеру з живими публікаціями видаляти не можна */

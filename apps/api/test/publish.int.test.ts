@@ -123,7 +123,7 @@ describe('publish.create', () => {
     expect(err.message).toBe(err.cause.details.errors[0]);
   });
 
-  it('youtube scheduled in 2 min → VALIDATION; in 10 min → scheduled', async () => {
+  it('youtube scheduled in 2 min → VALIDATION; in 10 min → created with publish job', async () => {
     const s = await start();
     const acc = await youtubeAccount(s);
     const { renderId } = await makeRender(s);
@@ -137,7 +137,10 @@ describe('publish.create', () => {
     const [id] = await s.caller.publish.create({
       items: [{ renderId, accountId: acc.id, meta: meta(), scheduledAt: later }],
     });
-    expect(await pubRow(s, id!)).toMatchObject({ status: 'scheduled', method: 'api' });
+    // задача ставиться одразу: статус далі веде вона (див. publish-job.int)
+    const row = await pubRow(s, id!);
+    expect(row).toMatchObject({ method: 'api' });
+    expect(row.jobId).not.toBeNull();
   });
 
   it('rejects draft render, foreign render and inactive account', async () => {

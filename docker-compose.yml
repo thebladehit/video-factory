@@ -75,6 +75,7 @@ services:
       WEB_ORIGIN: http://localhost:5174
       AI_FAKE: '1'
       PUBLISH_FAKE: '1'
+      PUBLISH_TICK_MS: '2000'
       # тестовий ключ лише для e2e (справжніх токенів у fake-режимі немає)
       TOKEN_ENCRYPTION_KEY: 'r8ApGY4N5J7omh7ezeIiUlTpLPCzDrkKfa/+lqcq7z8='
       SKIP_INSTALL: '1'
