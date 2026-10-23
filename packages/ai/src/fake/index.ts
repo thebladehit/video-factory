@@ -3,6 +3,7 @@ import type { Aspect, ImageGen, STT, TextGen, TTS, Word } from '../types';
 import { AppError, titleFromPrompt } from '@vf/shared';
 import { taggerSchema } from '../prompts/tagger';
 import { translateSchema } from '../prompts/translate';
+import { publishMetaSchema } from '../prompts/publish-meta';
 import { outlineSchema, sceneSchema, scriptSchema } from '../prompts/script';
 import { fakeValueFor } from './fake-object';
 import { solidPng } from './png';
@@ -27,6 +28,7 @@ export const fakeText: TextGen = {
     if ((schema as unknown) === scriptSchema) return fakeScript(prompt) as never;
     if ((schema as unknown) === outlineSchema) return fakeOutline(prompt) as never;
     if ((schema as unknown) === sceneSchema) return fakeScene(prompt) as never;
+    if ((schema as unknown) === publishMetaSchema) return fakePublishMeta(prompt) as never;
     return fakeValueFor(schema);
   },
 };
@@ -156,5 +158,21 @@ function fakeScene(prompt: string) {
     narration: `Нова версія. ${current}`.slice(0, 1500),
     visualPrompt: `new version ${current}`.slice(0, 200),
     keywords: ['fake'],
+  };
+}
+
+/** Метадані-заглушка: детерміновані непорожні поля за «Назва проєкту: …»; TikTok/Instagram — без назви. */
+function fakePublishMeta(prompt: string) {
+  const title = promptLine(prompt, 'Назва проєкту') ?? 'Ролик';
+  const tags = Array.from({ length: 8 }, (_, i) => `тег${i + 1}`);
+  return {
+    youtube: {
+      title: `${title} — YouTube`,
+      description: `Хук: ${title}\nПерегляньте до кінця.\n\nОпис ${title}`,
+      tags,
+    },
+    tiktok: { title: '', description: `${title} #fake #video`, tags: ['fake', 'video', 'tiktok'] },
+    instagram: { title: '', description: `${title} #fake #reels`, tags: ['fake', 'reels', 'instagram'] },
+    facebook: { title: `${title} — Facebook`, description: `Опис ${title}`, tags: ['fake'] },
   };
 }

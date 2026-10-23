@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { projects, publications } from '@vf/db';
+import { generations, projects, publications, userSettings, voiceLines } from '@vf/db';
+import { validateMeta } from '@vf/publish';
 import { makeRender, start, type Started } from './publish-helpers';
 
 const meta = (title = 'Назва') => ({ title, description: 'Опис', tags: [] as string[] });
@@ -269,5 +270,73 @@ describe('delete guards', () => {
     await expect(s.caller.assets.delete({ id: assetId! })).rejects.toMatchObject({ code: 'CONFLICT' });
     await s.caller.publish.cancel({ id: id! });
     await s.caller.assets.delete({ id: assetId! });
+  });
+});
+
+describe('publish.generateMeta', () => {
+  const genCount = async (s: Started, projectId: string) =>
+    (await s.deps.db.select().from(generations).where(eq(generations.userId, s.userId))).filter(
+      (g) =>
+        (g.params as { purpose?: string; projectId?: string }).purpose === 'publish-meta' &&
+        (g.params as { projectId?: string }).projectId === projectId,
+    );
+
+  async function ready() {
+    const s = await start();
+    await s.caller.settings.setDefault({ capability: 'text', ref: 'fake/text' });
+    const r = await makeRender(s, { title: 'Космічна подорож' });
+    return { s, ...r };
+  }
+
+  it('twice → second cached:true, one generations row', async () => {
+    const { s, projectId } = await ready();
+    const a = await s.caller.publish.generateMeta({ projectId, language: 'uk' });
+    const b = await s.caller.publish.generateMeta({ projectId, language: 'uk' });
+    expect(a.cached).toBe(false);
+    expect(b.cached).toBe(true);
+    expect(b.variants).toEqual(a.variants);
+    expect(await genCount(s, projectId)).toHaveLength(1);
+  });
+
+  it('force → new generation', async () => {
+    const { s, projectId } = await ready();
+    await s.caller.publish.generateMeta({ projectId, language: 'uk' });
+    const b = await s.caller.publish.generateMeta({ projectId, language: 'uk', force: true });
+    expect(b.cached).toBe(false);
+    expect(await genCount(s, projectId)).toHaveLength(2);
+  });
+
+  it('project without voice lines uses title and topic', async () => {
+    const { s, projectId } = await ready();
+    const r = await s.caller.publish.generateMeta({ projectId, language: 'uk' });
+    expect(r.variants.youtube.title).toContain('Космічна подорож');
+    expect(r.variants.youtube.description).not.toBe('');
+    expect(r.variants.tiktok.title).toBe('');
+  });
+
+  it('youtube variant passes validateMeta and has defaults', async () => {
+    const { s, projectId } = await ready();
+    const { variants } = await s.caller.publish.generateMeta({ projectId, language: 'uk' });
+    expect(validateMeta('youtube', variants.youtube)).toEqual([]);
+    expect(variants.youtube).toMatchObject({ privacy: 'public', madeForKids: false, categoryId: '22' });
+  });
+
+  it('records cost on the generation and ignores foreign voice lines', async () => {
+    const { s, projectId } = await ready();
+    await s.deps.db
+      .insert(voiceLines)
+      .values({ userId: s.userId, projectId, segmentId: 'gone', language: 'uk', text: 'зайвий' });
+    const r = await s.caller.publish.generateMeta({ projectId, language: 'uk' });
+    expect(r.model).toBe('fake/text');
+    expect((await genCount(s, projectId))[0]).toMatchObject({ status: 'done', capability: 'text' });
+  });
+
+  it('without default text model → VALIDATION', async () => {
+    const s = await start();
+    const { projectId } = await makeRender(s);
+    await s.deps.db.update(userSettings).set({ defaults: {} }).where(eq(userSettings.userId, s.userId));
+    await expect(s.caller.publish.generateMeta({ projectId, language: 'uk' })).rejects.toThrow(
+      'Оберіть модель для тексту в налаштуваннях',
+    );
   });
 });

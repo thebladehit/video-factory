@@ -12,6 +12,7 @@ import {
   retryPublication,
   updateMeta,
 } from './service';
+import { generateMeta } from './meta';
 import { connectUrl, createManualAccount, listAccounts, removeAccount, updateAccount } from './accounts';
 
 const accountsRouter = router({
@@ -50,6 +51,9 @@ export const publishRouter = router({
   versions: procedure
     .input(z.object({ projectId: z.string().optional() }).optional())
     .query(({ ctx, input }) => listVersions(ctx.deps, ctx.userId, input?.projectId)),
+  generateMeta: procedure
+    .input(z.object({ projectId: z.string(), language: z.string(), force: z.boolean().optional() }))
+    .mutation(({ ctx, input }) => generateMeta(ctx.deps, ctx.userId, input)),
   create: procedure
     .input(
       z.object({
