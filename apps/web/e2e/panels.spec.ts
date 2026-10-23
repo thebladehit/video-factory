@@ -66,3 +66,21 @@ test('library collapses when dragged to the edge and expands back', async ({ pag
   await dragBy(page, page.getByTestId('handle-library'), 200);
   await expect.poll(() => width(lib)).toBeGreaterThan(150);
 });
+
+test('a corrupt saved layout does not break the editor', async ({ page }) => {
+  await newProject(page, `Panels ${uid()}`);
+  await dragBy(page, page.getByTestId('handle-library'), 80);
+  await page.waitForTimeout(300);
+  const keys = await page.evaluate(() => {
+    const ks = Object.keys(localStorage).filter((k) => k.startsWith('react-resizable-panels:'));
+    for (const k of ks) localStorage.setItem(k, '{corrupt');
+    return ks;
+  });
+  expect(keys.length).toBeGreaterThan(0);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.reload();
+  await expect(page.getByTestId('timeline')).toBeVisible();
+  await expect(page.getByTestId('panel-library')).toBeVisible();
+  expect(errors).toEqual([]);
+});

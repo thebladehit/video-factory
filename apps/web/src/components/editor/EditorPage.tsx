@@ -6,6 +6,7 @@ import { useStore } from 'zustand';
 import { allClips } from '@vf/timeline';
 import { toast } from 'sonner';
 import { useTRPC, trpcClient } from '@/lib/trpc';
+import { layoutStorage } from '@/editor/layout-storage';
 import { isPresent } from '@/editor/types';
 import { useEditorSession } from '@/editor/use-editor-assets';
 import {
@@ -33,24 +34,6 @@ import { RenderMenu } from './RenderMenu';
 import { Timeline } from './Timeline';
 import { Toolbar } from './Toolbar';
 
-/** localStorage лише в try/catch: у приватному режимі чи з вимкненим сховищем розкладка просто не зберігається. */
-const safeStorage = {
-  getItem(key: string) {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-  setItem(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value);
-    } catch {
-      /* сховище недоступне */
-    }
-  },
-};
-
 // ширша зона захоплення, ніж видима лінія 1 px
 const handleX = 'mx-1.5';
 const handleY = 'my-1.5';
@@ -74,8 +57,8 @@ export function EditorPage({ project }: { project: ProjectView }) {
   const hasVoice = languages.length > 1 || (voice?.segments.length ?? 0) > 0;
   const mode = useStore(s.store, (st) => st.mode);
 
-  const horizontal = useDefaultLayout({ id: 'editor-h', storage: safeStorage });
-  const vertical = useDefaultLayout({ id: 'editor-v', storage: safeStorage });
+  const horizontal = useDefaultLayout({ id: 'editor-h', storage: layoutStorage });
+  const vertical = useDefaultLayout({ id: 'editor-v', storage: layoutStorage });
 
   const pps = useStore(s.ui, (st) => st.pxPerSec);
   const clips = allClips(s.doc);
