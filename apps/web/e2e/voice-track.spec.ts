@@ -120,8 +120,7 @@ test.describe.serial('voice track in the editor', () => {
     const before = voiceTrack(await savedDoc(page, projectId))!;
     const first = [...before.clips].sort((a, b) => a.start - b.start)[0]!;
 
-    // за лівий край: дублі довші за короткі сегменти, середину першого кліпу перекриває наступний
-    await page.locator(`[data-clip-id="${first.id}"]`).click({ position: { x: 4, y: 4 } });
+    await page.locator(`[data-clip-id="${first.id}"]`).click();
     await page.keyboard.press('Delete');
     await expect(voiceClips(page)).toHaveCount(2);
     await savedTrackWhen(page, (t) => t.clips.length === 2);

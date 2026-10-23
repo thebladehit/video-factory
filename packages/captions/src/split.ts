@@ -5,6 +5,10 @@ import { tokenize } from './align';
 export const CHUNK_JOIN = '\n\n';
 /** Мінімальна пауза між словами на межі рядків, щоб різати по ній. */
 export const MIN_GAP_MS = 80;
+/** Тиша перед першим словом рядка у вирізці (у межах середини паузи). */
+export const LEAD_IN_MS = 60;
+/** Тиша після останнього слова рядка у вирізці (у межах середини паузи). */
+export const TAIL_OUT_MS = 100;
 
 /** Групує рядки в шматки ≤ `max` символів (з роздільниками); межі лише між рядками. */
 export function chunkLines(lines: { id: string; text: string }[], max = 1500): { id: string; text: string }[][] {
@@ -63,7 +67,8 @@ function cutPoint(gapStart: number, gapEnd: number, speech: Range[], durationMs:
 }
 
 /**
- * Ріже дубль цілого шматка на рядки по паузах між словами. Рядок із ненадійною межею
+ * Ріже дубль цілого шматка на рядки по паузах між словами: середина паузи — зовнішня межа, вирізка рядка —
+ * від першого слова − LEAD_IN_MS до останнього + TAIL_OUT_MS у цих межах. Рядок із ненадійною межею
  * (слово на межі не зіставлене зі STT або пауза < MIN_GAP_MS) — `null`, і так для обох сусідів.
  */
 export function splitTake(input: {
@@ -97,16 +102,18 @@ export function splitTake(input: {
     else cuts.push(cutPoint(prev.endMs, next.startMs, speech, durationMs));
   }
 
+  // межі пауз (середини) — зовнішні; вирізка — слова рядка з полями LEAD_IN_MS / TAIL_OUT_MS усередині них
   const lines = lineTexts.map((_, i) => {
-    const start = i === 0 ? 0 : cuts[i - 1];
-    const end = i === n - 1 ? durationMs : cuts[i];
-    if (start === null || end === null || start === undefined || end === undefined) return null;
+    const outerStart = i === 0 ? 0 : cuts[i - 1];
+    const outerEnd = i === n - 1 ? durationMs : cuts[i];
+    if (outerStart === null || outerEnd === null || outerStart === undefined || outerEnd === undefined) return null;
+    const own = words.slice(offsets[i]!, offsets[i]! + counts[i]!);
+    const start = Math.min(outerEnd, Math.max(outerStart, own[0]!.startMs - LEAD_IN_MS));
+    const end = Math.max(start, Math.min(outerEnd, own.at(-1)!.endMs + TAIL_OUT_MS));
     return {
       startMs: start,
       endMs: end,
-      words: words
-        .slice(offsets[i]!, offsets[i]! + counts[i]!)
-        .map((x) => ({ ...x, startMs: x.startMs - start, endMs: x.endMs - start })),
+      words: own.map((x) => ({ ...x, startMs: x.startMs - start, endMs: x.endMs - start })),
     };
   });
   return { lines };

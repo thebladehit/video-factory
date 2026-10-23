@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createAiRegistry,
   createEnvCredentialStore,
@@ -14,7 +14,8 @@ import { assets, generations, jobs, pipelineRuns, projects, transcripts, voiceLi
 import { LOCAL_USER_ID, type PipelineSettings, type VoiceChoice, type Word } from '@vf/shared';
 import { withDelivery } from '../src/modules/voice/choice';
 import { voicedHash } from '../src/modules/voice/stale';
-import { synthesizeJob } from '../src/modules/voice/synthesize-job';
+import { releaseJobLines, synthesizeJob } from '../src/modules/voice/synthesize-job';
+import { synthesizeBatchJob } from '../src/modules/voice/synthesize-batch-job';
 import { executeAction } from '../src/modules/pipeline/run-advance';
 import { tools } from './assets-helpers';
 import { startApp } from './helpers';
@@ -174,9 +175,13 @@ describe('voice.synthesizeBatch', () => {
         expect(t!.words[0]!.startMs).toBeGreaterThanOrEqual(0);
         expect(t!.words.at(-1)!.endMs).toBeLessThanOrEqual(l.durationMs!);
       }
-      // дубль: 9 слів × 0,4 с + 3 паузи × 0,6 с
+      // дубль: 9 слів × 0,4 с + 3 паузи × 0,6 с; вирізки — слова з полями 60/100 мс, без половин пауз
       const sum = lines.reduce((acc, l) => acc + l.durationMs!, 0);
-      expect(Math.abs(sum - 5400)).toBeLessThanOrEqual(30);
+      expect(sum).toBeLessThan(5400);
+      for (const l of lines) {
+        const [t] = await s.deps.db.select().from(transcripts).where(eq(transcripts.id, l.transcriptId!));
+        expect(t!.words[0]!.startMs).toBeLessThanOrEqual(100);
+      }
 
       const gens = await s.deps.db.select().from(generations).where(eq(generations.jobId, jobIds[0]!));
       expect(gens).toHaveLength(1);
@@ -362,6 +367,39 @@ describe('voice.synthesizeBatch', () => {
       ]);
       const gens = await s.deps.db.select().from(generations).where(eq(generations.jobId, jobIds[0]!));
       expect(gens.map((g) => g.status).sort()).toEqual(['cancelled', 'done']);
+    },
+    T,
+  );
+
+  it(
+    'cancel mid-chunk after a saved line → the chunk generation is done with that file',
+    async () => {
+      const s = await startApp({}, { ai: batchAi() });
+      const projectId = await batchProject(s, ['Раз два', 'Три чотири', 'Пʼять шість']);
+      const lines = await linesOf(s, projectId);
+      const [j] = await s.deps.db
+        .insert(jobs)
+        .values({ userId: LOCAL_USER_ID, type: 'voice.synthesizeBatch', payload: {}, status: 'running' })
+        .returning();
+      const ctrl = new AbortController();
+      const ctx = { jobId: j!.id, userId: LOCAL_USER_ID, progress: async () => {}, signal: ctrl.signal };
+      // скасування, поки зберігається другий рядок шматка
+      const put = s.deps.storage.put.bind(s.deps.storage);
+      let puts = 0;
+      vi.spyOn(s.deps.storage, 'put').mockImplementation(async (key, body, opts) => {
+        if (key.endsWith('original.wav') && ++puts === 2) ctrl.abort();
+        return put(key, body, opts);
+      });
+      await expect(
+        synthesizeBatchJob(s.deps).handler({ projectId, language: 'uk', lineIds: lines.map((l) => l.id) }, ctx),
+      ).rejects.toThrow();
+      vi.restoreAllMocks();
+      await releaseJobLines(s.deps, j!.id); // як подія скасування
+      const after = await linesOf(s, projectId);
+      expect(after.map((l) => l.status)).toEqual(['ready', 'empty', 'empty']);
+      const gens = await s.deps.db.select().from(generations).where(eq(generations.jobId, j!.id));
+      expect(gens).toHaveLength(1);
+      expect(gens[0]).toMatchObject({ status: 'done', assetIds: [after[0]!.audioAssetId] });
     },
     T,
   );

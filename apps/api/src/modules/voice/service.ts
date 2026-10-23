@@ -582,7 +582,7 @@ export async function enqueueSynthesize(
   for (const lang of languages) {
     const own = todo
       .filter((r) => r.language === lang)
-      .sort((a, b) => (order.get(a.segmentId) ?? 0) - (order.get(b.segmentId) ?? 0));
+      .sort((a, b) => (order.get(a.segmentId) ?? Infinity) - (order.get(b.segmentId) ?? Infinity));
     if (!own.length) continue;
     if (own.length >= 2 && batchable.has(lang)) {
       // ≥ 2 рядків мови — один дубль на весь сценарій (спека 4.3)

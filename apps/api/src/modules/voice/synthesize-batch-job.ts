@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
-import { TTS_MAX_CHARS } from '@vf/ai';
+import { TTS_MAX_CHARS, type CatalogItem } from '@vf/ai';
 import { CHUNK_JOIN, alignWordsDetailed, chunkLines, splitTake, tokenize } from '@vf/captions';
 import { assets, projects, voiceLines } from '@vf/db';
 import type { JobContext, JobDef } from '@vf/jobs';
@@ -161,10 +161,12 @@ async function synthesizeChunk(
   const text = lines.map((l) => l.text).join(CHUNK_JOIN);
   const dir = await mkdtemp(join(tmpdir(), 'vf-tts-batch-'));
   let genId: string | null = null;
+  let entry: CatalogItem | undefined;
+  let takeMs = 0;
   const saved: string[] = [];
   const out = { ready: 0, fallback: 0, failed: 0 };
   try {
-    const entry = (await deps.ai.catalog(userId)).find((e) => e.ref === voice.model && e.capability === 'tts');
+    entry = (await deps.ai.catalog(userId)).find((e) => e.ref === voice.model && e.capability === 'tts');
     const tts = await deps.ai.tts(userId, voice.model);
     genId = await startGeneration(deps, {
       userId,
@@ -184,6 +186,7 @@ async function synthesizeChunk(
     const wavPath = join(dir, 'take.wav');
     await writeFile(wavPath, audio.bytes);
     const durationMs = (await probe(deps.media, wavPath, { signal: ctx.signal })).durationMs ?? audio.durationMs ?? 0;
+    takeMs = durationMs;
 
     // слова TTS не збігаються з токенами тексту (пунктуація окремими словами) — вирівнюємо їх як STT
     const timings =
@@ -254,12 +257,19 @@ async function synthesizeChunk(
     }
     return out;
   } catch (e) {
-    if (isCancelled(e, ctx.signal)) {
-      if (genId) await finishGeneration(deps, genId, { status: 'cancelled' });
-      throw e;
-    }
     const message = (e as Error).message;
-    if (genId) await finishGeneration(deps, genId, { status: 'failed', error: message });
+    const cancelled = isCancelled(e, ctx.signal);
+    // частину рядків уже збережено з цієї генерації — дубль оплачено й використано: done з їхніми файлами
+    if (genId && saved.length)
+      await finishGeneration(deps, genId, {
+        status: 'done',
+        entry,
+        usage: { durationSec: takeMs / 1000 },
+        assetIds: saved,
+      });
+    else if (genId)
+      await finishGeneration(deps, genId, cancelled ? { status: 'cancelled' } : { status: 'failed', error: message });
+    if (cancelled) throw e;
     // рядки шматка, що ще не готові, — failed (уже збережені лишаються ready)
     const failed = await deps.db
       .update(voiceLines)
