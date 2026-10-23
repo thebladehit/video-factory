@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyTimeline, type TimelineDoc } from '@vf/shared';
-import { addClip, setEffect, setTransition, setVolume, trimEnd, type AssetInfo } from './ops';
+import { addClip, setClipTransform, setEffect, setTransition, setVolume, trimEnd, type AssetInfo } from './ops';
 import { audioPlan, evaluate, sourceTimeAt } from './evaluate';
 
 let n = 0;
@@ -65,6 +65,13 @@ describe('evaluate', () => {
     doc = { ...doc, tracks: [...doc.tracks, { id: 'top', kind: 'video', clips: [] }] };
     doc = add(doc, img('B'), 0, 'top').doc;
     expect(evaluate(doc, 1, kinds).map((l) => l.assetId)).toEqual(['A', 'B']);
+  });
+
+  it('layer carries clip transform', () => {
+    const t = { scale: 0.5, x: 0.2, y: 0.8 };
+    expect(evaluate(one.doc, 2, kinds)[0]!.transform).toBeUndefined();
+    const doc = setClipTransform(one.doc, one.clipIds[0]!, t);
+    expect(evaluate(doc, 2, kinds)[0]!.transform).toEqual(t);
   });
 
   it('skips clips whose asset kind is unknown (missing file)', () => {

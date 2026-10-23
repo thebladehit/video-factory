@@ -1,4 +1,4 @@
-import type { TimelineDoc } from '@vf/shared';
+import type { ClipTransform, TimelineDoc } from '@vf/shared';
 import { clipFades, clipTransform, easeAlpha } from './laws';
 
 export interface Layer {
@@ -11,6 +11,7 @@ export interface Layer {
   cx: number;
   cy: number;
   fit: 'cover' | 'contain';
+  transform?: ClipTransform;
 }
 
 const EPS = 1e-9;
@@ -51,6 +52,7 @@ export function evaluate(doc: TimelineDoc, t: number, kinds: Record<string, 'ima
         cx: tr.cx.at(p),
         cy: tr.cy.at(p),
         fit: c.fit,
+        ...(c.transform ? { transform: c.transform } : {}),
       });
     }
   }

@@ -49,6 +49,16 @@ const effectSchema = z.discriminatedUnion('type', [
 const speed = z.number().finite().min(0.8).max(1.25);
 const hold = z.number().finite().min(0);
 
+/** Розмір і положення кліпа в кадрі: `scale` — множник до `fit`-прямокутника, `x`/`y` — частки кадру для центру. */
+export const clipTransformSchema = z.object({
+  scale: z.number().finite().min(0.1).max(4),
+  x: unit,
+  y: unit,
+});
+export type ClipTransform = z.infer<typeof clipTransformSchema>;
+/** Відсутній `transform` ≡ це значення. */
+export const DEFAULT_TRANSFORM: ClipTransform = { scale: 1, x: 0.5, y: 0.5 };
+
 const mediaClipSchema = z.object({
   id,
   assetId: id,
@@ -65,6 +75,8 @@ const mediaClipSchema = z.object({
   speed: speed.optional(),
   /** Секунди стоп-кадру в кінці кліпа. */
   hold: hold.optional(),
+  /** Розмір і положення в кадрі (до ефектів `zoom`/`kenburns`); відсутнє — за замовчуванням. */
+  transform: clipTransformSchema.optional(),
 });
 
 const audioClipSchema = z.object({

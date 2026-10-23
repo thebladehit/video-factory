@@ -1,8 +1,10 @@
 import {
+  DEFAULT_TRANSFORM,
   EFFECT_DEFAULTS,
   FORMATS,
   type AudioClip,
   type AudioRole,
+  type ClipTransform,
   type Effect,
   type EffectType,
   type MediaClip,
@@ -505,6 +507,20 @@ export function unlink(doc: TimelineDoc, linkId: string): TimelineDoc {
 export function setVolume(doc: TimelineDoc, clipId: string, v: number): TimelineDoc {
   const volume = Math.min(2, Math.max(0, v));
   return mapClips(doc, (c) => (c.id === clipId ? { ...c, volume } : c));
+}
+
+/** Розмір і положення відео-кліпа; `null` чи значення за замовчуванням прибирає поле. Не-відео кліп — без змін. */
+export function setClipTransform(doc: TimelineDoc, clipId: string, t: ClipTransform | null): TimelineDoc {
+  const isDefault =
+    t === null || (t.scale === DEFAULT_TRANSFORM.scale && t.x === DEFAULT_TRANSFORM.x && t.y === DEFAULT_TRANSFORM.y);
+  return mapClips(doc, (c) => {
+    if (c.id !== clipId || !('fit' in c)) return c;
+    if (!isDefault) return { ...c, transform: t };
+    if (!('transform' in c)) return c;
+    const rest = { ...c } as Record<string, unknown>;
+    delete rest.transform;
+    return rest as AnyClip;
+  });
 }
 
 export function setEffect(doc: TimelineDoc, clipId: string, effect: Effect): TimelineDoc {
