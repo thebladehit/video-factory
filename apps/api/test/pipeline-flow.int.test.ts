@@ -2,7 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createAiRegistry, createEnvCredentialStore, type AiRegistry } from '@vf/ai';
-import { assets, createDb, jobs, pipelineRuns, pipelineScenes, projects, renders, users, voiceLines } from '@vf/db';
+import {
+  assets,
+  createDb,
+  jobs,
+  pipelineRuns,
+  pipelineScenes,
+  projects,
+  renders,
+  userSettings,
+  users,
+  voiceLines,
+} from '@vf/db';
 import {
   FORMATS,
   normalizeDoc,
@@ -14,6 +25,7 @@ import {
 } from '@vf/shared';
 import { docDuration } from '@vf/timeline';
 import { appRouter, createApp, type AppDeps } from '../src/index';
+import { parseVoice } from '../src/modules/voice/service';
 import { ensureBlankAsset } from '../src/modules/pipeline/blank';
 import { mp3Bytes, pngBytes, tools, upload, waitForAsset } from './assets-helpers';
 import { testConfig } from './helpers';
@@ -190,6 +202,10 @@ describe('pipeline flow: assemble', () => {
       [...new Set([...scenes.map((sc) => sc.visualAssetId!), musicId, ...voiceIds])].sort(),
     );
     expectFullDuration(doc);
+    const baseVoiceTracks = doc.tracks.flatMap((t) => (t.kind === 'audio' && t.role === 'voiceover' ? [t] : []));
+    expect(baseVoiceTracks).toHaveLength(1);
+    expect(baseVoiceTracks[0]).toMatchObject({ language: 'uk' });
+    expect(baseVoiceTracks[0]!.clips.map((c) => c.sceneId)).toEqual(scenes.map((sc) => sc.segmentId));
 
     const voice = await s.caller.voice.get({ projectId });
     for (const seg of voice.segments)
@@ -211,18 +227,34 @@ describe('pipeline flow: assemble', () => {
     expect(en.subtitles).toBeTruthy();
   }, 90_000);
 
-  it('assembled timeline has voiceover track of base language with one clip per voiced scene', async () => {
+  it('reassemble: base voice unknown to the project and a different user default → still one voice clip per voiced scene, same durations', async () => {
+    const OTHER: VoiceChoice = { model: 'fake/tts' as ModelRef, voiceId: 'other-voice' };
     const s = await flowApp();
-    const { projectId } = await s.caller.pipeline.start(settings());
+    const { projectId } = await s.caller.pipeline.start(settings({ languages: ['uk'], voices: { uk: VOICE } }));
     await waitDone(s, projectId);
+    await waitIdle(s);
+    const before = await projectRow(s, projectId);
+    // проєкт «забуває» голос бази, а голос за замовчуванням у користувача інший
+    await s.deps.db
+      .update(projects)
+      .set({ voice: parseVoice({}) })
+      .where(eq(projects.id, projectId));
+    await s.deps.db
+      .insert(userSettings)
+      .values({ userId: s.userId, voices: { uk: OTHER } })
+      .onConflictDoUpdate({ target: userSettings.userId, set: { voices: { uk: OTHER } } });
+    await s.caller.pipeline.reassemble({ projectId, version: before.timelineVersion });
+    await expect.poll(async () => (await runOf(s, projectId)).assembledVersion, T).toBe(before.timelineVersion + 1);
+    await waitIdle(s);
     const run = await runOf(s, projectId);
     const doc = await docOf(s, projectId);
     const scenes = await scenesOf(s, run.id);
-    const tracks = doc.tracks.filter((t) => t.kind === 'audio' && t.role === 'voiceover');
+    const tracks = doc.tracks.flatMap((t) => (t.kind === 'audio' && t.role === 'voiceover' ? [t] : []));
     expect(tracks).toHaveLength(1);
-    expect(tracks[0]).toMatchObject({ language: 'uk' });
-    const clips = tracks[0]!.kind === 'audio' ? tracks[0]!.clips : [];
-    expect(clips.map((c) => c.sceneId)).toEqual(scenes.map((sc) => sc.segmentId));
+    expect(tracks[0]!.clips.map((c) => c.sceneId)).toEqual(scenes.map((sc) => sc.segmentId));
+    expect(doc.segments!.map((sg) => sg.end - sg.start)).toEqual(
+      normalizeDoc(before.timeline).segments!.map((sg) => sg.end - sg.start),
+    );
   }, 90_000);
 
   it('failed scene visual → blank asset clip, run still done; last scene blank keeps full duration', async () => {

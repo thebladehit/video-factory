@@ -1,22 +1,13 @@
 import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { estimateCost, type CatalogItem } from '@vf/ai';
 import { PRESETS, captionStyleSchema, type CaptionStyle } from '@vf/captions';
-import {
-  assets,
-  captionStyles,
-  projectLanguageTimelines,
-  projects,
-  transcripts,
-  userSettings,
-  voiceLines,
-} from '@vf/db';
+import { assets, captionStyles, projectLanguageTimelines, projects, transcripts, voiceLines } from '@vf/db';
 import {
   AppError,
   emptyTimeline,
   languageInfo,
   normalizeDoc,
   projectVoiceSchema,
-  voiceDefaultsSchema,
   type ModelRef,
   type OriginalSound,
   type ProjectVoice,
@@ -32,6 +23,9 @@ import { firstVisualAsset, ownProject, timelineAssetIds, type ProjectRow } from 
 import { pickModel, textModel, userDefaults } from './job-utils';
 import { lineState, translationStale, type LineFacts, type LineState } from './stale';
 import { collectTakes } from './takes';
+import { parseVoice, userVoiceDefaults, voiceForLanguage } from './choice';
+
+export { parseVoice, userVoiceDefaults, voiceForLanguage } from './choice';
 
 /** Максимум символів у тексті рядка */
 export const MAX_LINE_CHARS = 1500;
@@ -90,34 +84,9 @@ export interface VoiceProjectCard {
   languages: { code: string; state: 'ready' | 'stale' | 'failed' | 'partial' | 'empty' }[];
 }
 
-/** `projects.voice` має DB-замовчування `{}` — завжди проходить через схему. */
-export function parseVoice(raw: unknown): ProjectVoice {
-  const r = projectVoiceSchema.safeParse(raw);
-  return r.success ? r.data : projectVoiceSchema.parse({});
-}
-
 /** Мови проєкту; базова завжди перша серед них. */
 export const projectLanguages = (p: ProjectRow) =>
   p.languages.includes(p.baseLanguage) ? p.languages : [p.baseLanguage, ...p.languages];
-
-export async function userVoiceDefaults(deps: AppDeps, userId: string) {
-  const [row] = await deps.db
-    .select({ voices: userSettings.voices })
-    .from(userSettings)
-    .where(eq(userSettings.userId, userId));
-  const r = voiceDefaultsSchema.safeParse(row?.voices ?? {});
-  return r.success ? r.data : {};
-}
-
-/** Голос мови проєкту: вибраний у проєкті, інакше голос користувача за замовчуванням (як у `getVoice`). */
-export async function voiceForLanguage(
-  deps: AppDeps,
-  userId: string,
-  p: Pick<ProjectRow, 'voice'>,
-  language: string,
-): Promise<VoiceChoice | null> {
-  return parseVoice(p.voice).languages[language]?.voice ?? (await userVoiceDefaults(deps, userId))[language] ?? null;
-}
 
 /** Модель озвучки існує, голос є в її списку. */
 export async function assertVoiceChoice(deps: AppDeps, userId: string, voice: VoiceChoice): Promise<CatalogItem> {

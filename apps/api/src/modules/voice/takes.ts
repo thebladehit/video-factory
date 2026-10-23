@@ -5,7 +5,7 @@ import type { VoiceTake } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import type { ProjectRow } from '../projects/service';
 import { lineState } from './stale';
-import { voiceForLanguage } from './service';
+import { voiceForLanguage } from './choice';
 
 type VoiceLineRow = typeof voiceLines.$inferSelect;
 
@@ -43,8 +43,16 @@ export function collectTakes(
   return { takes, notReady };
 }
 
-/** Готові дублі базової мови проєкту за сегментами його документа (`p.timeline`). */
-export async function baseTakesOf(deps: AppDeps, userId: string, p: ProjectRow): Promise<VoiceTake[]> {
+/**
+ * Готові дублі базової мови; сегменти визначає `p.timeline`. `voice` (якщо задано) замінює пошук голосу
+ * проєкту/користувача.
+ */
+export async function baseTakesOf(
+  deps: AppDeps,
+  userId: string,
+  p: ProjectRow,
+  voice?: VoiceChoice | null,
+): Promise<VoiceTake[]> {
   const rows = await deps.db
     .select()
     .from(voiceLines)
@@ -54,6 +62,6 @@ export async function baseTakesOf(deps: AppDeps, userId: string, p: ProjectRow):
     language: p.baseLanguage,
     isBase: true,
     baseText,
-    voice: await voiceForLanguage(deps, userId, p, p.baseLanguage),
+    voice: voice !== undefined ? voice : await voiceForLanguage(deps, userId, p, p.baseLanguage),
   }).takes;
 }
