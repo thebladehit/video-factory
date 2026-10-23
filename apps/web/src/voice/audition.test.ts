@@ -44,4 +44,20 @@ describe('runQueue', () => {
     });
     expect(peak).toBe(3);
   });
+
+  it('stops taking new items once shouldContinue is false (in-flight ones finish)', async () => {
+    const started: number[] = [];
+    let open = true;
+    await runQueue(
+      [...Array(10).keys()],
+      3,
+      async (i) => {
+        started.push(i);
+        if (i === 1) open = false; // діалог закрито, поки йдуть перші запити
+        await new Promise((r) => setTimeout(r, 5));
+      },
+      { shouldContinue: () => open },
+    );
+    expect(started).toEqual([0, 1]);
+  });
 });

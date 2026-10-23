@@ -54,11 +54,20 @@ export function estimateAudition(catalog: TtsCatalogEntry[], candidates: Auditio
   return usd;
 }
 
-/** Виконує задачі, не більше `limit` одночасно; кожна задача сама обробляє свою помилку. */
-export async function runQueue<T>(items: T[], limit: number, run: (item: T) => Promise<void>): Promise<void> {
+/**
+ * Виконує задачі, не більше `limit` одночасно; кожна задача сама обробляє свою помилку.
+ * `shouldContinue` false — нові задачі не беруться (розпочаті завершуються).
+ */
+export async function runQueue<T>(
+  items: T[],
+  limit: number,
+  run: (item: T) => Promise<void>,
+  opts: { shouldContinue?: () => boolean } = {},
+): Promise<void> {
   let next = 0;
+  const go = opts.shouldContinue ?? (() => true);
   const worker = async () => {
-    while (next < items.length) await run(items[next++]!);
+    while (next < items.length && go()) await run(items[next++]!);
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }

@@ -41,3 +41,22 @@ test('make default saves model, voice and instructions', async ({ page }) => {
   const res = await page.request.get(`${new URL(page.url()).origin}/trpc/settings.get`.replace(':5174', ':3101'));
   expect(JSON.stringify(await res.json())).toContain('Тепло й повільно');
 });
+
+test('closing the dialog stops issuing paid requests', async ({ page }) => {
+  const dialog = page.getByTestId('audition-dialog');
+  const candidates = await dialog.getByTestId('audition-candidate').count();
+  // більше дублів, ніж одночасних запитів (3) — інакше нема чого зупиняти
+  expect(candidates * 2).toBeGreaterThan(3);
+  let requests = 0;
+  await page.route('**/trpc/voice.audition**', async (route) => {
+    requests++;
+    await new Promise((r) => setTimeout(r, 800));
+    await route.continue();
+  });
+  await dialog.getByRole('button', { name: 'Згенерувати' }).click();
+  await expect.poll(() => requests).toBeGreaterThan(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('audition-dialog')).toHaveCount(0);
+  await page.waitForTimeout(3000);
+  expect(requests).toBeLessThanOrEqual(3);
+});

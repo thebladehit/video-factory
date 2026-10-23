@@ -58,13 +58,32 @@ export function AuditionDialog({
   const [playing, setPlaying] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
   const alive = useRef(true);
+  /** Номер запуску: закриття діалогу чи новий запуск зупиняє чергу попереднього (платні запити не тривають) */
+  const runId = useRef(0);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      runId.current++;
       audio.current?.pause();
     };
   }, []);
+  useEffect(() => {
+    if (open) return;
+    runId.current++;
+    audio.current?.pause();
+    setPlaying(null);
+    setRunning(false);
+    // дублі, які вже не почнуться, не висять «у роботі» при наступному відкритті
+    setTakes((p) =>
+      Object.fromEntries(
+        Object.entries(p).map(([k, t]) => [
+          k,
+          Object.fromEntries(Object.entries(t).filter(([, v]) => v.state !== 'pending')),
+        ]),
+      ),
+    );
+  }, [open]);
 
   const audition = useMutation(trpc.voice.audition.mutationOptions());
   const makeDefault = useMutation(
@@ -93,25 +112,31 @@ export function AuditionDialog({
     const jobs = checked.flatMap((c) =>
       Array.from({ length: AUDITION_TAKES }, (_, i) => ({ c, take: (i + 1) as 1 | 2 })),
     );
+    const id = ++runId.current;
     setRunning(true);
     setTakes({});
     for (const j of jobs) setTake(j.c, j.take, { state: 'pending' });
-    await runQueue(jobs, AUDITION_CONCURRENCY, async ({ c, take }) => {
-      try {
-        const { url } = await audition.mutateAsync({
-          model: c.model as ModelRef,
-          voiceId: c.voiceId,
-          language,
-          text,
-          ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
-          take,
-        });
-        setTake(c, take, { state: 'ready', url });
-      } catch (e) {
-        setTake(c, take, { state: 'error', message: e instanceof Error ? e.message : 'Помилка' });
-      }
-    });
-    if (alive.current) setRunning(false);
+    await runQueue(
+      jobs,
+      AUDITION_CONCURRENCY,
+      async ({ c, take }) => {
+        try {
+          const { url } = await audition.mutateAsync({
+            model: c.model as ModelRef,
+            voiceId: c.voiceId,
+            language,
+            text,
+            ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
+            take,
+          });
+          setTake(c, take, { state: 'ready', url });
+        } catch (e) {
+          setTake(c, take, { state: 'error', message: e instanceof Error ? e.message : 'Помилка' });
+        }
+      },
+      { shouldContinue: () => alive.current && runId.current === id },
+    );
+    if (alive.current && runId.current === id) setRunning(false);
   }
 
   function play(id: string, url: string) {
