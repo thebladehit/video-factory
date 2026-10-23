@@ -31,7 +31,8 @@ export interface PublishVersion {
   language: string;
   renderId: string;
   durationMs: number | null;
-  thumbKey: string | null;
+  /** Підписане посилання на мініатюру файлу рендеру */
+  thumbUrl: string | null;
   renderedAt: Date;
 }
 
@@ -69,7 +70,12 @@ export async function listVersions(deps: AppDeps, userId: string, projectId?: st
     const key = `${r.projectId}:${r.language}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ ...r, renderedAt: new Date(r.renderedAt) });
+    const { thumbKey, ...rest } = r;
+    out.push({
+      ...rest,
+      thumbUrl: thumbKey ? await deps.storage.presignGet(thumbKey) : null,
+      renderedAt: new Date(r.renderedAt),
+    });
   }
   return out;
 }

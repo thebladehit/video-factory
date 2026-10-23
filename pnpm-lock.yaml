@@ -265,6 +265,9 @@ importers:
       '@vf/captions':
         specifier: workspace:*
         version: link:../../packages/captions
+      '@vf/publish':
+        specifier: workspace:*
+        version: link:../../packages/publish
       '@vf/shared':
         specifier: workspace:*
         version: link:../../packages/shared

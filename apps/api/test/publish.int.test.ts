@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { generations, projects, publications, userSettings, voiceLines } from '@vf/db';
+import { assets, generations, projects, publications, userSettings, voiceLines } from '@vf/db';
 import { validateMeta } from '@vf/publish';
 import { makeRender, start, type Started } from './publish-helpers';
 
@@ -54,6 +54,17 @@ describe('publish.versions', () => {
       durationMs: 12_000,
     });
     expect(await s.caller.publish.versions()).toHaveLength(2);
+  });
+
+  it('returns presigned thumbUrl for the render file (null without thumb)', async () => {
+    const s = await start();
+    const uk = await makeRender(s);
+    const en = await makeRender(s, { projectId: uk.projectId, language: 'en' });
+    await s.deps.db.update(assets).set({ thumbKey: 'test/thumb-en.jpg' }).where(eq(assets.id, en.assetId!));
+    const versions = await s.caller.publish.versions({ projectId: uk.projectId });
+    const byLang = Object.fromEntries(versions.map((v) => [v.language, v]));
+    expect(byLang.en!.thumbUrl).toContain('thumb-en.jpg');
+    expect(byLang.uk!.thumbUrl).toBeNull();
   });
 });
 

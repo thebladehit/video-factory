@@ -1,11 +1,14 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { BarChart3, Clapperboard, Images, Mic, Send, Settings } from 'lucide-react';
+import { useTRPC } from '@/lib/trpc';
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
@@ -18,6 +21,22 @@ const ITEMS = [
   { to: '/analytics', label: 'Статистика', icon: BarChart3 },
   { to: '/settings', label: 'Налаштування', icon: Settings },
 ] as const;
+
+/** Кількість ручних публікацій, що чекають на користувача; 0 — бейдж прихований */
+function PendingBadge() {
+  const trpc = useTRPC();
+  const count = useQuery({ ...trpc.publish.pendingCount.queryOptions(), refetchInterval: 60_000 });
+  if (!count.data) return null;
+  return (
+    <SidebarMenuBadge
+      data-testid="pending-badge"
+      aria-label={`Чекають на вас: ${count.data}`}
+      className="bg-primary text-primary-foreground peer-hover/menu-button:text-primary-foreground peer-data-[active=true]/menu-button:text-primary-foreground"
+    >
+      {count.data}
+    </SidebarMenuBadge>
+  );
+}
 
 export function AppSidebar() {
   return (
@@ -35,6 +54,7 @@ export function AppSidebar() {
                       <span>{label}</span>
                     </Link>
                   </SidebarMenuButton>
+                  {to === '/publications' && <PendingBadge />}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

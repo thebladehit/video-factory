@@ -17,6 +17,7 @@
     "@uppy/aws-s3": "^5.1.0",
     "@uppy/core": "^5.2.0",
     "@vf/captions": "workspace:*",
+    "@vf/publish": "workspace:*",
     "@vf/shared": "workspace:*",
     "@vf/timeline": "workspace:*",
     "class-variance-authority": "^0.7.1",
