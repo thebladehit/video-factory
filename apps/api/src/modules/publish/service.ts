@@ -29,14 +29,18 @@ export interface PublishVersion {
   projectTitle: string;
   format: VideoFormat;
   language: string;
-  renderId: string;
+  /** null — мова проєкту ще без готового фінального рендеру (публікувати не можна) */
+  renderId: string | null;
   durationMs: number | null;
   /** Підписане посилання на мініатюру файлу рендеру */
   thumbUrl: string | null;
-  renderedAt: Date;
+  renderedAt: Date | null;
 }
 
-/** Останній готовий фінальний рендер на кожну пару (проєкт, мова) */
+/**
+ * Останній готовий фінальний рендер на кожну пару (проєкт, мова), далі — мови тих самих проєктів
+ * без такого рендеру (`renderId: null`). Без `projectId` — лише проєкти з хоча б одним готовим рендером.
+ */
 export async function listVersions(deps: AppDeps, userId: string, projectId?: string): Promise<PublishVersion[]> {
   if (projectId !== undefined && !isUuid(projectId)) return [];
   const rows = await deps.db
@@ -76,6 +80,35 @@ export async function listVersions(deps: AppDeps, userId: string, projectId?: st
       thumbUrl: thumbKey ? await deps.storage.presignGet(thumbKey) : null,
       renderedAt: new Date(r.renderedAt),
     });
+  }
+
+  const ids = new Set(out.map((v) => v.projectId));
+  if (projectId) ids.add(projectId);
+  if (!ids.size) return out;
+  const owned = await deps.db
+    .select({
+      id: projects.id,
+      title: projects.title,
+      format: projects.format,
+      baseLanguage: projects.baseLanguage,
+      languages: projects.languages,
+    })
+    .from(projects)
+    .where(and(eq(projects.userId, userId), inArray(projects.id, [...ids])));
+  for (const p of owned) {
+    for (const language of new Set([p.baseLanguage, ...p.languages])) {
+      if (seen.has(`${p.id}:${language}`)) continue;
+      out.push({
+        projectId: p.id,
+        projectTitle: p.title,
+        format: p.format,
+        language,
+        renderId: null,
+        durationMs: null,
+        thumbUrl: null,
+        renderedAt: null,
+      });
+    }
   }
   return out;
 }

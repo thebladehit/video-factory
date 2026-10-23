@@ -128,11 +128,13 @@ function PublishForm({
     () => (versions.data ?? []).filter((v) => v.projectId === projectId),
     [versions.data, projectId],
   );
+  /** Мови з готовим фінальним рендером — лише їх можна вибрати */
+  const ready = useMemo(() => projectVersions.filter((v) => v.renderId !== null), [projectVersions]);
   const langs = useMemo(() => {
     if (pickedLangs) return pickedLangs;
-    const all = projectVersions.map((v) => v.language);
+    const all = ready.map((v) => v.language);
     return initialLanguage && all.includes(initialLanguage) ? [initialLanguage] : all;
-  }, [pickedLangs, projectVersions, initialLanguage]);
+  }, [pickedLangs, ready, initialLanguage]);
 
   const accounts = accountsQuery.data?.accounts ?? [];
   const accountsFor = (lang: string, pl: Platform) =>
@@ -200,7 +202,7 @@ function PublishForm({
   const submit = () => {
     const scheduledAt = when === 'at' ? new Date(at).toISOString() : undefined;
     const items = targets.map((t) => ({
-      renderId: projectVersions.find((v) => v.language === t.language)!.renderId,
+      renderId: ready.find((v) => v.language === t.language)!.renderId!,
       accountId: accountOf(t.language, t.platform)!.id,
       meta: metaOf(t.language, t.platform),
       scheduledAt,
@@ -236,24 +238,33 @@ function PublishForm({
             </SelectContent>
           </Select>
         )}
-        {projectId && !versions.isPending && !projectVersions.length && (
+        {projectId && !versions.isPending && !ready.length && (
           <p className="text-sm text-muted-foreground">Немає готового рендеру: зробіть фінальний рендер у редакторі.</p>
         )}
         {projectVersions.length > 0 && (
           <div className="flex flex-wrap gap-4">
-            {projectVersions.map((v) => (
-              <label key={v.language} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="size-4 accent-primary"
-                  data-testid="publish-language"
-                  data-language={v.language}
-                  checked={langs.includes(v.language)}
-                  onChange={(e) => toggleLang(v.language, e.target.checked)}
-                />
-                {v.projectTitle} · {v.language.toUpperCase()} · {v.format}
-              </label>
-            ))}
+            {projectVersions.map((v) => {
+              const disabled = v.renderId === null;
+              return (
+                <label
+                  key={v.language}
+                  className={`flex items-center gap-2 text-sm ${disabled ? 'text-muted-foreground' : ''}`}
+                  title={disabled ? 'Немає готового рендеру' : undefined}
+                >
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-primary"
+                    data-testid="publish-language"
+                    data-language={v.language}
+                    disabled={disabled}
+                    checked={!disabled && langs.includes(v.language)}
+                    onChange={(e) => toggleLang(v.language, e.target.checked)}
+                  />
+                  {v.projectTitle} · {v.language.toUpperCase()} · {v.format}
+                  {disabled && <span className="text-xs">· Немає готового рендеру</span>}
+                </label>
+              );
+            })}
           </div>
         )}
       </section>

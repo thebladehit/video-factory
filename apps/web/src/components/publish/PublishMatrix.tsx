@@ -73,7 +73,9 @@ export function PublishMatrix({
     return map;
   }, [list.data]);
 
-  const rows = (versions.data ?? []).filter(
+  // рядки матриці — лише мовні версії з готовим рендером; мови без нього видно в діалозі публікації
+  const rendered = (versions.data ?? []).filter((v) => v.renderId !== null);
+  const rows = rendered.filter(
     (v) =>
       !needsAction ||
       PLATFORMS.some((pl) => cells.get(cellKey(v.projectId, v.language, pl))?.some((p) => NEEDS_ACTION.has(p.status))),
@@ -97,7 +99,7 @@ export function PublishMatrix({
       </div>
       {versions.isPending || list.isPending ? (
         <Skeleton className="h-40" />
-      ) : !versions.data?.length ? (
+      ) : !rendered.length ? (
         <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
           Немає готових відео: зробіть фінальний рендер у редакторі проєкту.
         </p>

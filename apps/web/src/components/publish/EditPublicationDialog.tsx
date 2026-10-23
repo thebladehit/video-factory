@@ -31,8 +31,12 @@ function EditForm({ p, onDone }: { p: PublicationRow; onDone(): void }) {
   const trpc = useTRPC();
   const qc = useQueryClient();
   const [meta, setMeta] = useState(() => withDefaults(p.platform, p.metadata));
-  const [when, setWhen] = useState<'now' | 'at'>(p.scheduledAt ? 'at' : 'now');
-  const [at, setAt] = useState(p.scheduledAt ? toLocalInput(new Date(p.scheduledAt)) : '');
+  // минулий час (ручна публікація вже чекає на вас) — режим «Зараз»
+  const future = p.scheduledAt !== null && new Date(p.scheduledAt).getTime() > Date.now();
+  const [when, setWhen] = useState<'now' | 'at'>(future ? 'at' : 'now');
+  const [at, setAt] = useState(future ? toLocalInput(new Date(p.scheduledAt!)) : '');
+  /** Час не чіпали — не перевіряємо й не надсилаємо (сервер лишає як є) */
+  const [timeTouched, setTimeTouched] = useState(false);
   const update = useMutation(
     trpc.publish.updateMeta.mutationOptions({
       onSuccess: () => {
@@ -41,7 +45,7 @@ function EditForm({ p, onDone }: { p: PublicationRow; onDone(): void }) {
       },
     }),
   );
-  const whenError = timeError(when, at, p.platform === 'youtube');
+  const whenError = timeTouched ? timeError(when, at, p.platform === 'youtube') : null;
   const invalid = metaErrors(p.platform, meta).all.length > 0 || Boolean(whenError);
 
   return (
@@ -60,6 +64,7 @@ function EditForm({ p, onDone }: { p: PublicationRow; onDone(): void }) {
           onValueChange={(v) => {
             if (!v) return;
             setWhen(v as 'now' | 'at');
+            setTimeTouched(true);
             if (v === 'at' && !at) setAt(toLocalInput(new Date(Date.now() + 60 * 60_000)));
           }}
         >
@@ -74,7 +79,10 @@ function EditForm({ p, onDone }: { p: PublicationRow; onDone(): void }) {
             value={at}
             min={toLocalInput(new Date())}
             aria-invalid={Boolean(whenError)}
-            onChange={(e) => setAt(e.target.value)}
+            onChange={(e) => {
+              setAt(e.target.value);
+              setTimeTouched(true);
+            }}
           />
         )}
       </div>
@@ -83,7 +91,11 @@ function EditForm({ p, onDone }: { p: PublicationRow; onDone(): void }) {
         <Button
           disabled={invalid || update.isPending}
           onClick={() =>
-            update.mutate({ id: p.id, meta, scheduledAt: when === 'at' ? new Date(at).toISOString() : null })
+            update.mutate({
+              id: p.id,
+              meta,
+              scheduledAt: !timeTouched ? undefined : when === 'at' ? new Date(at).toISOString() : null,
+            })
           }
         >
           Зберегти

@@ -56,6 +56,43 @@ describe('publish.versions', () => {
     expect(await s.caller.publish.versions()).toHaveLength(2);
   });
 
+  it('lists project languages without a done final render as renderId null; create still rejects them', async () => {
+    const s = await start();
+    const uk = await makeRender(s, { title: 'Мови' });
+    await s.deps.db
+      .update(projects)
+      .set({ languages: ['uk', 'en', 'de'] })
+      .where(eq(projects.id, uk.projectId));
+    // проєкт без жодного рендеру — видно лише з явним projectId
+    const bare = await s.caller.projects.create({ title: 'Без рендеру', format: '16:9' });
+
+    const versions = await s.caller.publish.versions({ projectId: uk.projectId });
+    const byLang = Object.fromEntries(versions.map((v) => [v.language, v]));
+    expect(Object.keys(byLang).sort()).toEqual(['de', 'en', 'uk']);
+    expect(byLang.uk!.renderId).toBe(uk.renderId);
+    expect(byLang.en).toMatchObject({
+      projectId: uk.projectId,
+      projectTitle: 'Мови',
+      renderId: null,
+      durationMs: null,
+    });
+    expect(byLang.de!.renderId).toBeNull();
+
+    expect(await s.caller.publish.versions({ projectId: bare.id })).toEqual([
+      expect.objectContaining({ projectId: bare.id, language: 'uk', renderId: null, format: '16:9' }),
+    ]);
+    // без projectId — лише проєкти, що мають хоч один готовий рендер
+    const all = await s.caller.publish.versions();
+    expect(all.some((v) => v.projectId === bare.id)).toBe(false);
+    expect(all.filter((v) => v.projectId === uk.projectId)).toHaveLength(3);
+
+    const acc = await manualAccount(s);
+    const draft = await makeRender(s, { projectId: uk.projectId, language: 'en', preset: 'draft' });
+    await expect(
+      s.caller.publish.create({ items: [{ renderId: draft.renderId, accountId: acc.id, meta: tiktokMeta }] }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
   it('returns presigned thumbUrl for the render file (null without thumb)', async () => {
     const s = await start();
     const uk = await makeRender(s);
