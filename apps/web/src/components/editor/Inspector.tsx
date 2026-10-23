@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import type { EditorStore, UiStore } from '@/editor/store';
 import { isPresent, type AnyAsset } from '@/editor/types';
+import { TransformControls } from './TransformControls';
 
 /** Повзунок, зміни якого за один жест — один крок історії. */
 function Range({
@@ -275,6 +276,7 @@ function VideoClipControls({
           (v) => apply((d) => setTransition(d, clip.id, v)),
           'transition',
         )}
+      <TransformControls store={store} clipId={clip.id} />
       <Button
         variant="ghost"
         size="sm"

@@ -5,7 +5,9 @@ import { useEffect, useRef } from 'react';
 import { useStore } from 'zustand';
 import { Button } from '@/components/ui/button';
 import type { PreviewEngine } from '@/editor/preview-engine';
-import type { UiStore } from '@/editor/store';
+import type { EditorStore, UiStore } from '@/editor/store';
+import type { AnyAsset } from '@/editor/types';
+import { TransformOverlay } from './TransformOverlay';
 
 /** `m:ss.ff` — хвилини, секунди, кадри. */
 export function formatTimecode(t: number, fps: number): string {
@@ -20,11 +22,16 @@ export function PreviewPane({
   doc,
   ui,
   onTogglePlay,
+  store,
+  assets,
 }: {
   engine: PreviewEngine;
   doc: TimelineDoc;
   ui: UiStore;
   onTogglePlay(): void;
+  /** Редактор: рамка розміру й позиції вибраного кліпа (без стору — лише перегляд) */
+  store?: EditorStore;
+  assets?: Record<string, AnyAsset>;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -66,6 +73,7 @@ export function PreviewPane({
           }}
         >
           <canvas ref={canvas} data-testid="preview-canvas" className="block size-full" />
+          {store && assets && <TransformOverlay engine={engine} doc={doc} ui={ui} store={store} assets={assets} />}
         </div>
       </div>
       <div className="flex items-center gap-3">

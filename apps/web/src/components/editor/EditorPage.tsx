@@ -162,7 +162,14 @@ export function EditorPage({ project }: { project: ProjectView }) {
       )}
       <div className="grid min-h-0 grid-cols-[220px_minmax(0,1fr)_260px] gap-3">
         <LibraryPanel onAdd={addAtPlayhead} />
-        <PreviewPane engine={s.engine} doc={s.doc} ui={s.ui} onTogglePlay={s.togglePlay} />
+        <PreviewPane
+          engine={s.engine}
+          doc={s.doc}
+          ui={s.ui}
+          onTogglePlay={s.togglePlay}
+          store={s.store}
+          assets={s.assets}
+        />
         <Inspector store={s.store} ui={s.ui} assets={s.assets} />
       </div>
       {mode.kind === 'edit' && hasVoice && (
