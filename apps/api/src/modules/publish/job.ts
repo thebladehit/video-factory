@@ -82,6 +82,15 @@ export function publishJob(deps: AppDeps): JobDef<{ publicationId: string }, voi
         .returning();
       // скасовано, вже завантажено чи рядок зайняла інша задача — нічого не робимо
       if (!pub) return;
+      // відео вже на платформі: лише повертаємо до опитування обробки, без другого завантаження
+      if (pub.platformPostId) {
+        const now = new Date();
+        await deps.db
+          .update(publications)
+          .set({ status: 'processing', processingSince: now, error: null, updatedAt: now })
+          .where(and(mine, eq(publications.status, 'uploading')));
+        return;
+      }
 
       try {
         const publisher = deps.publish.publishers[pub.platform];

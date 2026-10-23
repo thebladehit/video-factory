@@ -150,7 +150,14 @@ async function pollProcessing(deps: AppDeps, r: TickRow, now: Date) {
   } else if (state.state === 'failed') {
     await deps.db
       .update(publications)
-      .set({ status: 'failed', error: `Помилка YouTube: ${state.error ?? 'обробку відхилено'}`, updatedAt: now })
+      // відео відхилене платформою: «Повторити» має завантажити його заново
+      .set({
+        status: 'failed',
+        error: `Помилка YouTube: ${state.error ?? 'обробку відхилено'}`,
+        platformPostId: null,
+        url: null,
+        updatedAt: now,
+      })
       .where(processing);
   }
 }

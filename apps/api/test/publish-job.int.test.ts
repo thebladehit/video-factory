@@ -250,4 +250,94 @@ describe('publish job', () => {
     expect(job.status).toBe('cancelled');
     expect((await pubRow(s, id!)).status).toBe('cancelled');
   });
+
+  it('poll auth error in processing → failed; reconnect + retry → processing with the same video, no second upload', async () => {
+    let uploads = 0;
+    let revoked = false;
+    const oauth: OAuthProvider = {
+      ...createFakeOAuth(),
+      refresh: async (rt) => {
+        if (revoked) throw new PublishError('auth', AUTH_LOST_MESSAGE, 'invalid_grant');
+        return createFakeOAuth().refresh(rt);
+      },
+    };
+    const publisher: Publisher = {
+      ...wrap((req, fake) => {
+        uploads++;
+        return fake.upload(req);
+      }),
+      status: async (tokens) => {
+        await tokens();
+        return { state: 'ready' };
+      },
+    };
+    const s = await start(undefined, { publish: publishDeps(publisher, oauth) });
+    const acc = await youtubeAccount(s);
+    const { renderId } = await video(s);
+    const [id] = await s.caller.publish.create({ items: [{ renderId, accountId: acc.id, meta }] });
+    const processing = await waitStatus(s, id!, 'processing');
+
+    // доступ відкликано, поки YouTube обробляв відео
+    revoked = true;
+    await s.deps.db
+      .update(socialAccounts)
+      .set({ tokenExpiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(socialAccounts.id, acc.id));
+    await publishTick(s.deps, new Date(Date.now() + 61_000));
+    const failed = await pubRow(s, id!);
+    expect(failed).toMatchObject({ status: 'failed', error: AUTH_LOST_MESSAGE });
+    expect(failed.platformPostId).toBe(processing.platformPostId);
+
+    // перепідключення
+    revoked = false;
+    await s.deps.db.update(socialAccounts).set({ status: 'active' }).where(eq(socialAccounts.id, acc.id));
+    await s.caller.publish.retry({ id: id! });
+    const again = await pubRow(s, id!);
+    expect(again).toMatchObject({
+      status: 'processing',
+      error: null,
+      platformPostId: processing.platformPostId,
+      url: processing.url,
+    });
+    expect(again.processingSince!.getTime()).toBeGreaterThan(processing.processingSince!.getTime());
+
+    await publishTick(s.deps, new Date(Date.now() + 3 * 61_000));
+    const done = await pubRow(s, id!);
+    expect(done).toMatchObject({ status: 'published', platformPostId: processing.platformPostId });
+    expect(uploads).toBe(1);
+  });
+
+  it('YouTube rejects the video → failed without post id; retry uploads again', async () => {
+    let uploads = 0;
+    let polls = 0;
+    const publisher: Publisher = {
+      ...wrap((req, fake) => {
+        uploads++;
+        return fake.upload(req);
+      }),
+      status: async () => (++polls === 1 ? { state: 'failed', error: 'duplicate' } : { state: 'ready' }),
+    };
+    const s = await start(undefined, { publish: publishDeps(publisher) });
+    const acc = await youtubeAccount(s);
+    const { renderId } = await video(s);
+    const [id] = await s.caller.publish.create({ items: [{ renderId, accountId: acc.id, meta }] });
+    const first = await waitStatus(s, id!, 'processing');
+
+    await publishTick(s.deps, new Date(Date.now() + 61_000));
+    const failed = await pubRow(s, id!);
+    expect(failed).toMatchObject({
+      status: 'failed',
+      error: 'Помилка YouTube: duplicate',
+      platformPostId: null,
+      url: null,
+    });
+
+    await s.caller.publish.retry({ id: id! });
+    const again = await until(
+      () => pubRow(s, id!),
+      (r) => r.status === 'processing' && r.platformPostId !== null,
+    );
+    expect(again.platformPostId).not.toBe(first.platformPostId);
+    expect(uploads).toBe(2);
+  });
 });

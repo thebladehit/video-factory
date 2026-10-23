@@ -335,18 +335,23 @@ export async function cancelPublication(deps: AppDeps, userId: string, id: strin
 export async function retryPublication(deps: AppDeps, userId: string, id: string) {
   const pub = await ownPublication(deps, userId, id);
   if (pub.status !== 'failed') throw new AppError('CONFLICT', 'Повторити можна лише невдалу публікацію');
+  const now = new Date();
+  // відео вже на платформі (збій під час обробки) — лише знову опитуємо, повторне завантаження дало б дубль
+  const patch: Partial<typeof publications.$inferInsert> = pub.platformPostId
+    ? { status: 'processing', processingSince: now, error: null, updatedAt: now }
+    : { status: 'scheduled', error: null, updatedAt: now };
   let row: { id: string } | undefined;
   try {
     [row] = await deps.db
       .update(publications)
-      .set({ status: 'scheduled', error: null, updatedAt: new Date() })
+      .set(patch)
       .where(and(eq(publications.id, pub.id), eq(publications.status, 'failed')))
       .returning({ id: publications.id });
   } catch (e) {
     mapUnique(e);
   }
   // upload_session зберігся: нова задача продовжить ту саму сесію
-  if (row && pub.method === 'api') await startPublish(deps, { id: pub.id, userId });
+  if (row && pub.method === 'api' && !pub.platformPostId) await startPublish(deps, { id: pub.id, userId });
 }
 
 /** Захист видалення: проєкт чи файл рендеру з живими публікаціями видаляти не можна */
