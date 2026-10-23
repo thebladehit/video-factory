@@ -51,27 +51,29 @@ export function syncVoiceTrack(
 
   const clips: AudioClip[] = [];
   const seen = new Set<string>();
+  // Шматки одного сегмента (кліп розрізали): за потреби лишається лише перший (найранніший).
+  const piecesOf = (sceneId: string) =>
+    base.clips.filter((c) => c.sceneId === sceneId).sort((a, b) => a.start - b.start);
   for (const c of base.clips) {
-    const seg = c.sceneId ? segById.get(c.sceneId) : undefined;
     if (!c.sceneId) {
       clips.push(c); // кліп без прив'язки до сегмента — користувацький
       continue;
     }
-    if (!seg) {
-      changed = true;
-      continue;
-    }
     const take = takeBy.get(c.sceneId);
-    if (!take) {
+    if (!segById.has(c.sceneId) || !take) {
       changed = true;
       continue;
     }
-    seen.add(c.sceneId);
-    if (c.assetId === take.assetId) clips.push(c);
-    else {
-      changed = true;
-      clips.push({ ...c, assetId: take.assetId, duration: durationOf(take), in: 0 });
+    const pieces = piecesOf(c.sceneId);
+    if (pieces.every((p) => p.assetId === take.assetId)) {
+      seen.add(c.sceneId);
+      clips.push(c);
+      continue;
     }
+    changed = true;
+    if (c !== pieces[0]) continue; // решта шматків зникає
+    seen.add(c.sceneId);
+    clips.push({ ...c, assetId: take.assetId, duration: durationOf(take), in: 0 });
   }
   for (const seg of segments) {
     const take = takeBy.get(seg.id);

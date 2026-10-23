@@ -98,6 +98,45 @@ describe('syncVoiceTrack', () => {
     expect(clips(sync(doc, [take('s1')]).doc)).toHaveLength(1);
     expect(restoreSegmentVoice(doc, 'uk', 's1')).toBe(doc);
   });
+  const split = (): TimelineDoc => {
+    const doc = sync(base(), [take('s1', 2)]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const c = tr.clips[0]!;
+    const a = { ...c, duration: 1, volume: 0.6 };
+    const b = { ...c, id: 'half-b', start: c.start + 1, duration: 1, in: 1 };
+    return { ...doc, tracks: [{ ...tr, clips: [a, b] }] };
+  };
+  it('split clip + new take → single clip at first piece start with new asset', () => {
+    const doc = split();
+    const first = clips(doc)[0]!;
+    const r = sync(doc, [take('s1', 3, 'fresh')]);
+    expect(clips(r.doc)).toEqual([
+      expect.objectContaining({ id: first.id, assetId: 'fresh', start: first.start, duration: 3, in: 0, volume: 0.6 }),
+    ]);
+  });
+  it('split clip + same take → unchanged (same doc)', () => {
+    const doc = split();
+    const r = sync(doc, [take('s1', 2)]);
+    expect(r.changed).toBe(false);
+    expect(r.doc).toBe(doc);
+  });
+  it('split clip + take gone → both removed', () => {
+    expect(clips(sync(split(), []).doc)).toEqual([]);
+  });
+  it('deleting one half of a split clip does not record removedSegments; deleting the last half does', () => {
+    const doc = split();
+    const [a, b] = clips(doc);
+    const d1 = deleteClips(doc, [a!.id]);
+    expect(voiceTrackOf(d1, 'uk')).not.toHaveProperty('removedSegments');
+    expect(voiceTrackOf(deleteClips(d1, [b!.id]), 'uk')!.removedSegments).toEqual(['s1']);
+  });
+  it('voiceover clip without sceneId survives sync', () => {
+    const doc = sync(base(), [take('s1')]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const own: AudioClip = { id: 'own', assetId: 'x', start: 5, duration: 1, in: 0, volume: 1 };
+    const d = { ...doc, tracks: [{ ...tr, clips: [...tr.clips, own] }] };
+    expect(clips(sync(d, [take('s1', 2, 'new')]).doc).map((c) => c.id)).toContain('own');
+  });
   it('duration is at least one frame', () => {
     const r = sync(base(), [take('s1', 0.001)]);
     expect(clips(r.doc)[0]!.duration).toBeCloseTo(1 / r.doc.fps);

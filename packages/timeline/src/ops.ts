@@ -500,8 +500,10 @@ export function deleteClips(doc: TimelineDoc, ids: string[]): TimelineDoc {
   return {
     ...out,
     tracks: out.tracks.map((t) => {
-      const add = removed.get(t.id);
-      if (!add || t.kind !== 'audio') return t;
+      if (t.kind !== 'audio') return t;
+      // Лише якщо в доріжці не лишилось жодного кліпа цього сегмента (кліп могли розрізати).
+      const add = (removed.get(t.id) ?? []).filter((sid) => !t.clips.some((c) => c.sceneId === sid));
+      if (!add.length) return t;
       return { ...t, removedSegments: [...new Set([...(t.removedSegments ?? []), ...add])] };
     }),
   };
