@@ -1,9 +1,12 @@
 import { and, asc, eq } from 'drizzle-orm';
-import { assets, pipelineRuns, pipelineScenes, projects } from '@vf/db';
+import { assets, pipelineRuns, pipelineScenes, projects, type Db } from '@vf/db';
 import { normalizeDoc } from '@vf/shared';
 import { replaceSegmentVisual, type SceneVisual } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { timelineAssetIds } from '../projects/service';
+
+/** База або відкрита транзакція (заміна йде вкладеною транзакцією — savepoint) */
+export type DbOrTx = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
 
 type AssetRow = Pick<typeof assets.$inferSelect, 'id' | 'kind' | 'status' | 'width' | 'height' | 'durationMs'>;
 
@@ -23,10 +26,11 @@ export function sceneVisualOf(a: AssetRow | undefined): SceneVisual | null {
  * Після `done`: точкова заміна кліпів сегмента сцени на її поточний візуал (`replaceSegmentVisual` на актуальній
  * версії документа під `for update`), версія +1. Індекс сцени — за `position`, як у повній збірці (чергування
  * Ken Burns). Сегмента немає (видалено в редакторі), візуал не готовий або нічого не змінилось — документ не
- * чіпається. true — документ змінено.
+ * чіпається. true — документ змінено. `db` — транзакція, у якій сцену щойно позначено `ready`: тоді «готова» сцена
+ * і нова версія документа фіксуються разом (ніхто не побачить готову сцену зі старим кліпом).
  */
-export async function applySceneVisual(deps: AppDeps, sceneId: string): Promise<boolean> {
-  return deps.db.transaction(async (tx) => {
+export async function applySceneVisual(deps: AppDeps, sceneId: string, db: DbOrTx = deps.db): Promise<boolean> {
+  return db.transaction(async (tx) => {
     const [row] = await tx
       .select({ scene: pipelineScenes, run: pipelineRuns })
       .from(pipelineScenes)

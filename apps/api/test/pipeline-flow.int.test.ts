@@ -454,6 +454,41 @@ describe('pipeline flow: after done', () => {
     expect(await runOf(s, projectId)).toMatchObject({ stage: 'done', status: 'done' });
   }, 90_000);
 
+  it('after done: a regenerated scene becomes ready only together with its swapped clip (one commit)', async () => {
+    const s = await flowApp();
+    const { projectId } = await s.caller.pipeline.start(settings({ languages: ['uk'], voices: { uk: VOICE } }));
+    await waitDone(s, projectId);
+    await waitIdle(s);
+    const run = await runOf(s, projectId);
+    const scenes = await scenesOf(s, run.id);
+    const before = await projectRow(s, projectId);
+    // утримуємо рядок проєкту: заміна кліпу чекає на замок; «ready» без неї не має стати видимим
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const isLocked = new Promise<void>((r) => (locked = r));
+    const holder = s.deps.db.transaction(async (tx) => {
+      await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for('update');
+      locked();
+      await held;
+    });
+    await isLocked;
+    try {
+      await s.caller.pipeline.regenerateScene({ sceneId: scenes[1]!.id, part: 'visual' });
+      await waitIdle(s);
+      await new Promise((r) => setTimeout(r, 1500));
+      expect((await sceneRow(s, scenes[1]!.id)).status).not.toBe('ready');
+    } finally {
+      release();
+      await holder;
+    }
+    await expect.poll(async () => (await sceneRow(s, scenes[1]!.id)).status, T).toBe('ready');
+    const sc = await sceneRow(s, scenes[1]!.id);
+    const after = await projectRow(s, projectId);
+    expect(after.timelineVersion).toBe(before.timelineVersion + 1);
+    expect(videoClips(normalizeDoc(after.timeline))[1]!.assetId).toBe(sc.visualAssetId);
+  }, 90_000);
+
   it("after done: regenerate visual replaces only that segment's clip, version +1", async () => {
     const s = await flowApp();
     const { projectId } = await s.caller.pipeline.start(settings({ languages: ['uk'], voices: { uk: VOICE } }));

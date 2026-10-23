@@ -5,7 +5,7 @@ import type { AppDeps } from '../../app';
 import { enqueueSynthesize, enqueueTranslate } from '../voice/service';
 import { advance, afterDone, type Action } from './advance';
 import { loadRun, type RunRow } from './snapshot';
-import { applySceneVisual } from './visual-swap';
+import { applySceneVisual, type DbOrTx } from './visual-swap';
 
 /** Тег файлів, створених конвеєром */
 export const PIPELINE_TAG = 'конвеєр';
@@ -59,9 +59,11 @@ async function advanceLoop(deps: AppDeps, runId: string): Promise<void> {
     let changed = false;
     for (const action of done ? afterDone(loaded.snap) : advance(loaded.snap)) {
       try {
-        const ok = await executeAction(deps, runId, action);
+        const ok =
+          done && action.type === 'sceneReady'
+            ? await readyWithVisual(deps, runId, action.sceneId)
+            : await executeAction(deps, runId, action);
         if (ok) changed = true;
-        if (ok && done && action.type === 'sceneReady') await applySceneVisual(deps, action.sceneId);
       } catch (e) {
         failure ??= e;
       }
@@ -69,6 +71,18 @@ async function advanceLoop(deps: AppDeps, runId: string): Promise<void> {
     if (!changed) break;
   }
   if (failure) throw failure;
+}
+
+/**
+ * Після done: «сцена готова» і точкова заміна її кліпу — одна транзакція, щоб готова сцена ніколи не була видна
+ * зі старим документом (клієнт/тест, що дочекався `ready`, одразу бачить нову версію).
+ */
+function readyWithVisual(deps: AppDeps, runId: string, sceneId: string): Promise<boolean> {
+  return deps.db.transaction(async (tx) => {
+    const ok = await sceneUpdate(deps, runId, sceneId, { status: 'ready', error: null }, undefined, tx);
+    if (ok) await applySceneVisual(deps, sceneId, tx);
+    return ok;
+  });
 }
 
 const now = () => new Date();
@@ -196,8 +210,9 @@ async function sceneUpdate(
   sceneId: string,
   patch: Partial<typeof pipelineScenes.$inferInsert>,
   extra?: SQL,
+  db: DbOrTx = deps.db,
 ): Promise<boolean> {
-  const rows = await deps.db
+  const rows = await db
     .update(pipelineScenes)
     .set({ ...patch, updatedAt: now() })
     .where(
