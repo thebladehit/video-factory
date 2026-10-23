@@ -140,8 +140,8 @@ export async function startRender(
   const project = await ownProject(deps, userId, input.projectId);
   if (project.timelineVersion !== input.version) throw stale();
   // озвучка базової мови синхронізується на копії: `projects.timeline` рендер не змінює
-  const takes = await baseTakesOf(deps, userId, project);
-  const doc = syncVoiceTrack(normalizeDoc(project.timeline), { language: project.baseLanguage, takes }).doc;
+  const voiceTakes = await baseTakesOf(deps, userId, project);
+  const doc = syncVoiceTrack(normalizeDoc(project.timeline), { language: project.baseLanguage, ...voiceTakes }).doc;
   await assertRenderable(deps, userId, doc);
   return enqueueRender(deps, userId, {
     projectId: project.id,

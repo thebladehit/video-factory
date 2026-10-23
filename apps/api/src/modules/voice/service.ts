@@ -75,6 +75,8 @@ export interface VoiceView {
   estimate: Record<string, { chars: number; usd: number }>;
   /** Готові дублі базової мови (для синхронізації доріжки озвучки в редакторі) */
   baseTakes: VoiceTake[];
+  /** Сегменти базової мови з дублем у роботі/застарілим — їхні кліпи синхронізація не чіпає */
+  basePending: string[];
 }
 
 export interface VoiceProjectCard {
@@ -200,7 +202,7 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
     estimate[lang] = { chars: chars[lang]!, usd: chars[lang]! ? usd : 0 };
   }
 
-  const { takes: baseTakes } = collectTakes(rows, segments, {
+  const { takes: baseTakes, pending: basePending } = collectTakes(rows, segments, {
     language: p.baseLanguage,
     isBase: true,
     baseText,
@@ -229,6 +231,7 @@ export async function getVoice(deps: AppDeps, userId: string, projectId: string)
     styles,
     estimate,
     baseTakes,
+    basePending,
   };
 }
 

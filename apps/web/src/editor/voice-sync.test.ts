@@ -17,7 +17,7 @@ const take = (segmentId: string, durationSec = 2, assetId = `v-${segmentId}`): V
   durationSec,
   transcriptId: `t-${segmentId}`,
 });
-const view = (takes: VoiceTake[]) => ({ base: 'uk', baseTakes: takes });
+const view = (takes: VoiceTake[], pending: string[] = []) => ({ base: 'uk', baseTakes: takes, basePending: pending });
 const voiceClips = (doc: TimelineDoc) => (voiceTrackOf(doc, 'uk')?.clips ?? []) as AudioClip[];
 
 describe('takesKey', () => {
@@ -109,6 +109,45 @@ describe('createVoiceSync', () => {
     sync.reset();
     sync.run(store, view([take('s1')]));
     expect(voiceClips(store.getState().doc).map((c) => c.sceneId)).toEqual(['s1']);
+  });
+
+  it('re-voice: a pending line keeps the moved clip; ready → new take at the same start and volume', () => {
+    const store = createEditorStore(base());
+    const sync = createVoiceSync();
+    sync.run(store, view([take('s1'), take('s2')]));
+    // користувач зсуває й притишує кліп s1
+    store.getState().apply((d) => ({
+      ...d,
+      tracks: d.tracks.map((t) =>
+        t.kind === 'audio'
+          ? { ...t, clips: t.clips.map((c) => (c.sceneId === 's1' ? { ...c, start: 0.9, volume: 0.4 } : c)) }
+          : t,
+      ),
+    }));
+    const past = store.temporal.getState().pastStates.length;
+    // переозвучка s1 у черзі: дубля немає, рядок pending — кліп лишається, кроку історії немає
+    sync.run(store, view([take('s2')], ['s1']));
+    expect(voiceClips(store.getState().doc).find((c) => c.sceneId === 's1')).toMatchObject({ start: 0.9, volume: 0.4 });
+    expect(store.temporal.getState().pastStates).toHaveLength(past);
+    // готово: новий дубль на тому ж місці
+    sync.run(store, view([take('s1', 1.2, 'new'), take('s2')]));
+    expect(voiceClips(store.getState().doc).find((c) => c.sceneId === 's1')).toMatchObject({
+      assetId: 'new',
+      start: 0.9,
+      volume: 0.4,
+      duration: 1.2,
+    });
+  });
+
+  it('the pending set is part of the key: pending → removed (cleared text) re-syncs with the same takes', () => {
+    const store = createEditorStore(base());
+    const sync = createVoiceSync();
+    sync.run(store, view([take('s1'), take('s2')]));
+    sync.run(store, view([take('s2')], ['s1']));
+    expect(voiceClips(store.getState().doc).map((c) => c.sceneId)).toEqual(['s1', 's2']);
+    // текст очищено: ні дубля, ні pending → кліп прибирається
+    sync.run(store, view([take('s2')]));
+    expect(voiceClips(store.getState().doc).map((c) => c.sceneId)).toEqual(['s2']);
   });
 
   it('no view → nothing happens', () => {

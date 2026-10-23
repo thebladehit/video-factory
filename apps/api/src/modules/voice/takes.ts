@@ -9,20 +9,28 @@ import { voiceForLanguage } from './choice';
 
 type VoiceLineRow = typeof voiceLines.$inferSelect;
 
+/** Готові дублі й сегменти з дублем у роботі/застарілим (`syncVoiceTrack` `takes`/`pending`). */
+export interface VoiceTakes {
+  takes: VoiceTake[];
+  pending: string[];
+}
+
 /**
  * Готові дублі мови в порядку сегментів і сегменти, чия озвучка не готова (не озвучено, застаріла,
- * помилка, у роботі) або з базовим текстом без перекладу. `rows` можуть містити рядки інших мов —
- * беруться лише рядки `language`.
+ * помилка, у роботі) або з базовим текстом без перекладу. `pending` — ті з неготових, у чийого рядка є
+ * текст і попередній дубль (переозвучка, застарів, помилка): синхронізація доріжки озвучки не чіпає їхніх кліпів.
+ * `rows` можуть містити рядки інших мов — беруться лише рядки `language`.
  */
 export function collectTakes(
   rows: VoiceLineRow[],
   segments: Segment[],
   opts: { language: string; isBase: boolean; baseText: Map<string, string>; voice: VoiceChoice | null },
-): { takes: VoiceTake[]; notReady: string[] } {
+): VoiceTakes & { notReady: string[] } {
   const { language, isBase, baseText, voice } = opts;
   const own = new Map(rows.filter((r) => r.language === language).map((r) => [r.segmentId, r]));
   const takes: VoiceTake[] = [];
   const notReady: string[] = [];
+  const pending: string[] = [];
   for (const s of segments) {
     const r = own.get(s.id);
     if (!r?.text.trim()) {
@@ -38,13 +46,16 @@ export function collectTakes(
         durationSec: r.durationMs / 1000,
         transcriptId: r.transcriptId ?? '',
       });
-    else notReady.push(s.id);
+    else {
+      notReady.push(s.id);
+      if (r.audioAssetId) pending.push(s.id);
+    }
   }
-  return { takes, notReady };
+  return { takes, pending, notReady };
 }
 
 /**
- * Готові дублі базової мови; сегменти визначає `p.timeline`. `voice` (якщо задано) замінює пошук голосу
+ * Готові дублі базової мови й сегменти з дублем у роботі; сегменти визначає `p.timeline`. `voice` (якщо задано) замінює пошук голосу
  * проєкту/користувача.
  */
 export async function baseTakesOf(
@@ -52,16 +63,17 @@ export async function baseTakesOf(
   userId: string,
   p: ProjectRow,
   voice?: VoiceChoice | null,
-): Promise<VoiceTake[]> {
+): Promise<VoiceTakes> {
   const rows = await deps.db
     .select()
     .from(voiceLines)
     .where(and(eq(voiceLines.projectId, p.id), eq(voiceLines.language, p.baseLanguage)));
   const baseText = new Map(rows.map((r) => [r.segmentId, r.text]));
-  return collectTakes(rows, normalizeDoc(p.timeline).segments ?? [], {
+  const { takes, pending } = collectTakes(rows, normalizeDoc(p.timeline).segments ?? [], {
     language: p.baseLanguage,
     isBase: true,
     baseText,
     voice: voice !== undefined ? voice : await voiceForLanguage(deps, userId, p, p.baseLanguage),
-  }).takes;
+  });
+  return { takes, pending };
 }

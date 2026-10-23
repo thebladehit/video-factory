@@ -33,13 +33,17 @@ export function restoreSegmentVoice(doc: TimelineDoc, language: string, segmentI
 
 /**
  * Приводить доріжку озвучки мови у відповідність до готових дублів (спека §3.2).
+ * `pending` — сегменти, чий рядок має попередній дубль, але зараз не готовий (у черзі, в роботі, застарів,
+ * помилка): їхні кліпи лишаються як є (без видалення, вставки й заміни) — правки користувача не губляться,
+ * а коли дубль стане готовим, заміна збереже старт, гучність і фейди.
  * Нічого не змінилось — повертає той самий документ.
  */
 export function syncVoiceTrack(
   doc: TimelineDoc,
-  opts: { language: string; takes: VoiceTake[]; newId?: () => string },
+  opts: { language: string; takes: VoiceTake[]; pending?: string[]; newId?: () => string },
 ): { doc: TimelineDoc; changed: boolean } {
   const { language, takes } = opts;
+  const pending = new Set(opts.pending ?? []);
   const newId = opts.newId ?? (() => crypto.randomUUID());
   const existing = voiceTrackOf(doc, language);
   if (!existing && !takes.length) return { doc, changed: false };
@@ -67,6 +71,11 @@ export function syncVoiceTrack(
       continue;
     }
     const take = takeBy.get(c.sceneId);
+    if (!take && pending.has(c.sceneId) && segById.has(c.sceneId)) {
+      seen.add(c.sceneId);
+      clips.push(c);
+      continue;
+    }
     if (!segById.has(c.sceneId) || !take) {
       changed = true;
       continue;

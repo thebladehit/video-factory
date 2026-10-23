@@ -137,6 +137,37 @@ describe('syncVoiceTrack', () => {
     const d = { ...doc, tracks: [{ ...tr, clips: [...tr.clips, own] }] };
     expect(clips(sync(d, [take('s1', 2, 'new')]).doc).map((c) => c.id)).toContain('own');
   });
+  it('pending segment keeps clip untouched (no remove, no insert, no replace)', () => {
+    let doc = sync(base(), [take('s1'), take('s2')]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const edited = { ...tr.clips[0]!, start: 1, volume: 0.6, fadeIn: 0.2 };
+    doc = { ...doc, tracks: [{ ...tr, clips: [edited, tr.clips[1]!] }] };
+    // s1 переозвучується (у черзі): дубля немає, але кліп лишається як є
+    const r = syncVoiceTrack(doc, { language: 'uk', takes: [take('s2')], pending: ['s1'], newId: seq() });
+    expect(r.changed).toBe(false);
+    expect(r.doc).toBe(doc);
+    // pending сегмент без кліпа — нічого не вставляється
+    const empty = syncVoiceTrack(base(), { language: 'uk', takes: [], pending: ['s1'], newId: seq() });
+    expect(empty.changed).toBe(false);
+    expect(voiceTrackOf(empty.doc, 'uk')).toBeNull();
+    // сегмент зник — кліп прибирається навіть якщо pending
+    const gone = syncVoiceTrack(
+      { ...doc, segments: [{ id: 's2', start: 3, end: 6 }] },
+      { language: 'uk', takes: [take('s2')], pending: ['s1'], newId: seq() },
+    );
+    expect(clips(gone.doc).map((c) => c.sceneId)).toEqual(['s2']);
+  });
+  it('pending then ready keeps start/volume/fades', () => {
+    let doc = sync(base(), [take('s1')]).doc;
+    const tr = voiceTrackOf(doc, 'uk')!;
+    const edited = { ...tr.clips[0]!, start: 1.2, volume: 0.5, fadeIn: 0.1, fadeOut: 0.3 };
+    doc = { ...doc, tracks: [{ ...tr, clips: [edited] }] };
+    doc = syncVoiceTrack(doc, { language: 'uk', takes: [], pending: ['s1'], newId: seq() }).doc;
+    const r = sync(doc, [take('s1', 1.4, 'new')]);
+    expect(clips(r.doc)).toEqual([
+      expect.objectContaining({ assetId: 'new', start: 1.2, volume: 0.5, fadeIn: 0.1, fadeOut: 0.3, duration: 1.4, in: 0 }),
+    ]);
+  });
   it('duration is at least one frame', () => {
     const r = sync(base(), [take('s1', 0.001)]);
     expect(clips(r.doc)[0]!.duration).toBeCloseTo(1 / r.doc.fps);

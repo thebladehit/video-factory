@@ -109,10 +109,10 @@ async function resolveLocalized(
   const baseText = new Map(rows.filter((r) => r.language === p.baseLanguage).map((r) => [r.segmentId, r.text]));
   const voice = await voiceForLanguage(deps, userId, p, language);
 
-  const { takes, notReady } = collectTakes(rows, segments, { language, isBase, baseText, voice });
+  const { takes, pending, notReady } = collectTakes(rows, segments, { language, isBase, baseText, voice });
   // доріжка озвучки базової мови в документі синхронізується на копії (як у `startRender`): переозвучені
   // рядки — нові дублі, нові — нові кліпи. Доріжки немає — поведінка без змін (підгонка, спека §3.3).
-  if (isBase && voiceTrackOf(base, language)) base = syncVoiceTrack(base, { language, takes }).doc;
+  if (isBase && voiceTrackOf(base, language)) base = syncVoiceTrack(base, { language, takes, pending }).doc;
 
   // доріжка озвучки мови в документі (базова мова) — `localize` бере її як є, навіть без готових дублів
   const ownTrack = (voiceTrackOf(base, language)?.clips.length ?? 0) > 0;

@@ -258,7 +258,7 @@ export function EditorPage({ project }: { project: ProjectView }) {
                   ui={s.ui}
                   pxPerSec={pps}
                   onSeek={s.seek}
-                  voice={voice && { language: voice.base, takes: voice.baseTakes }}
+                  voice={voice && { language: voice.base, takes: voice.baseTakes, pending: voice.basePending }}
                 />
               </div>
             )}

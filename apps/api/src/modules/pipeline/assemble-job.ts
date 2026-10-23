@@ -97,8 +97,8 @@ export function assembleJob(deps: AppDeps): JobDef<{ projectId: string }, { vers
 
       const assembled = assembleTimeline({ format: project.format, fps: project.fps, scenes: input, music });
       // доріжка озвучки базової мови: по кліпу на озвучену сцену (дублі беруться за сегментами нового документа)
-      const takes = await baseTakesOf(deps, run.userId, { ...project, timeline: assembled }, baseVoice);
-      const doc = syncVoiceTrack(assembled, { language: project.baseLanguage, takes }).doc;
+      const voiceTakes = await baseTakesOf(deps, run.userId, { ...project, timeline: assembled }, baseVoice);
+      const doc = syncVoiceTrack(assembled, { language: project.baseLanguage, ...voiceTakes }).doc;
       await ctx.progress(80, 'Зберігаю чернетку');
       if (ctx.signal.aborted) return none;
 

@@ -153,6 +153,12 @@ describe('voice.localized', () => {
     // переозвучка s1 (новий текст) і новий рядок s2 — після збереження доріжки
     await s.caller.voice.setText({ projectId, segmentId: 's1', language: 'uk', text: 'Привіт друзі' });
     await s.caller.voice.setText({ projectId, segmentId: 's2', language: 'uk', text: 'Як справи' });
+    // поки s1 застарів (є попередній дубль) — pending: його зсунутий кліп лишається зі старим дублем
+    const stale = await s.caller.voice.get({ projectId });
+    expect(stale.baseTakes).toEqual([]);
+    expect(stale.basePending).toEqual(['s1']);
+    const mid = await s.caller.voice.localized({ projectId, language: 'uk' });
+    expect(voiceClips(mid.timeline).map((c) => [c.assetId, c.start])).toEqual([[baseTakes[0]!.assetId, 1]]);
     const done = await waitJobs(s, (await s.caller.voice.synthesize({ projectId, language: 'uk' })).jobIds);
     expect(done.every((j) => j.status === 'done')).toBe(true);
     const { baseTakes: fresh } = await s.caller.voice.get({ projectId });

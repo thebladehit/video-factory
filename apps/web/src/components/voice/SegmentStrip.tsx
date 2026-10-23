@@ -44,7 +44,7 @@ export function SegmentStrip({
   pxPerSec?: number;
   onSeek?(t: number): void;
   /** Озвучка базової мови: її готові дублі (для «Повернути озвучку») */
-  voice?: { language: string; takes: VoiceTake[] };
+  voice?: { language: string; takes: VoiceTake[]; pending: string[] };
 }) {
   const doc = useStore(store, (s) => s.doc);
   const playhead = useStore(ui, (s) => s.playhead);
@@ -116,8 +116,11 @@ export function SegmentStrip({
     voice &&
     apply(
       (d) =>
-        syncVoiceTrack(restoreSegmentVoice(d, voice.language, id), { language: voice.language, takes: voice.takes })
-          .doc,
+        syncVoiceTrack(restoreSegmentVoice(d, voice.language, id), {
+          language: voice.language,
+          takes: voice.takes,
+          pending: voice.pending,
+        }).doc,
     );
 
   return (

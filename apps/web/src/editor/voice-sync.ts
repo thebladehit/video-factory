@@ -2,10 +2,14 @@ import type { TimelineDoc } from '@vf/shared';
 import { syncVoiceTrack, voiceTrackOf, type VoiceTake } from '@vf/timeline';
 import { isReadOnlyState, type EditorStore } from './store';
 
-/** Що потрібно синхронізації з `voice.get`: базова мова й її готові незастарілі дублі. */
+/**
+ * Що потрібно синхронізації з `voice.get`: базова мова, її готові незастарілі дублі й сегменти з дублем
+ * у роботі/застарілим (`basePending` — їхні кліпи не чіпаються).
+ */
 export interface VoiceSyncView {
   base: string;
   baseTakes: VoiceTake[];
+  basePending: string[];
 }
 
 /** Стабільний ключ набору дублів: `segmentId:assetId` у порядку сегментів (так їх віддає сервер). */
@@ -25,10 +29,11 @@ export function createVoiceSync() {
       const s = store.getState();
       // відкритий жест перебудовує документ зі стану до жесту — синхронізація загубилась би; повтор — після жесту
       if (s.mode.kind !== 'edit' || s.locked || s.gesturing || isReadOnlyState(s)) return;
-      const key = `${view.base}#${takesKey(view.baseTakes)}`;
+      // pending — частина ключа: перехід pending → ready/очищено синхронізується знову
+      const key = `${view.base}#${takesKey(view.baseTakes)}#${view.basePending.join('|')}`;
       if (key === lastKey) return;
       lastKey = key;
-      s.apply((d) => syncVoiceTrack(d, { language: view.base, takes: view.baseTakes }).doc);
+      s.apply((d) => syncVoiceTrack(d, { language: view.base, takes: view.baseTakes, pending: view.basePending }).doc);
     },
     /** Документ замінено серверним (перезавантаження після конфлікту): той самий набір дублів застосовується знову */
     reset() {
