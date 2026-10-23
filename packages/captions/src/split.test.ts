@@ -8,7 +8,10 @@ describe('chunkLines', () => {
   it('keeps order and splits only between lines at 1500', () => {
     const lines = ['a', 'b', 'c', 'd'].map((id) => ({ id, text: id.repeat(700) }));
     const r = chunkLines(lines);
-    expect(r.map((c) => c.map((l) => l.id))).toEqual([['a', 'b'], ['c', 'd']]);
+    expect(r.map((c) => c.map((l) => l.id))).toEqual([
+      ['a', 'b'],
+      ['c', 'd'],
+    ]);
     expect(CHUNK_JOIN).toBe('\n\n');
     for (const c of r) expect(c.map((l) => l.text).join(CHUNK_JOIN).length).toBeLessThanOrEqual(1500);
   });
@@ -23,7 +26,13 @@ describe('chunkLines', () => {
 });
 
 describe('splitTake', () => {
-  const words = [w('Раз', 0, 300), w('два', 300, 600), w('три', 1000, 1300), w('чотири', 1300, 1600), w('п’ять', 2200, 2500)];
+  const words = [
+    w('Раз', 0, 300),
+    w('два', 300, 600),
+    w('три', 1000, 1300),
+    w('чотири', 1300, 1600),
+    w('п’ять', 2200, 2500),
+  ];
   const lineTexts = ['Раз два', 'три чотири', 'п’ять'];
   const speech = [
     { startMs: 0, endMs: 600 },
