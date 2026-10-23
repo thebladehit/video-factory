@@ -1028,7 +1028,12 @@ describe('pipeline.scene and event listener', () => {
     const audio = await insertAsset(s);
     await s.deps.db
       .update(voiceLines)
-      .set({ status: 'ready', audioAssetId: audio, voice: VOICE, voicedHash: voicedHash(old!.text, withDelivery(VOICE, 'uk')) })
+      .set({
+        status: 'ready',
+        audioAssetId: audio,
+        voice: VOICE,
+        voicedHash: voicedHash(old!.text, withDelivery(VOICE, 'uk')),
+      })
       .where(eq(voiceLines.id, old!.id));
     expect((await getVoice(s.deps, LOCAL_USER_ID, projectId)).lines[target.segmentId]!.uk!.state).toBe('ready');
 

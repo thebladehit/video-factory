@@ -770,7 +770,11 @@ describe('voice.synthesize', () => {
     release();
     await waitJobs(s, jobIds);
     const line = await lineOf(s, projectId, 's1', 'uk');
-    expect(line).toMatchObject({ status: 'ready', text: 'Новий текст', voicedHash: voicedHash('Старий текст', withDelivery(VOICE, 'uk')) });
+    expect(line).toMatchObject({
+      status: 'ready',
+      text: 'Новий текст',
+      voicedHash: voicedHash('Старий текст', withDelivery(VOICE, 'uk')),
+    });
     expect((await s.caller.voice.get({ projectId })).lines.s1!.uk!.state).toBe('stale');
     // «Озвучити все» бере застарілий рядок знову
     await waitJobs(s, (await s.caller.voice.synthesize({ projectId })).jobIds);

@@ -1,12 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { userSettings } from '@vf/db';
-import {
-  deliveryFor,
-  projectVoiceSchema,
-  voiceDefaultsSchema,
-  type ProjectVoice,
-  type VoiceChoice,
-} from '@vf/shared';
+import { deliveryFor, projectVoiceSchema, voiceDefaultsSchema, type ProjectVoice, type VoiceChoice } from '@vf/shared';
 import type { AppDeps } from '../../app';
 import type { ProjectRow } from '../projects/service';
 
