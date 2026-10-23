@@ -78,7 +78,9 @@ export const settingsRouter = router({
     .input(
       z.object({
         language: z.string(),
-        voice: z.object({ model: z.string(), voiceId: z.string() }).nullable(),
+        voice: z
+          .object({ model: z.string(), voiceId: z.string(), instructions: z.string().max(1000).optional() })
+          .nullable(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

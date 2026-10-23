@@ -41,7 +41,7 @@ export type ProjectVoice = z.output<typeof projectVoiceSchema>;
 
 export const voiceDefaultsSchema = z.record(
   z.string(),
-  z.object({ model: modelRefSchema, voiceId: z.string().min(1) }),
+  z.object({ model: modelRefSchema, voiceId: z.string().min(1), instructions: z.string().max(1000).optional() }),
 );
 export type VoiceDefaults = z.output<typeof voiceDefaultsSchema>;
 

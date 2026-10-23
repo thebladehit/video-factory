@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LANGUAGES } from '@vf/shared';
+import { useState } from 'react';
 import { toast } from 'sonner';
+import { AuditionDialog } from '@/components/settings/AuditionDialog';
+import { Button } from '@/components/ui/button';
 import { VoicePicker } from '@/components/voice/VoicePicker';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useTRPC } from '@/lib/trpc';
@@ -17,6 +20,7 @@ export function DefaultVoices() {
     }),
   );
   const voices = settings.data?.voices ?? {};
+  const [comparing, setComparing] = useState<string | null>(null);
 
   return (
     <Card data-testid="default-voices">
@@ -29,9 +33,14 @@ export function DefaultVoices() {
         </p>
         {LANGUAGES.map((l) => (
           <div key={l.code} className="grid gap-1" data-testid={`default-voice-${l.code}`}>
-            <span className="text-sm font-medium">
-              {l.name} ({l.code.toUpperCase()})
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">
+                {l.name} ({l.code.toUpperCase()})
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => setComparing(l.code)}>
+                Порівняти голоси
+              </Button>
+            </div>
             <VoicePicker
               idPrefix={`dv-${l.code}`}
               language={l.code}
@@ -44,6 +53,9 @@ export function DefaultVoices() {
             />
           </div>
         ))}
+        {comparing && (
+          <AuditionDialog key={comparing} language={comparing} open onOpenChange={(o) => !o && setComparing(null)} />
+        )}
       </CardContent>
     </Card>
   );

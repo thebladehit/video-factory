@@ -556,6 +556,37 @@ describe('voice.preview', () => {
   });
 });
 
+describe('voice.audition', () => {
+  const base = { model: 'fake/tts', voiceId: 'fake-voice', language: 'en' } as const;
+
+  it('audition caches by text and take: second call does not hit TTS', async () => {
+    const s = await startApp();
+    const tts = await s.deps.ai.tts(LOCAL_USER_ID, 'fake/tts');
+    const spy = vi.spyOn(tts, 'synthesize');
+    try {
+      const text = `Hello audition ${Date.now()}`;
+      const a = await s.caller.voice.audition({ ...base, text, take: 1 });
+      await s.caller.voice.audition({ ...base, text, take: 1 });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(a.url).toContain('voice-samples/audition');
+      await s.caller.voice.audition({ ...base, text, take: 2 });
+      expect(spy).toHaveBeenCalledTimes(2);
+      await s.caller.voice.audition({ ...base, text: `${text}!`, take: 1 });
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('audition rejects text of 301 chars and unavailable model', async () => {
+    const s = await startApp();
+    await expect(s.caller.voice.audition({ ...base, text: 'x'.repeat(301), take: 1 })).rejects.toBeDefined();
+    await expect(s.caller.voice.audition({ ...base, model: 'nope/tts', text: 'hi', take: 1 })).rejects.toMatchObject({
+      cause: { code: 'MODEL_NOT_FOUND' },
+    });
+  });
+});
+
 describe('voice isolation', () => {
   it("another user's project → NOT_FOUND on every procedure", async () => {
     const s = await startApp();

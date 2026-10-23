@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { estimateCost, type CatalogItem } from '@vf/ai';
 import { PRESETS, captionStyleSchema, type CaptionStyle } from '@vf/captions';
 import { assets, captionStyles, projectLanguageTimelines, projects, transcripts, voiceLines } from '@vf/db';
 import {
   AppError,
+  deliveryFor,
   emptyTimeline,
   languageInfo,
   normalizeDoc,
@@ -492,16 +494,57 @@ export async function previewVoice(
   languageInfo(input.language);
   await assertVoiceChoice(deps, userId, { model: input.model, voiceId: input.voiceId });
   const key = `u/${userId}/voice-samples/${input.model}/${input.voiceId}/${input.language}.wav`;
+  return cachedSample(deps, userId, key, input.model, {
+    text: SAMPLE_PHRASES[input.language]!,
+    voiceId: input.voiceId,
+    language: input.language,
+  });
+}
+
+/** Кеш зразка в сховищі за ключем: синтез лише коли файлу немає; повертає підписаний URL. */
+async function cachedSample(
+  deps: AppDeps,
+  userId: string,
+  key: string,
+  model: ModelRef,
+  req: { text: string; voiceId: string; language: string; instructions?: string },
+): Promise<{ url: string }> {
   if (!(await deps.storage.head(key))) {
-    const tts = await deps.ai.tts(userId, input.model);
-    const { audio } = await tts.synthesize({
-      text: SAMPLE_PHRASES[input.language]!,
-      voiceId: input.voiceId,
-      language: input.language,
-    });
+    const tts = await deps.ai.tts(userId, model);
+    const { audio } = await tts.synthesize(req);
     await deps.storage.put(key, audio.bytes, { contentType: audio.mime });
   }
   return { url: await deps.storage.presignGet(key, { expiresSec: URL_TTL_SEC }) };
+}
+
+/** Максимум символів фрази порівняння голосів */
+export const AUDITION_MAX_CHARS = 300;
+
+/**
+ * Порівняння голосів: фраза користувача, дубль 1 або 2 (кожен синтезується окремо — звучання різне);
+ * кеш за (модель, голос, мова, текст, інструкції) і номером дубля.
+ */
+export async function audition(
+  deps: AppDeps,
+  userId: string,
+  input: { model: ModelRef; voiceId: string; language: string; text: string; instructions?: string; take: 1 | 2 },
+): Promise<{ url: string }> {
+  languageInfo(input.language);
+  const text = input.text.trim();
+  if (!text || text.length > AUDITION_MAX_CHARS)
+    throw new AppError('VALIDATION', `Фраза має містити від 1 до ${AUDITION_MAX_CHARS} символів`);
+  await assertVoiceChoice(deps, userId, { model: input.model, voiceId: input.voiceId });
+  const instructions = input.instructions?.trim() ?? '';
+  const hash = createHash('sha256')
+    .update([input.model, input.voiceId, input.language, text, instructions].join('|'))
+    .digest('hex');
+  const key = `u/${userId}/voice-samples/audition/${hash}/${input.take}.wav`;
+  return cachedSample(deps, userId, key, input.model, {
+    text,
+    voiceId: input.voiceId,
+    language: input.language,
+    instructions: instructions || deliveryFor(input.language),
+  });
 }
 
 /**
