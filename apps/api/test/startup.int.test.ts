@@ -38,6 +38,30 @@ describe('startup', () => {
       expect((e as Error).message).toContain('S3_BUCKET');
     }
   });
+
+  it('loadConfig: YOUTUBE_CLIENT_ID without a valid 32-byte TOKEN_ENCRYPTION_KEY → VALIDATION', () => {
+    const base = {
+      DATABASE_URL: 'postgres://x',
+      S3_ENDPOINT: 'http://s3',
+      S3_ACCESS_KEY_ID: 'a',
+      S3_SECRET_ACCESS_KEY: 'b',
+      S3_BUCKET: 'c',
+      YOUTUBE_CLIENT_ID: 'id',
+      YOUTUBE_CLIENT_SECRET: 'secret',
+    };
+    const key = Buffer.alloc(32, 1).toString('base64');
+    expect(() => loadConfig(base)).toThrow(expect.objectContaining({ code: 'VALIDATION' }));
+    expect(() => loadConfig({ ...base, TOKEN_ENCRYPTION_KEY: Buffer.alloc(16).toString('base64') })).toThrow(
+      expect.objectContaining({ code: 'VALIDATION' }),
+    );
+    const cfg = loadConfig({ ...base, TOKEN_ENCRYPTION_KEY: key, YOUTUBE_API_AUDITED: '1', PUBLISH_FAKE: '1' });
+    expect(cfg.tokenKey).toEqual(Buffer.alloc(32, 1));
+    expect(cfg).toMatchObject({
+      youtube: { clientId: 'id', clientSecret: 'secret', audited: true },
+      publishFake: true,
+    });
+    expect(loadConfig({ ...base, YOUTUBE_CLIENT_ID: '' })).toMatchObject({ tokenKey: undefined, publishFake: false });
+  });
 });
 
 describe('job recovery', () => {
