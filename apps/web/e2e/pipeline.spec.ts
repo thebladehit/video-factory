@@ -48,6 +48,16 @@ async function openForm(page: Page, opts: { topic: string; format: '9:16' | '16:
   return dialog;
 }
 
+test('voice sample in the form does not start the pipeline', async ({ page }) => {
+  const dialog = await openForm(page, { topic: `Зразок ${uid()}`, format: '9:16', sec: 15, langs: ['uk', 'en'] });
+  for (const code of ['uk', 'en']) {
+    await dialog.getByTestId(`pipeline-voice-${code}`).getByTestId('voice-sample').click();
+    await page.waitForTimeout(300);
+    await expect(dialog).toBeVisible();
+    await expect(page).not.toHaveURL(/\/pipeline/);
+  }
+});
+
 test('topic to draft, 9:16, uk+en', async ({ page }) => {
   test.setTimeout(240_000);
   const topic = `Конвеєр ${uid()} про місто вночі`;

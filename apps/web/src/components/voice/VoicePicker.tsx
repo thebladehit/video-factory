@@ -132,6 +132,7 @@ export function VoicePicker({
           </SelectContent>
         </Select>
         <Button
+          type="button"
           size="icon"
           variant="outline"
           aria-label={playing ? 'Зупинити зразок' : 'Прослухати зразок голосу'}
@@ -144,7 +145,7 @@ export function VoicePicker({
         </Button>
         {!value && fallback && <span className="text-xs text-muted-foreground">за замовчуванням</span>}
         {value && fallback !== undefined && (
-          <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
+          <Button type="button" size="sm" variant="ghost" onClick={() => onChange(null)}>
             Скинути
           </Button>
         )}
@@ -166,6 +167,7 @@ export function VoicePicker({
             onBlur={saveInstructions}
           />
           <Button
+            type="button"
             size="sm"
             variant="ghost"
             className="justify-self-start"
