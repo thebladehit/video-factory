@@ -2,21 +2,9 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { publications, renders, socialAccounts, users } from '@vf/db';
 import { createFakeOAuth, PublishError } from '@vf/publish';
-import type { AppConfig, AppDeps } from '../src/index';
 import { appRouter } from '../src/index';
 import { accessTokenFor } from '../src/modules/publish/accounts';
-import { startApp } from './helpers';
-
-type Started = Awaited<ReturnType<typeof startApp>>;
-
-/** Окремий користувач на тест: спільна тестова БД не заважає підрахункам акаунтів */
-async function start(patch: Partial<AppConfig> = { publishFake: true }, overrides: Partial<AppDeps> = {}) {
-  let userId = '';
-  const s = await startApp(patch, { auth: { authenticate: async () => ({ userId }) }, ...overrides });
-  const [u] = await s.deps.db.insert(users).values({ name: 'Публікація' }).returning();
-  userId = u!.id;
-  return { ...s, userId, caller: appRouter.createCaller({ userId, deps: s.deps }) };
-}
+import { start, type Started } from './publish-helpers';
 
 const TOKEN_FIELDS = ['tokensEnc', 'tokenExpiresAt', 'scopes', 'accessToken', 'refreshToken'];
 

@@ -1,6 +1,17 @@
 import { z } from 'zod';
-import { PLATFORMS } from '@vf/shared';
+import { PLATFORMS, PUBLICATION_STATUSES, publicationMetaSchema } from '@vf/shared';
 import { procedure, router } from '../../trpc';
+import {
+  cancelPublication,
+  createPublications,
+  downloadUrl,
+  listPublications,
+  listVersions,
+  markPublished,
+  pendingCount,
+  retryPublication,
+  updateMeta,
+} from './service';
 import { connectUrl, createManualAccount, listAccounts, removeAccount, updateAccount } from './accounts';
 
 const accountsRouter = router({
@@ -36,4 +47,40 @@ const accountsRouter = router({
 
 export const publishRouter = router({
   accounts: accountsRouter,
+  versions: procedure
+    .input(z.object({ projectId: z.string().optional() }).optional())
+    .query(({ ctx, input }) => listVersions(ctx.deps, ctx.userId, input?.projectId)),
+  create: procedure
+    .input(
+      z.object({
+        items: z.array(
+          z.object({
+            renderId: z.string(),
+            accountId: z.string(),
+            meta: publicationMetaSchema,
+            scheduledAt: z.string().optional(),
+          }),
+        ),
+      }),
+    )
+    .mutation(({ ctx, input }) => createPublications(ctx.deps, ctx.userId, input.items)),
+  list: procedure
+    .input(z.object({ projectId: z.string().optional(), status: z.enum(PUBLICATION_STATUSES).optional() }).optional())
+    .query(({ ctx, input }) => listPublications(ctx.deps, ctx.userId, input ?? {})),
+  pendingCount: procedure.query(({ ctx }) => pendingCount(ctx.deps, ctx.userId)),
+  downloadUrl: procedure
+    .input(z.object({ id: z.string() }))
+    .mutation(({ ctx, input }) => downloadUrl(ctx.deps, ctx.userId, input.id)),
+  markPublished: procedure
+    .input(z.object({ id: z.string(), url: z.string() }))
+    .mutation(({ ctx, input }) => markPublished(ctx.deps, ctx.userId, input)),
+  updateMeta: procedure
+    .input(z.object({ id: z.string(), meta: publicationMetaSchema, scheduledAt: z.string().nullable().optional() }))
+    .mutation(({ ctx, input }) => updateMeta(ctx.deps, ctx.userId, input)),
+  cancel: procedure
+    .input(z.object({ id: z.string() }))
+    .mutation(({ ctx, input }) => cancelPublication(ctx.deps, ctx.userId, input.id)),
+  retry: procedure
+    .input(z.object({ id: z.string() }))
+    .mutation(({ ctx, input }) => retryPublication(ctx.deps, ctx.userId, input.id)),
 });
