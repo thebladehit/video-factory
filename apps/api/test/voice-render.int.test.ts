@@ -73,7 +73,12 @@ async function dubbed(s: Started, o: { uk?: boolean } = {}) {
   return { projectId, version, base, video };
 }
 
-/** Ціль сегмента s2 мови en (пакетний дубль): 0,15 + 2,46 + 0,35 с, округлено до кадру */
+/**
+ * Цілі сегментів мови en (пакетний дубль ріжеться по тиші: мовлення − 0,08 с … + 0,15 с, не далі середини паузи):
+ * s1 — 3 слова 0…1,2 с, пауза 1,2…1,8 → вирізка 0…1,35 → 0,15 + 1,35 + 0,35 = 1,85 → кадр 56/30;
+ * s2 — 6 слів 1,8…4,2 с → вирізка 1,72…4,2 → 0,15 + 2,48 + 0,35 = 2,98 → кадр 89/30
+ */
+const EN_S1 = 56 / 30;
 const EN_S2 = 89 / 30;
 
 describe('voice.localized', () => {
@@ -81,18 +86,17 @@ describe('voice.localized', () => {
     const s = await startApp();
     const { projectId } = await dubbed(s);
     const l = await s.caller.voice.localized({ projectId, language: 'en' });
-    // en озвучено одним дублем: s1 — 3 слова (1,2 с) + хвіст 0,1 с → ціль 0,15 + 1,3 + 0,35 = 1,8;
-    // s2 — вступ 0,06 с + 6 слів (2,4 с) → 0,15 + 2,46 + 0,35 = 2,96 → кадр 89/30
+    // en озвучено одним дублем — цілі EN_S1 і EN_S2 (див. вище)
     expect(l.fits.map((f) => f.segmentId)).toEqual(['s1', 's2']);
-    expect(l.fits[0]!.target).toBeCloseTo(1.8, 6);
+    expect(l.fits[0]!.target).toBeCloseTo(EN_S1, 6);
     expect(l.fits[1]!.target).toBeCloseTo(EN_S2, 6);
     // сегменти покривають усе відео — проміжків немає
-    expect(docDuration(l.timeline)).toBeCloseTo(1.8 + EN_S2, 6);
+    expect(docDuration(l.timeline)).toBeCloseTo(EN_S1 + EN_S2, 6);
     const voice = voiceClips(l.timeline);
     expect(voice).toHaveLength(2);
     // старт = початок сегмента мови + LEAD (0,15 с), округлений до кадру
     expect(Math.abs(voice[0]!.start - 0.15)).toBeLessThanOrEqual(FRAME / 2 + 1e-6);
-    expect(Math.abs(voice[1]!.start - (1.8 + 0.15))).toBeLessThanOrEqual(FRAME / 2 + 1e-6);
+    expect(Math.abs(voice[1]!.start - (EN_S1 + 0.15))).toBeLessThanOrEqual(FRAME / 2 + 1e-6);
     for (const c of voice) expect(l.assets[c.assetId]).toMatchObject({ missing: false, kind: 'audio' });
     expect(l.subtitles).toMatch(/\[Events\]/);
     expect(l.subtitles).toMatch(/hello/i);
@@ -228,7 +232,7 @@ describe('renders of a language', () => {
     const [r] = await s.deps.db.select().from(renders).where(eq(renders.id, renderId));
     // неготовий сегмент — без голосу, темп 1
     expect(voiceClips(r!.timelineSnapshot)).toHaveLength(1);
-    expect(docDuration(r!.timelineSnapshot)).toBeCloseTo(1.8 + 2, 6);
+    expect(docDuration(r!.timelineSnapshot)).toBeCloseTo(EN_S1 + 2, 6);
   }, 60_000);
 
   it('the render job of a language → MP4 of the localized duration, language and subtitles stored', async () => {
@@ -252,9 +256,9 @@ describe('renders of a language', () => {
     const { renderIds } = await s.caller.renders.startAll({ projectId, preset: 'draft', languages: ['uk', 'en'] });
     expect(renderIds).toHaveLength(2);
     const [uk, en] = [await waitRender(s, renderIds[0]!), await waitRender(s, renderIds[1]!)];
-    // uk: s1 0,15 + 0,4 + 0,35 = 0,9 (×1,25 обрізає хвіст), s2 без тексту — 2 с; en: 1,8 + 89/30
+    // uk: s1 0,15 + 0,4 + 0,35 = 0,9 (×1,25 обрізає хвіст), s2 без тексту — 2 с; en: EN_S1 + EN_S2
     expect(Math.abs(uk.durationMs! - 2900)).toBeLessThanOrEqual(FRAME * 1000 + 1);
-    expect(Math.abs(en.durationMs! - (1.8 + EN_S2) * 1000)).toBeLessThanOrEqual(FRAME * 1000 + 1);
+    expect(Math.abs(en.durationMs! - (EN_S1 + EN_S2) * 1000)).toBeLessThanOrEqual(FRAME * 1000 + 1);
     const rows = await s.deps.db.select().from(renders).where(inArray(renders.id, renderIds));
     expect(rows.map((r) => r.language).sort()).toEqual(['en', 'uk']);
   }, 240_000);
@@ -343,7 +347,7 @@ describe('separated languages', () => {
     expect((await s.caller.projects.get({ id: projectId })).version).toBe(version);
 
     const l2 = await s.caller.voice.localized({ projectId, language: 'en' });
-    expect(docDuration(l2.timeline)).toBeCloseTo(1.8, 6);
+    expect(docDuration(l2.timeline)).toBeCloseTo(EN_S1, 6);
     expect(l2.subtitles).toMatch(/hello/i);
     expect(l2.subtitles).not.toMatch(/six/i);
 
@@ -353,7 +357,7 @@ describe('separated languages', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     const { renderId } = await s.caller.renders.start({ projectId, preset: 'draft', version: 2, language: 'en' });
     const [r] = await s.deps.db.select().from(renders).where(eq(renders.id, renderId));
-    expect(docDuration(r!.timelineSnapshot)).toBeCloseTo(1.8, 6);
+    expect(docDuration(r!.timelineSnapshot)).toBeCloseTo(EN_S1, 6);
     expect(r!.subtitles).toMatch(/hello/i);
     expect(r!.subtitles).not.toMatch(/six/i);
 
@@ -362,7 +366,7 @@ describe('separated languages', () => {
       code: 'NOT_FOUND',
     });
     const l3 = await s.caller.voice.localized({ projectId, language: 'en' });
-    expect(docDuration(l3.timeline)).toBeCloseTo(1.8 + EN_S2, 6);
+    expect(docDuration(l3.timeline)).toBeCloseTo(EN_S1 + EN_S2, 6);
   }, 60_000);
 
   it('separate twice keeps the existing document; foreign user → NOT_FOUND', async () => {
@@ -393,16 +397,16 @@ describe('Review Focus 4: a voiced segment deleted, then restored', () => {
 
     const l = await s.caller.voice.localized({ projectId, language: 'en' });
     expect(voiceClips(l.timeline)).toHaveLength(1);
-    expect(docDuration(l.timeline)).toBeCloseTo(1.8 + 2, 6);
+    expect(docDuration(l.timeline)).toBeCloseTo(EN_S1 + 2, 6);
     const { renderId } = await s.caller.renders.start({ projectId, preset: 'draft', version: v2, language: 'en' });
     const a = await waitRender(s, renderId);
-    expect(Math.abs(a.durationMs! - 3800)).toBeLessThanOrEqual(FRAME * 1000 + 1);
+    expect(Math.abs(a.durationMs! - (EN_S1 + 2) * 1000)).toBeLessThanOrEqual(FRAME * 1000 + 1);
 
     // undo: зберегти старий документ
     await s.caller.projects.save({ id: projectId, timeline: base, baseVersion: v2 });
     const back = await s.caller.voice.localized({ projectId, language: 'en' });
     expect(voiceClips(back.timeline)).toHaveLength(2);
-    expect(docDuration(back.timeline)).toBeCloseTo(1.8 + EN_S2, 6);
+    expect(docDuration(back.timeline)).toBeCloseTo(EN_S1 + EN_S2, 6);
     expect(back.subtitles).toMatch(/six/i);
   }, 150_000);
 });

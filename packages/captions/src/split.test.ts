@@ -40,40 +40,69 @@ describe('splitTake', () => {
     { startMs: 2200, endMs: 2500 },
   ];
 
-  it('three lines with clear pauses → ranges trimmed to words inside 0..durationMs', () => {
+  it('three lines with clear pauses → ranges follow the real speech with lead-in/tail margins', () => {
+    expect([LEAD_IN_MS, TAIL_OUT_MS]).toEqual([80, 150]);
     const { lines } = splitTake({ words, matched: T(5), lineTexts, speech, durationMs: 2700 });
     expect(lines.map((l) => l && [l.startMs, l.endMs])).toEqual([
-      [0, 700],
-      [940, 1700],
-      [2140, 2600],
+      [0, 750],
+      [920, 1750],
+      [2120, 2650],
     ]);
   });
 
-  it('ranges are trimmed to words with 60/100 ms margins inside the midpoint limits', () => {
-    expect([LEAD_IN_MS, TAIL_OUT_MS]).toEqual([60, 100]);
-    // пауза 600..700: середина 650 обмежує і хвіст першого (700), і вступ другого (640); краї — 0 і durationMs
-    const ws = [w('а', 100, 600), w('б', 700, 900)];
-    const { lines } = splitTake({ words: ws, matched: T(2), lineTexts: ['а', 'б'], speech: [], durationMs: 950 });
-    expect(lines.map((l) => l && [l.startMs, l.endMs])).toEqual([
-      [40, 650],
-      [650, 950],
-    ]);
-    expect(lines[0]!.words[0]).toEqual(w('а', 60, 560));
-    expect(lines[1]!.words[0]).toEqual(w('б', 50, 250));
-  });
-
-  it('boundary snaps to silence interval inside the gap', () => {
-    // gap 600..1000, mid 800; speech noise covers 650..950 → silence 600..650 and 950..1000
+  it('STT timings off by ~100 ms: cuts follow the audio silence, not the word timestamps', () => {
+    // живий шматок Gemini + whisper: whisper ставить «A» на 4240 і «smiled.» до 7160, а мовлення — 4093..7282
     const sp = [
-      { startMs: 0, endMs: 600 },
-      { startMs: 650, endMs: 950 },
+      { startMs: 332, endMs: 1652 },
+      { startMs: 1960, endMs: 3554 },
+      { startMs: 4093, endMs: 6326 },
+      { startMs: 6536, endMs: 7282 },
+      { startMs: 7957, endMs: 10841 },
+    ];
+    const ws = [w('The', 0, 500), w('it.', 3320, 3760), w('A', 4240, 4440), w('smiled.', 6780, 7160), w('Then', 8020, 8200), w('everything.', 10180, 10760)];
+    const { lines } = splitTake({
+      words: ws,
+      matched: T(6),
+      lineTexts: ['The it.', 'A smiled.', 'Then everything.'],
+      speech: sp,
+      durationMs: 11160,
+    });
+    expect(lines.map((l) => l && [l.startMs, l.endMs])).toEqual([
+      [252, 3704],
+      [4013, 7432],
+      [7877, 10991],
+    ]);
+    // жоден рядок не захоплює мовлення сусіда
+    expect(lines[1]!.startMs).toBeGreaterThan(3554);
+    expect(lines[1]!.endMs).toBeLessThan(7957);
+  });
+
+  it('a pause inside a line far from the STT gap is not taken as the boundary', () => {
+    const sp = [
+      { startMs: 0, endMs: 300 },
+      { startMs: 450, endMs: 600 }, // пауза 300..450 всередині першого рядка
       { startMs: 1000, endMs: 1600 },
       { startMs: 2200, endMs: 2500 },
     ];
     const { lines } = splitTake({ words, matched: T(5), lineTexts, speech: sp, durationMs: 2700 });
-    // nearest silence edge to 800 is 650 or 950 (tie → earlier): the tail (600 + 100) is clamped to it
-    expect(lines[0]!.endMs).toBe(650);
-    expect(lines[1]!.startMs).toBe(940);
+    expect(lines[0]!.endMs).toBe(750);
+    expect(lines[1]!.startMs).toBe(920);
+  });
+
+  it('no silence near the STT gap → both neighbours null', () => {
+    const sp = [
+      { startMs: 0, endMs: 1600 },
+      { startMs: 2200, endMs: 2500 },
+    ];
+    const { lines } = splitTake({ words, matched: T(5), lineTexts, speech: sp, durationMs: 2700 });
+    expect(lines[0]).toBeNull();
+    expect(lines[1]).toBeNull();
+    expect(lines[2]).not.toBeNull();
+  });
+
+  it('no speech intervals at all → every line null (no audio evidence to cut by)', () => {
+    const { lines } = splitTake({ words, matched: T(5), lineTexts, speech: [], durationMs: 2700 });
+    expect(lines).toEqual([null, null, null]);
   });
 
   it('unmatched last word of line 1 → lines 1 and 2 are null, line 3 ok', () => {
@@ -82,22 +111,27 @@ describe('splitTake', () => {
     expect(lines[0]).toBeNull();
     expect(lines[1]).toBeNull();
     expect(lines[2]).not.toBeNull();
-    expect(lines[2]!.endMs).toBe(2600);
+    expect(lines[2]!.endMs).toBe(2650);
   });
 
-  it('gap 50 ms → both neighbours null', () => {
+  it('silence shorter than 80 ms is not a boundary → both neighbours null', () => {
     expect(MIN_GAP_MS).toBe(80);
-    const ws = [w('а', 0, 300), w('б', 350, 600)];
-    const { lines } = splitTake({ words: ws, matched: T(2), lineTexts: ['а', 'б'], speech: [], durationMs: 700 });
-    expect(lines).toEqual([null, null]);
+    const sp = [
+      { startMs: 0, endMs: 950 },
+      { startMs: 1000, endMs: 1600 },
+      { startMs: 2200, endMs: 2500 },
+    ];
+    const { lines } = splitTake({ words, matched: T(5), lineTexts, speech: sp, durationMs: 2700 });
+    expect(lines[0]).toBeNull();
+    expect(lines[1]).toBeNull();
   });
 
   it('words shifted to line start', () => {
     const { lines } = splitTake({ words, matched: T(5), lineTexts, speech, durationMs: 2700 });
     expect(lines[1]!.words.map((x) => [x.text, x.startMs, x.endMs])).toEqual([
-      ['три', 60, 360],
-      ['чотири', 360, 660],
+      ['три', 80, 380],
+      ['чотири', 380, 680],
     ]);
-    expect(lines[2]!.words[0]).toEqual(w('п’ять', 60, 360));
+    expect(lines[2]!.words[0]).toEqual(w('п’ять', 80, 380));
   });
 });

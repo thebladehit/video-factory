@@ -6,7 +6,7 @@ import { translateSchema } from '../prompts/translate';
 import { outlineSchema, sceneSchema, scriptSchema } from '../prompts/script';
 import { fakeValueFor } from './fake-object';
 import { solidPng } from './png';
-import { silentWav } from './wav';
+import { toneWav } from './wav';
 
 const SIZES: Record<Aspect, [number, number]> = { '9:16': [540, 960], '16:9': [960, 540], '1:1': [768, 768] };
 const WORD_MS = 400;
@@ -50,7 +50,7 @@ export const fakeImage: ImageGen = {
 const PARAGRAPH_PAUSE_MS = 600;
 
 /**
- * Fake-TTS: тиша по 0,4 с на слово, між абзацами — пауза 0,6 с.
+ * Fake-TTS: тон по 0,4 с на слово, між абзацами — тиша 0,6 с.
  * `words: false` — без міток слів (як провайдер, що їх не дає: тоді мітки беруться з whisper чи оцінюються).
  */
 export function createFakeTts(o: { words?: boolean } = {}): TTS {
@@ -68,7 +68,7 @@ export function createFakeTts(o: { words?: boolean } = {}): TTS {
         }
       }
       const durationMs = words.at(-1)?.endMs ?? 0;
-      const audio = { bytes: silentWav(durationMs), mime: 'audio/wav', durationMs };
+      const audio = { bytes: toneWav(durationMs, words), mime: 'audio/wav', durationMs };
       return o.words === false ? { audio } : { audio, words };
     },
   };
