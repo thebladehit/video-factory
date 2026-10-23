@@ -60,6 +60,8 @@ export function AuditionDialog({
   const alive = useRef(true);
   /** Номер запуску: закриття діалогу чи новий запуск зупиняє чергу попереднього (платні запити не тривають) */
   const runId = useRef(0);
+  /** Останній запущений набір: результати старішого (що ще летіли) не перезаписують дублі нового */
+  const lastStart = useRef(0);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -113,6 +115,7 @@ export function AuditionDialog({
       Array.from({ length: AUDITION_TAKES }, (_, i) => ({ c, take: (i + 1) as 1 | 2 })),
     );
     const id = ++runId.current;
+    lastStart.current = id;
     setRunning(true);
     setTakes({});
     for (const j of jobs) setTake(j.c, j.take, { state: 'pending' });
@@ -129,9 +132,10 @@ export function AuditionDialog({
             ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
             take,
           });
-          setTake(c, take, { state: 'ready', url });
+          if (lastStart.current === id) setTake(c, take, { state: 'ready', url });
         } catch (e) {
-          setTake(c, take, { state: 'error', message: e instanceof Error ? e.message : 'Помилка' });
+          if (lastStart.current === id)
+            setTake(c, take, { state: 'error', message: e instanceof Error ? e.message : 'Помилка' });
         }
       },
       { shouldContinue: () => alive.current && runId.current === id },
