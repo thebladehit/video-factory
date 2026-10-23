@@ -50,6 +50,13 @@
       "when": 1792625915639,
       "tag": "0006_pipeline",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792780880986,
+      "tag": "0007_publishing",
+      "breakpoints": true
     }
   ]
 }

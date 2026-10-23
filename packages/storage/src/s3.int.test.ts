@@ -26,6 +26,14 @@ describe('S3BlobStorage', () => {
     expect(await text(obj.body)).toBe('hello');
   });
 
+  it("get with fromByte 4 of 'fake-mp4' returns '-mp4' and size 8", async () => {
+    const key = `${prefix}/range.mp4`;
+    await storage.put(key, new TextEncoder().encode('fake-mp4'), { contentType: 'video/mp4' });
+    const obj = await storage.get(key, { fromByte: 4 });
+    expect(await text(obj.body)).toBe('-mp4');
+    expect(obj.size).toBe(8);
+  });
+
   it('get of a missing key throws NOT_FOUND', async () => {
     await expect(storage.get(`${prefix}/missing`)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
