@@ -1,4 +1,4 @@
-import type { Effect, MediaClip } from '@vf/shared';
+import type { ClipTransform, Effect, MediaClip } from '@vf/shared';
 import { clipFades, clipTransform, num } from '@vf/timeline';
 import type { Size } from './types';
 
@@ -23,15 +23,18 @@ export function transformFilter(
   fit: 'cover' | 'contain',
   duration: number,
   start: number,
+  transform?: ClipTransform,
 ) {
   const base =
     fit === 'cover'
       ? Math.max(out.width / src.width, out.height / src.height)
       : Math.min(out.width / src.width, out.height / src.height);
-  const w0 = src.width * base;
-  const h0 = src.height * base;
-  const x0 = (out.width - w0) / 2;
-  const y0 = (out.height - h0) / 2;
+  // порядок: fit → transform (статичні числа, як у coverRect) → ефекти
+  const k = transform?.scale ?? 1;
+  const w0 = src.width * base * k;
+  const h0 = src.height * base * k;
+  const x0 = transform ? transform.x * out.width - w0 / 2 : (out.width - w0) / 2;
+  const y0 = transform ? transform.y * out.height - h0 / 2 : (out.height - h0) / 2;
   const tr = clipTransform(effects);
   const local = `min(1,t/${num(duration)})`;
   const global = `min(1,max(0,(t-${num(start)})/${num(duration)}))`;
@@ -55,7 +58,7 @@ export function clipChain(
   fps: number,
 ) {
   const D = num(clip.duration);
-  const tf = transformFilter(clip.effects, src, out, clip.fit, clip.duration, clip.start);
+  const tf = transformFilter(clip.effects, src, out, clip.fit, clip.duration, clip.start, clip.transform);
   const { fadeIn, fadeOut } = clipFades(clip.effects);
   // фото: `speed`/`hold` не діють — кадр просто показується всю тривалість кліпу
   const speed = src.kind === 'video' ? (clip.speed ?? 1) : 1;

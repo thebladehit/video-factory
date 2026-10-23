@@ -247,6 +247,50 @@ describe('transformFilter', () => {
     });
 });
 
+describe('transformFilter with clip transform', () => {
+  const out = { width: 720, height: 1280 };
+  const src = { width: 1200, height: 1200 };
+  const kb = { fromScale: 1, toScale: 1.4, fromX: 0.2, fromY: 0.8, toX: 0.6, toY: 0.3 };
+  for (const [name, effects, tr] of [
+    ['static', [], { scale: 0.5, x: 0.3, y: 0.7 }],
+    ['kenburns', [{ type: 'kenburns' as const, params: kb }], { scale: 0.6, x: 0.3, y: 0.7 }],
+  ] as const)
+    it(`${name}: expressions equal coverRect with transform`, () => {
+      const tf = transformFilter([...effects], src, out, 'cover', 5, 2, tr);
+      for (const p of [0, 0.5, 1]) {
+        const local = p * 5;
+        const k = effects.length > 0;
+        const r = coverRect(
+          src,
+          out,
+          'cover',
+          k ? kb.fromScale + (kb.toScale - kb.fromScale) * p : 1,
+          k ? kb.fromX + (kb.toX - kb.fromX) * p : 0.5,
+          k ? kb.fromY + (kb.toY - kb.fromY) * p : 0.5,
+          tr,
+        );
+        const w = evalExpr(tf.w, { t: local });
+        const h = evalExpr(tf.h, { t: local });
+        expect(w).toBeCloseTo(r.w, 6);
+        expect(h).toBeCloseTo(r.h, 6);
+        expect(evalExpr(tf.x, { t: local + 2, overlay_w: w, overlay_h: h })).toBeCloseTo(r.x, 6);
+        expect(evalExpr(tf.y, { t: local + 2, overlay_w: w, overlay_h: h })).toBeCloseTo(r.y, 6);
+      }
+    });
+  it('no transform or default transform → filter strings unchanged', () => {
+    const a = transformFilter([], src, out, 'cover', 5, 2);
+    expect(transformFilter([], src, out, 'cover', 5, 2, { scale: 1, x: 0.5, y: 0.5 })).toEqual(a);
+    expect(a).toMatchInlineSnapshot(`
+      {
+        "h": "max(2,1280*1)",
+        "w": "max(2,1280*1)",
+        "x": "0.5*720-(0.5*720-(-280))*overlay_w/1280",
+        "y": "0.5*1280-(0.5*1280-0)*overlay_h/1280",
+      }
+    `);
+  });
+});
+
 describe('speed / hold / envelope / subtitles (language docs from localize)', () => {
   const vclip = (extra: Partial<MediaClip>): MediaClip => ({
     id: 'v1',

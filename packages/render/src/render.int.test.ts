@@ -173,11 +173,30 @@ describe('preview parity (spike: Ken Burns without zoompan)', () => {
     ],
     ['zoom', { type: 'zoom', params: { scale: 1.2, x: 0.35, y: 0.6 } }],
   ];
-  for (const [name, effect] of effectsCases)
+  const kbEffect: Effect = {
+    type: 'kenburns',
+    params: { fromScale: 1, toScale: 1.3, fromX: 0.3, fromY: 0.3, toX: 0.7, toY: 0.6 },
+  };
+  const parityCases: [string, Effect | null, { scale: number; x: number; y: number } | null][] = [
+    ...effectsCases.map(([n, e]) => [n, e, null] as [string, Effect, null]),
+    ['transform 0.5 at (0.3, 0.7)', null, { scale: 0.5, x: 0.3, y: 0.7 }],
+    ['transform 0.6 + kenburns', kbEffect, { scale: 0.6, x: 0.3, y: 0.7 }],
+  ];
+  for (const [name, effect, transform] of parityCases)
     it(`${name} frame matches drawFrame at 0.1 / 2.5 / 4.9 s`, async () => {
       await checker(file('checker.png'));
       const r = addClip(emptyTimeline('9:16'), { id: 'T', kind: 'image' }, { at: 0 }, ids);
-      const doc = setEffect(removeEffect(r.doc, r.clipIds[0]!, 'kenburns'), r.clipIds[0]!, effect);
+      const base = removeEffect(r.doc, r.clipIds[0]!, 'kenburns');
+      const withFx = effect ? setEffect(base, r.clipIds[0]!, effect) : base;
+      const doc = transform
+        ? ({
+            ...withFx,
+            tracks: withFx.tracks.map((tr) => ({
+              ...tr,
+              clips: tr.clips.map((c) => ('fit' in c ? { ...c, transform } : c)),
+            })),
+          } as typeof withFx)
+        : withFx;
       const sources = new Map<string, SourceInfo>([
         ['T', { path: file('checker.png'), kind: 'image', width: 1200, height: 1200, hasAudio: false }],
       ]);
