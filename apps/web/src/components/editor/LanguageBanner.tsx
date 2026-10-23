@@ -17,12 +17,15 @@ export function LanguageBanner({
   language,
   separated,
   busy,
+  frozen = false,
   onSeparate,
   onUnseparate,
 }: {
   language: string;
   separated: boolean;
   busy: boolean;
+  /** конвеєр ще збирає документ — мову не можна відокремлювати від недоскладеного */
+  frozen?: boolean;
   onSeparate(): void;
   onUnseparate(): void;
 }) {
@@ -45,7 +48,14 @@ export function LanguageBanner({
             Повернути до спільного
           </Button>
         ) : (
-          <Button size="sm" variant="outline" disabled={busy} data-testid="separate" onClick={onSeparate}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy || frozen}
+            title={frozen ? 'Поки конвеєр працює, мову не можна відокремити' : undefined}
+            data-testid="separate"
+            onClick={onSeparate}
+          >
             Відокремити мову
           </Button>
         )}

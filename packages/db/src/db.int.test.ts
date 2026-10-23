@@ -5,6 +5,8 @@ import {
   assets,
   createDb,
   jobs,
+  pipelineRuns,
+  pipelineScenes,
   projectLanguageTimelines,
   projects,
   runMigrations,
@@ -202,6 +204,78 @@ describe('db', () => {
       await expect(db.insert(transcripts).values({ ...t, source: 'bogus' as never, timing: 'stt' })).rejects.toThrow();
       await expect(db.insert(transcripts).values({ ...t, source: 'stt', timing: 'bogus' as never })).rejects.toThrow();
       await db.delete(assets).where(sql`${assets.id} = ${a.id}`);
+      await db.delete(projects).where(sql`${projects.id} = ${p.id}`);
+    });
+  });
+  describe('pipeline tables', () => {
+    const project = async () => {
+      const [row] = await db
+        .insert(projects)
+        .values({ userId: LOCAL_USER_ID, title: 'pipeline test', format: '9:16', timeline: { schemaVersion: 1 } as never })
+        .returning();
+      return row!;
+    };
+    const run = (projectId: string) => ({
+      userId: LOCAL_USER_ID,
+      projectId,
+      settings: {} as never,
+      stage: 'script' as const,
+      status: 'running' as const,
+    });
+    const scene = (runId: string, over: Partial<typeof pipelineScenes.$inferInsert> = {}) => ({
+      userId: LOCAL_USER_ID,
+      runId,
+      segmentId: 'seg-1',
+      position: 0,
+      ...over,
+    });
+
+    it('pipeline_runs unique per project', async () => {
+      const p = await project();
+      await db.insert(pipelineRuns).values(run(p.id));
+      await expect(db.insert(pipelineRuns).values(run(p.id))).rejects.toThrow();
+      await db.delete(projects).where(sql`${projects.id} = ${p.id}`);
+    });
+
+    it('pipeline_scenes unique (run_id, segment_id)', async () => {
+      const p = await project();
+      const [r] = await db.insert(pipelineRuns).values(run(p.id)).returning();
+      await db.insert(pipelineScenes).values(scene(r!.id));
+      await expect(db.insert(pipelineScenes).values(scene(r!.id))).rejects.toThrow();
+      await db.insert(pipelineScenes).values(scene(r!.id, { segmentId: 'seg-2', position: 1 }));
+      await expect(db.insert(pipelineScenes).values(scene(r!.id, { segmentId: 's3', status: 'weird' as never }))).rejects.toThrow();
+      await expect(db.insert(pipelineScenes).values(scene(r!.id, { segmentId: 's4', visualSource: 'weird' as never }))).rejects.toThrow();
+      await db.delete(projects).where(sql`${projects.id} = ${p.id}`);
+    });
+
+    it('cascade: deleting project deletes run and scenes', async () => {
+      const p = await project();
+      const [r] = await db.insert(pipelineRuns).values(run(p.id)).returning();
+      await db.insert(pipelineScenes).values(scene(r!.id));
+      await db.delete(projects).where(sql`${projects.id} = ${p.id}`);
+      expect(await db.select().from(pipelineRuns).where(sql`${pipelineRuns.id} = ${r!.id}`)).toHaveLength(0);
+      expect(await db.select().from(pipelineScenes).where(sql`${pipelineScenes.runId} = ${r!.id}`)).toHaveLength(0);
+    });
+
+    it('voice_lines accepts text_origin script', async () => {
+      const p = await project();
+      await db
+        .insert(voiceLines)
+        .values({ userId: LOCAL_USER_ID, projectId: p.id, segmentId: 's', language: 'uk', textOrigin: 'script' });
+      await db.delete(projects).where(sql`${projects.id} = ${p.id}`);
+    });
+
+    it('visual_asset_id set null on asset delete', async () => {
+      const p = await project();
+      const [r] = await db.insert(pipelineRuns).values(run(p.id)).returning();
+      const [a] = await db
+        .insert(assets)
+        .values({ userId: LOCAL_USER_ID, kind: 'image', source: 'generated', storageKey: `test/${crypto.randomUUID()}.png`, mime: 'image/png' })
+        .returning();
+      const [s] = await db.insert(pipelineScenes).values(scene(r!.id, { visualAssetId: a!.id, visualSource: 'library' })).returning();
+      await db.delete(assets).where(sql`${assets.id} = ${a!.id}`);
+      const [after] = await db.select().from(pipelineScenes).where(sql`${pipelineScenes.id} = ${s!.id}`);
+      expect(after!.visualAssetId).toBeNull();
       await db.delete(projects).where(sql`${projects.id} = ${p.id}`);
     });
   });

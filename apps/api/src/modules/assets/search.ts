@@ -49,6 +49,11 @@ const DEFAULT_LIMIT = 60;
 const TRIGRAM_THRESHOLD = 0.35;
 const tagsText = sql`vf_tags_text(${assets.tags})`;
 
+/** Ранг збігу: full-text + trigram-схожість назви/тегів. Спільний для пошуку й підбору під сцени. */
+export function rankExpr(q: string): SQL {
+  return sql`ts_rank(${assets.search}, websearch_to_tsquery('simple', ${q})) + greatest(word_similarity(${q}, ${assets.title}), word_similarity(${q}, ${tagsText}))`;
+}
+
 type Cursor = { o: number } | { c: string; i: string };
 const encodeCursor = (c: Cursor) => Buffer.from(JSON.stringify(c)).toString('base64url');
 function decodeCursor(s: string | undefined): Cursor | null {
@@ -138,7 +143,7 @@ export async function listAssets(
     const offset = cursor && 'o' in cursor ? cursor.o : 0;
     const rows = await joined(deps)
       .where(and(...where))
-      .orderBy(sql`ts_rank(${assets.search}, ${tsq}) + ${fuzzy} desc`, desc(assets.createdAt), desc(assets.id))
+      .orderBy(sql`${rankExpr(q)} desc`, desc(assets.createdAt), desc(assets.id))
       .limit(limit + 1)
       .offset(offset);
     const items = await Promise.all(rows.slice(0, limit).map((r) => toView(deps, r)));

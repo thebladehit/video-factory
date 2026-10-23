@@ -1,0 +1,152 @@
+import type { VOICE_LINE_STATUSES } from '@vf/db';
+import type { AssetStatus, JobStatus, PipelineStage, PipelineStatus, SceneStatus } from '@vf/shared';
+
+type VoiceLineStatus = (typeof VOICE_LINE_STATUSES)[number];
+
+export interface SceneSnap {
+  id: string;
+  status: SceneStatus;
+  hasVisual: boolean;
+  /** Статус власної задачі сцени (pipeline_scenes.job_id: pipeline.visual / pipeline.scene) */
+  job: JobStatus | null;
+  generation: { status: JobStatus; assetId: string | null; assetStatus: AssetStatus | null } | null;
+}
+
+export interface LangSnap {
+  language: string;
+  isBase: boolean;
+  translate: 'none' | 'live' | 'done' | 'failed';
+  lines: { status: VoiceLineStatus; hasText: boolean }[];
+}
+
+export interface RunSnap {
+  stage: PipelineStage;
+  status: PipelineStatus;
+  stopAfterScript: boolean;
+  scriptJob: JobStatus | null;
+  assembleJob: JobStatus | null;
+  scenesWritten: boolean;
+  scenes: SceneSnap[];
+  langs: LangSnap[];
+}
+
+export type Action =
+  | { type: 'enqueueScript' }
+  | { type: 'toReview' }
+  | { type: 'toProduce' }
+  | { type: 'enqueueVisual'; sceneId: string }
+  | { type: 'linkGenerated'; sceneId: string; assetId: string }
+  | { type: 'sceneReady'; sceneId: string }
+  | { type: 'sceneFailed'; sceneId: string; error: string }
+  | { type: 'enqueueTranslate'; language: string }
+  | { type: 'enqueueSynthesize'; language: string }
+  | { type: 'enqueueAssemble' }
+  | { type: 'markDone' }
+  | { type: 'markFailed'; error: string };
+
+// Загальні тексти; runAdvance підставляє справжню помилку задачі/генерації з БД, якщо вона є
+export const SCRIPT_FAILED = 'Не вдалося створити сценарій';
+export const VISUAL_FAILED = 'Не вдалося згенерувати візуал';
+export const ASSEMBLE_FAILED = 'Не вдалося зібрати відео';
+export const VISUAL_JOB_INTERRUPTED = 'Задачу візуалу перервано';
+
+/**
+ * Чиста машина станів запуску: знімок → дії. Порядок дій стабільний: етап, сцени, мови (за порядком масивів).
+ * Контракт із runAdvance: якщо прохід виконав дії, що лише змінюють стан (toProduce, linkGenerated, sceneReady, sceneFailed…),
+ * runAdvance перечитує знімок і викликає advance знову, доки прохід не дасть таких дій — один прохід не мусить бачити все.
+ */
+export function advance(s: RunSnap): Action[] {
+  if (s.status !== 'running') return [];
+  switch (s.stage) {
+    case 'script':
+      return script(s);
+    case 'produce':
+      return produce(s);
+    case 'assemble':
+      // null — перехід produce→assemble не дійшов до постановки задачі; runner захищається assemble_job_id is null
+      if (s.assembleJob === null) return [{ type: 'enqueueAssemble' }];
+      if (s.assembleJob === 'done') return [{ type: 'markDone' }];
+      if (s.assembleJob === 'failed') return [{ type: 'markFailed', error: ASSEMBLE_FAILED }];
+      return [];
+    default:
+      return [];
+  }
+}
+
+function script(s: RunSnap): Action[] {
+  if (s.scriptJob === null) return [{ type: 'enqueueScript' }];
+  if (s.scriptJob === 'failed') return [{ type: 'markFailed', error: SCRIPT_FAILED }];
+  if (s.scriptJob === 'done' && s.scenesWritten) return [{ type: s.stopAfterScript ? 'toReview' : 'toProduce' }];
+  return [];
+}
+
+function produce(s: RunSnap): Action[] {
+  const actions: Action[] = [];
+  let scenesTerminal = true;
+
+  for (const sc of s.scenes) {
+    if (sc.status === 'ready' || sc.status === 'failed') continue;
+    scenesTerminal = false;
+    if (sc.status === 'empty') {
+      actions.push({ type: 'enqueueVisual', sceneId: sc.id });
+      continue;
+    }
+    actions.push(...liveScene(sc));
+  }
+
+  let langsTerminal = true;
+  for (const l of s.langs) {
+    if (l.lines.some((ln) => ln.status === 'queued' || ln.status === 'running')) langsTerminal = false;
+    const translated = l.isBase || l.translate === 'done';
+    if (!l.isBase && (l.translate === 'none' || l.translate === 'live')) langsTerminal = false;
+    if (!l.isBase && l.translate === 'none') {
+      actions.push({ type: 'enqueueTranslate', language: l.language });
+    } else if (translated && l.lines.some((ln) => ln.status === 'empty' && ln.hasText)) {
+      actions.push({ type: 'enqueueSynthesize', language: l.language });
+    }
+  }
+
+  // Збірка — лише коли в цьому проході більше нічого не запускається
+  if (actions.length === 0 && scenesTerminal && langsTerminal && s.assembleJob === null) {
+    actions.push({ type: 'enqueueAssemble' });
+  }
+  return actions;
+}
+
+/**
+ * Після `done` `advance` нічого не робить, але сцени, яким після збірки змінили візуал (перегенерація, відео),
+ * треба довести: прив'язати файл генерації й позначити готовність/помилку — як на `produce`, без нових задач,
+ * збірки й мов. Точкову заміну кліпу робить runAdvance після `sceneReady`.
+ */
+export function afterDone(s: RunSnap): Action[] {
+  if (s.stage !== 'done' || s.status !== 'done') return [];
+  return s.scenes.flatMap((sc) => (sc.status === 'queued' || sc.status === 'running' ? liveScene(sc) : []));
+}
+
+/** Сцена queued|running: після скасування/відновлення генерація могла вже завершитись. */
+function liveScene(sc: SceneSnap): Action[] {
+  const g = sc.generation;
+  if (!g) {
+    // без генерації сцену веде лише її задача: немає задачі або вона обірвалась → сцена failed
+    if (sc.job === null || sc.job === 'failed' || sc.job === 'cancelled')
+      return [{ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_JOB_INTERRUPTED }];
+    return [];
+  }
+  if (
+    g.status === 'failed' ||
+    g.status === 'cancelled' ||
+    g.assetStatus === 'failed' ||
+    // генерація без файлу або файл видалено — прив'язувати нічого
+    (g.status === 'done' && (g.assetId === null || g.assetStatus === null))
+  )
+    return [{ type: 'sceneFailed', sceneId: sc.id, error: VISUAL_FAILED }];
+  const actions: Action[] = [];
+  let linked = sc.hasVisual;
+  if (g.status === 'done' && g.assetId && !linked) {
+    actions.push({ type: 'linkGenerated', sceneId: sc.id, assetId: g.assetId });
+    linked = true;
+  }
+  // asset уже ready — окремої події не буде, тож готовність сцени — в тому ж проході
+  if (linked && g.assetStatus === 'ready') actions.push({ type: 'sceneReady', sceneId: sc.id });
+  return actions;
+}

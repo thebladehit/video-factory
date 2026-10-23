@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { PROVIDER_IDS, type ModelRef } from './capabilities';
 
-const modelRefSchema = z
+export const modelRefSchema = z
   .string()
   .refine((s) => {
     const i = s.indexOf('/');
@@ -9,7 +9,7 @@ const modelRefSchema = z
   }, 'Некоректне посилання на модель')
   .transform((s) => s as ModelRef);
 
-const voiceChoiceSchema = z.object({
+export const voiceChoiceSchema = z.object({
   model: modelRefSchema,
   voiceId: z.string().min(1),
   instructions: z.string().optional(),

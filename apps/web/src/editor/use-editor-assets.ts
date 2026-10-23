@@ -12,7 +12,7 @@ import { Autosave, type SaveState } from './autosave';
 import { reconcileUploads, type TrackedUpload } from './uploads';
 import { createCanvasPreviewEngine } from './preview-engine';
 import { bindAutosave } from './mode-sync';
-import { createEditorStore, createUiStore, isReadOnlyMode, type EditorMode } from './store';
+import { createEditorStore, createUiStore, isReadOnlyState, type EditorMode } from './store';
 import { isPresent, type AnyAsset, type LocalAsset } from './types';
 
 const REFRESH_BEFORE_MS = 5 * 60_000;
@@ -21,6 +21,9 @@ export const PHOTO_SECONDS = 5;
 /** Ключ автозбереження в реєстрі: базовий документ — '', мова — її код */
 const BASE_KEY = '';
 const keyOf = (m: EditorMode): string | null => (m.kind === 'edit' ? BASE_KEY : m.separated ? m.language : null);
+
+const READ_ONLY_HINT = (frozen: boolean) =>
+  frozen ? 'Конвеєр ще працює — редагування після збірки' : 'Перегляд мови — редагування в «Монтажі»';
 
 const assetIdsOf = (doc: TimelineDoc) => [...new Set(allClips(doc).map((c) => c.assetId))];
 
@@ -111,7 +114,13 @@ export function useEditorSession(project: ProjectView) {
   const mode = useStore(store, (s) => s.mode);
   const [subtitles, setSubtitles] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
-  const readOnly = isReadOnlyMode(mode);
+  /** Конвеєр ще збирає чернетку: документ лише для перегляду (зсувається тільки в `false`) */
+  const [pipelineLive, setPipelineLive] = useState(
+    () => project.pipeline?.status === 'running' || project.pipeline?.status === 'awaiting_review',
+  );
+  const frozen = useStore(store, (s) => s.frozen);
+  const readOnly = isReadOnlyState({ mode, frozen });
+  useEffect(() => store.getState().setFrozen(pipelineLive), [store, pipelineLive]);
   /** Глибина «замків»: поки йде перемикання/відокремлення, стор лише для читання */
   const lockDepth = useRef(0);
   const locked = useCallback(
@@ -259,7 +268,7 @@ export function useEditorSession(project: ProjectView) {
   /** Файли бібліотеки на таймлайн (панель, drop): по черзі від моменту `at`. */
   const addAssets = useCallback(
     async (ids: string[], at: number, trackId?: string) => {
-      if (isReadOnlyMode(store.getState().mode)) return void toast.info('Перегляд мови — редагування в «Монтажі»');
+      if (isReadOnlyState(store.getState())) return void toast.info(READ_ONLY_HINT(store.getState().frozen));
       const known = { ...assetsRef.current };
       const need = ids.filter((id) => !isPresent(known[id]));
       if (need.length) Object.assign(known, await fetchAssets(need));
@@ -287,7 +296,7 @@ export function useEditorSession(project: ProjectView) {
   /** Файли з ОС: одразу кліп з blob:-URL, паралельно — завантаження в бібліотеку. */
   const addFiles = useCallback(
     async (files: File[], at: number, trackId?: string) => {
-      if (isReadOnlyMode(store.getState().mode)) return void toast.info('Перегляд мови — редагування в «Монтажі»');
+      if (isReadOnlyState(store.getState())) return void toast.info(READ_ONLY_HINT(store.getState().frozen));
       let cursor = at;
       for (const file of files) {
         const kind = kindForMime(file.type);
@@ -442,6 +451,25 @@ export function useEditorSession(project: ProjectView) {
     void qc.invalidateQueries({ queryKey: trpc.projects.get.queryKey({ id: project.id }) });
   }, [project.id, store, loadMode, qc, trpc]);
 
+  // конвеєр: збірку завершено → документ з сервера без модалки конфлікту (у режимі перегляду локальних змін немає);
+  // інший кінець (збій, скасування) лише знімає заморожування
+  useJobFeed((e) => {
+    if (!pipelineLive || e.subject.projectId !== project.id || !e.type.startsWith('pipeline.')) return;
+    if (!TERMINAL_STATUSES.has(e.status)) return;
+    if (e.type === 'pipeline.assemble' && e.status === 'done') {
+      void reload()
+        .then(() => {
+          setPipelineLive(false);
+          void qc.invalidateQueries({ queryKey: trpc.voice.get.queryKey({ projectId: project.id }) });
+        })
+        .catch((err) => toast.error((err as Error).message));
+      return;
+    }
+    void trpcClient.projects.get.query({ id: project.id }).then((fresh) => {
+      if (fresh.pipeline?.status !== 'running' && fresh.pipeline?.status !== 'awaiting_review') setPipelineLive(false);
+    });
+  });
+
   /** «Перезаписати моєю версією»: зберегти поточний документ поверх актуальної версії. */
   const overwrite = useCallback(async () => {
     const m = store.getState().mode;
@@ -484,6 +512,7 @@ export function useEditorSession(project: ProjectView) {
     saves: saves.map,
     mode,
     readOnly,
+    pipelineLive,
     switching,
     switchTo,
     separate,

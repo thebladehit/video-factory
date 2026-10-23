@@ -4,6 +4,8 @@ export { appRouter, type AppRouter } from './routers';
 export type { AssetView } from './modules/assets/search';
 export type { GenerationView } from './modules/generate/service';
 export type { ProjectCard, ProjectView } from './modules/projects/service';
+export type { PipelineView, SceneView } from './modules/pipeline/service';
+export type { PipelineEstimate } from './modules/pipeline/estimate';
 export type { EditorAsset } from './modules/projects/editor-assets';
 export type { RenderView } from './modules/renders/service';
 export type { VoiceLineView, VoiceProjectCard, VoiceView } from './modules/voice/service';

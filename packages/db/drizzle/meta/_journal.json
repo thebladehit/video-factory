@@ -43,6 +43,13 @@
       "when": 1792575201683,
       "tag": "0005_voice",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792625915639,
+      "tag": "0006_pipeline",
+      "breakpoints": true
     }
   ]
 }

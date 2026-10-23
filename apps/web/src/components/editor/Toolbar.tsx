@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import type { VideoFormat } from '@vf/shared';
 import { setFormat } from '@vf/timeline';
-import { ArrowLeft, Check, CloudOff, Loader2, Mic, Redo2, Undo2 } from 'lucide-react';
+import { ArrowLeft, Check, Clapperboard, CloudOff, Loader2, Mic, Redo2, Undo2 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { Button } from '@/components/ui/button';
@@ -43,6 +43,7 @@ export function Toolbar({
   onRetrySave,
   modeSwitch,
   readOnly = false,
+  hasPipeline = false,
   children,
 }: {
   projectId: string;
@@ -53,6 +54,8 @@ export function Toolbar({
   /** Перемикач режимів («Монтаж» / мови) */
   modeSwitch?: ReactNode;
   readOnly?: boolean;
+  /** Проєкт створено конвеєром: кнопка «Сцени» */
+  hasPipeline?: boolean;
   children?: ReactNode;
 }) {
   const trpc = useTRPC();
@@ -148,6 +151,13 @@ export function Toolbar({
         {SAVE_LABEL[saveState]}
       </button>
       <div className="ml-auto flex items-center gap-2">
+        {hasPipeline && (
+          <Button asChild variant="outline" data-testid="open-scenes">
+            <Link to="/projects/$id/pipeline" params={{ id: projectId }}>
+              <Clapperboard /> Сцени
+            </Link>
+          </Button>
+        )}
         <Button asChild variant="outline" data-testid="open-voice">
           <Link to="/voice/$id" params={{ id: projectId }}>
             <Mic /> Озвучка

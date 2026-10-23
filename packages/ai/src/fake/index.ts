@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { Aspect, ImageGen, STT, TextGen, TTS, Word } from '../types';
-import { titleFromPrompt } from '@vf/shared';
+import { AppError, titleFromPrompt } from '@vf/shared';
 import { taggerSchema } from '../prompts/tagger';
 import { translateSchema } from '../prompts/translate';
+import { outlineSchema, sceneSchema, scriptSchema } from '../prompts/script';
 import { fakeValueFor } from './fake-object';
 import { solidPng } from './png';
 import { silentWav } from './wav';
@@ -23,12 +24,17 @@ export const fakeText: TextGen = {
     onUsage?.({ inputTokens: 0, outputTokens: 0 });
     if ((schema as unknown) === taggerSchema) return fakeTags(prompt) as never;
     if ((schema as unknown) === translateSchema) return fakeTranslate(prompt) as never;
+    if ((schema as unknown) === scriptSchema) return fakeScript(prompt) as never;
+    if ((schema as unknown) === outlineSchema) return fakeOutline(prompt) as never;
+    if ((schema as unknown) === sceneSchema) return fakeScene(prompt) as never;
     return fakeValueFor(schema);
   },
 };
 
 export const fakeImage: ImageGen = {
   async generate({ prompt, aspect, n }) {
+    // маркер для тестів помилки сцени конвеєра
+    if (prompt.includes('FAIL')) throw new AppError('PROVIDER_ERROR', 'Fake: відмова', { provider: 'fake' });
     const [width, height] = SIZES[aspect];
     const h = createHash('sha1').update(prompt).digest();
     return Array.from({ length: n }, (_, i) => ({
@@ -85,4 +91,51 @@ function fakeTags(prompt: string) {
   const words = [...new Set(description.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])].slice(0, 10);
   const tags = [...new Set([...words, ...FALLBACK_TAGS])].slice(0, Math.max(5, words.length));
   return { title: titleFromPrompt(description || 'Fake-зображення'), tags };
+}
+
+const promptLine = (prompt: string, label: string) => new RegExp(`^${label}: (.*)$`, 'm').exec(prompt)?.[1]?.trim();
+
+/** Сценарій-заглушка: N сцен із маркера «Кількість сцен: N» за темою з «Тема: …». */
+function fakeScript(prompt: string) {
+  const topic = promptLine(prompt, 'Тема') ?? 'тема';
+  const n = Math.max(1, Number(promptLine(prompt, 'Кількість сцен')) || 1);
+  const words = topic.split(/\s+/).filter(Boolean);
+  const head = words.slice(0, 6).join(' ');
+  const keywords = [...new Set(words.map((w) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean))].slice(
+    0,
+    8,
+  );
+  return {
+    title: titleFromPrompt(topic),
+    scenes: Array.from({ length: n }, (_, i) => ({
+      narration: `Сцена ${i + 1}. ${head}`,
+      visualPrompt: `scene ${i + 1} ${topic}`,
+      keywords: keywords.length ? keywords : ['fake'],
+    })),
+  };
+}
+
+/** План-заглушка: розділи по ~150 с, сума sec = «Тривалість: N с». */
+function fakeOutline(prompt: string) {
+  const topic = promptLine(prompt, 'Тема') ?? 'тема';
+  const total = Math.max(1, Number(/^Тривалість: (\d+)/m.exec(prompt)?.[1]) || 60);
+  const count = Math.max(1, Math.round(total / 150));
+  const base = Math.floor(total / count);
+  return {
+    title: titleFromPrompt(topic),
+    sections: Array.from({ length: count }, (_, i) => ({
+      title: `Розділ ${i + 1}`,
+      summary: `Про ${topic}, частина ${i + 1}`,
+      sec: i === count - 1 ? total - base * (count - 1) : base,
+    })),
+  };
+}
+
+function fakeScene(prompt: string) {
+  const current = promptLine(prompt, 'Поточна сцена') ?? 'сцена';
+  return {
+    narration: `Нова версія. ${current}`.slice(0, 1500),
+    visualPrompt: `new version ${current}`.slice(0, 200),
+    keywords: ['fake'],
+  };
 }

@@ -1,6 +1,15 @@
 import { and, arrayContains, desc, eq, inArray, isNotNull } from 'drizzle-orm';
-import { assets, projectLanguageTimelines, projects, renders } from '@vf/db';
-import { AppError, emptyTimeline, normalizeDoc, type MediaClip, type TimelineDoc, type VideoFormat } from '@vf/shared';
+import { assets, pipelineRuns, pipelineScenes, projectLanguageTimelines, projects, renders, voiceLines } from '@vf/db';
+import {
+  AppError,
+  emptyTimeline,
+  normalizeDoc,
+  type MediaClip,
+  type PipelineStage,
+  type PipelineStatus,
+  type TimelineDoc,
+  type VideoFormat,
+} from '@vf/shared';
 import { docDuration } from '@vf/timeline';
 import type { AppDeps } from '../../app';
 import { editorAssets, ensureAnalyzed, isUuid, type EditorAsset } from './editor-assets';
@@ -12,6 +21,8 @@ export interface ProjectCard {
   durationSec: number;
   thumbUrl: string | null;
   updatedAt: string;
+  /** Запуск конвеєра: етап і прогрес (сцени ready|failed + рядки мов ready|failed); null — проєкт без запуску */
+  pipeline: { stage: PipelineStage; status: PipelineStatus; done: number; total: number } | null;
 }
 
 export interface ProjectView {
@@ -21,6 +32,8 @@ export interface ProjectView {
   timeline: TimelineDoc;
   version: number;
   assets: Record<string, EditorAsset>;
+  /** Запуск конвеєра (етап і стан); null — проєкт без запуску */
+  pipeline: { stage: PipelineStage; status: PipelineStatus } | null;
 }
 
 export type ProjectRow = typeof projects.$inferSelect;
@@ -53,6 +66,75 @@ export function firstVisualAsset(doc: TimelineDoc): string | null {
   for (const t of doc.tracks)
     if (t.kind === 'video') for (const c of t.clips) if (!best || c.start < best.start) best = c;
   return best?.assetId ?? null;
+}
+
+const safeSegments = (doc: unknown) => {
+  try {
+    return normalizeDoc(doc).segments ?? [];
+  } catch {
+    return [];
+  }
+};
+
+/** Прогрес запусків конвеєра проєктів (за сирими статусами сцен і рядків — без підписів URL). */
+async function pipelineCards(deps: AppDeps, userId: string, rows: ProjectRow[]) {
+  const out = new Map<string, NonNullable<ProjectCard['pipeline']>>();
+  const runs = await deps.db
+    .select()
+    .from(pipelineRuns)
+    .where(
+      and(
+        eq(pipelineRuns.userId, userId),
+        inArray(
+          pipelineRuns.projectId,
+          rows.map((r) => r.id),
+        ),
+      ),
+    );
+  if (!runs.length) return out;
+  const scenes = await deps.db
+    .select({ runId: pipelineScenes.runId, status: pipelineScenes.status })
+    .from(pipelineScenes)
+    .where(
+      inArray(
+        pipelineScenes.runId,
+        runs.map((r) => r.id),
+      ),
+    );
+  const lines = await deps.db
+    .select({
+      projectId: voiceLines.projectId,
+      segmentId: voiceLines.segmentId,
+      language: voiceLines.language,
+      status: voiceLines.status,
+    })
+    .from(voiceLines)
+    .where(
+      inArray(
+        voiceLines.projectId,
+        runs.map((r) => r.projectId),
+      ),
+    );
+  for (const run of runs) {
+    const p = rows.find((r) => r.id === run.projectId)!;
+    const segIds = new Set(safeSegments(p.timeline).map((s) => s.id));
+    const languages = p.languages.includes(p.baseLanguage) ? p.languages : [p.baseLanguage, ...p.languages];
+    const own = scenes.filter((s) => s.runId === run.id);
+    const terminalLines = lines.filter(
+      (l) =>
+        l.projectId === p.id &&
+        segIds.has(l.segmentId) &&
+        languages.includes(l.language) &&
+        (l.status === 'ready' || l.status === 'failed'),
+    ).length;
+    out.set(p.id, {
+      stage: run.stage,
+      status: run.status,
+      done: own.filter((s) => s.status === 'ready' || s.status === 'failed').length + terminalLines,
+      total: own.length + segIds.size * languages.length,
+    });
+  }
+  return out;
 }
 
 const safeDuration = (doc: unknown) => {
@@ -89,7 +171,13 @@ export async function listProjects(deps: AppDeps, userId: string): Promise<Proje
   for (const r of done) if (r.assetId && !lastRender.has(r.projectId)) lastRender.set(r.projectId, r.assetId);
   const wanted = new Map<string, string | null>();
   for (const p of rows) {
-    const first = firstVisualAsset(p.timeline);
+    // пошкоджений документ не має валити весь список
+    let first: string | null = null;
+    try {
+      first = firstVisualAsset(normalizeDoc(p.timeline));
+    } catch {
+      first = null;
+    }
     wanted.set(p.id, lastRender.get(p.id) ?? (first && isUuid(first) ? first : null));
   }
   const ids = [...new Set([...wanted.values()].filter((v): v is string => !!v))];
@@ -100,6 +188,7 @@ export async function listProjects(deps: AppDeps, userId: string): Promise<Proje
         .where(and(eq(assets.userId, userId), inArray(assets.id, ids)))
     : [];
   const thumbKey = new Map(thumbs.map((t) => [t.id, t.thumbKey]));
+  const pipelines = await pipelineCards(deps, userId, rows);
   return Promise.all(
     rows.map(async (p) => {
       const key = thumbKey.get(wanted.get(p.id) ?? '') ?? null;
@@ -110,6 +199,7 @@ export async function listProjects(deps: AppDeps, userId: string): Promise<Proje
         durationSec: safeDuration(p.timeline),
         thumbUrl: key ? await deps.storage.presignGet(key) : null,
         updatedAt: p.updatedAt.toISOString(),
+        pipeline: pipelines.get(p.id) ?? null,
       };
     }),
   );
@@ -139,7 +229,11 @@ export async function getProject(deps: AppDeps, userId: string, id: string, lang
   ];
   const list = await editorAssets(deps, userId, ids);
   await ensureAnalyzed(deps, userId, list);
-  return { id: p.id, title: p.title, format: p.format, timeline, version, assets: list };
+  const [run] = await deps.db
+    .select({ stage: pipelineRuns.stage, status: pipelineRuns.status })
+    .from(pipelineRuns)
+    .where(and(eq(pipelineRuns.projectId, p.id), eq(pipelineRuns.userId, userId)));
+  return { id: p.id, title: p.title, format: p.format, timeline, version, assets: list, pipeline: run ?? null };
 }
 
 const notSeparated = () => new AppError('NOT_FOUND', 'Мовну версію не відокремлено');

@@ -50,6 +50,22 @@ export const formatSec = (sec: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
+const STAGE_LABELS: Record<string, string> = {
+  script: 'Сценарій',
+  review: 'Перевірка',
+  produce: 'Візуал і озвучка',
+  assemble: 'Збірка',
+};
+
+/** Підпис незавершеного запуску конвеєра на картці; null — запуску немає або він завершений */
+export function pipelineLabel(p: ProjectCard['pipeline']): string | null {
+  if (!p || p.stage === 'done' || p.status === 'done') return null;
+  if (p.status === 'failed') return 'Конвеєр: помилка';
+  if (p.status === 'cancelled') return 'Конвеєр скасовано';
+  const stage = STAGE_LABELS[p.stage] ?? p.stage;
+  return p.stage === 'produce' && p.total > 0 ? `${stage} ${p.done}/${p.total}` : stage;
+}
+
 export function ProjectGrid() {
   const trpc = useTRPC();
   const list = useQuery(trpc.projects.list.queryOptions());
@@ -88,9 +104,15 @@ function ProjectCardView({ project }: { project: ProjectCard }) {
   const duplicate = useMutation(trpc.projects.duplicate.mutationOptions({ onSuccess: refresh }));
   const remove = useMutation(trpc.projects.delete.mutationOptions({ onSuccess: refresh }));
 
+  const pipeline = pipelineLabel(project.pipeline);
   return (
     <div data-testid="project-card" className="group relative overflow-hidden rounded-lg border bg-card">
-      <Link to="/projects/$id" params={{ id: project.id }} className="block focus-visible:outline-none">
+      <Link
+        {...(pipeline
+          ? { to: '/projects/$id/pipeline' as const, params: { id: project.id } }
+          : { to: '/projects/$id' as const, params: { id: project.id } })}
+        className="block focus-visible:outline-none"
+      >
         <div className="flex aspect-video items-center justify-center bg-muted">
           {project.thumbUrl ? (
             <img
@@ -111,6 +133,11 @@ function ProjectCardView({ project }: { project: ProjectCard }) {
             <span className="tabular-nums">{formatSec(project.durationSec)}</span>
             <span>· змінено {changedAgo(project.updatedAt)}</span>
           </span>
+          {pipeline && (
+            <Badge variant="outline" className="w-fit" data-testid="pipeline-progress">
+              {pipeline}
+            </Badge>
+          )}
         </div>
       </Link>
       <DropdownMenu>

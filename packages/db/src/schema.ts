@@ -16,10 +16,20 @@ import {
   unique,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { ASSET_STATUSES, CAPABILITIES, FORMATS, JOB_STATUSES } from '@vf/shared';
+import {
+  ASSET_STATUSES,
+  CAPABILITIES,
+  FORMATS,
+  JOB_STATUSES,
+  PIPELINE_STAGES,
+  PIPELINE_STATUSES,
+  SCENE_STATUSES,
+  VISUAL_SOURCES,
+} from '@vf/shared';
 import type {
   DefaultSlot,
   ModelRef,
+  PipelineSettings,
   ProjectVoice,
   TimelineDoc,
   VideoFormat,
@@ -228,7 +238,7 @@ export const renders = pgTable(
   ],
 );
 
-export const VOICE_TEXT_ORIGINS = ['manual', 'stt', 'translated'] as const;
+export const VOICE_TEXT_ORIGINS = ['manual', 'stt', 'translated', 'script'] as const;
 export const VOICE_LINE_STATUSES = ['empty', 'queued', 'running', 'ready', 'failed'] as const;
 export const TRANSCRIPT_SOURCES = ['tts', 'stt'] as const;
 export const TRANSCRIPT_TIMINGS = ['aligned', 'estimated', 'stt'] as const;
@@ -323,4 +333,75 @@ export const projectLanguageTimelines = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.language] })],
+);
+
+/** Один запуск конвеєра «тема → чернетка» на проєкт */
+export const pipelineRuns = pgTable(
+  'pipeline_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .unique()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    settings: jsonb('settings').$type<PipelineSettings>().notNull(),
+    stage: text('stage', { enum: PIPELINE_STAGES }).notNull().default('script'),
+    status: text('status', { enum: PIPELINE_STATUSES }).notNull().default('running'),
+    error: text('error'),
+    scriptJobId: uuid('script_job_id'),
+    assembleJobId: uuid('assemble_job_id'),
+    /** Версія документа після останньої збірки */
+    assembledVersion: integer('assembled_version'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('pipeline_runs_stage_check', sql`${t.stage} in (${inList(PIPELINE_STAGES)})`),
+    check('pipeline_runs_status_check', sql`${t.status} in (${inList(PIPELINE_STATUSES)})`),
+  ],
+);
+
+/** Метадані сцени конвеєра (segmentId = id сегмента документа) */
+export const pipelineScenes = pgTable(
+  'pipeline_scenes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => pipelineRuns.id, { onDelete: 'cascade' }),
+    segmentId: text('segment_id').notNull(),
+    position: integer('position').notNull(),
+    visualPrompt: text('visual_prompt').notNull().default(''),
+    keywords: text('keywords')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    visualAssetId: uuid('visual_asset_id').references(() => assets.id, { onDelete: 'set null' }),
+    visualSource: text('visual_source', { enum: VISUAL_SOURCES }),
+    generationId: uuid('generation_id').references(() => generations.id, { onDelete: 'set null' }),
+    /** До 3 слабких збігів бібліотеки */
+    suggestions: uuid('suggestions')
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    status: text('status', { enum: SCENE_STATUSES }).notNull().default('empty'),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    error: text('error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('pipeline_scenes_run_segment_key').on(t.runId, t.segmentId),
+    index('pipeline_scenes_run_position_idx').on(t.runId, t.position),
+    check('pipeline_scenes_status_check', sql`${t.status} in (${inList(SCENE_STATUSES)})`),
+    check(
+      'pipeline_scenes_visual_source_check',
+      sql`${t.visualSource} is null or ${t.visualSource} in (${inList(VISUAL_SOURCES)})`,
+    ),
+  ],
 );

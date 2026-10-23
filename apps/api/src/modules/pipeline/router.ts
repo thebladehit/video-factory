@@ -1,0 +1,85 @@
+import { z } from 'zod';
+import type { ModelRef, PipelineSettings } from '@vf/shared';
+import { procedure, router } from '../../trpc';
+import {
+  addScene,
+  deleteScene,
+  generateSceneVideo,
+  moveScene,
+  regenerateSceneText,
+  regenerateSceneVisual,
+  setSceneVisual,
+  updateScene,
+} from './scenes';
+import {
+  cancelPipeline,
+  continuePipeline,
+  estimate,
+  getPipeline,
+  reassemble,
+  retryPipeline,
+  startPipeline,
+} from './service';
+
+// перевірку налаштувань робить сервіс (pipelineSettingsSchema) — помилка VALIDATION українською
+const settings = z.unknown() as unknown as z.ZodType<PipelineSettings>;
+const projectId = z.string();
+const sceneId = z.string();
+
+export const pipelineRouter = router({
+  estimate: procedure.input(settings).query(({ ctx, input }) => estimate(ctx.deps, ctx.userId, input)),
+  start: procedure.input(settings).mutation(({ ctx, input }) => startPipeline(ctx.deps, ctx.userId, input)),
+  get: procedure
+    .input(z.object({ projectId }))
+    .query(({ ctx, input }) => getPipeline(ctx.deps, ctx.userId, input.projectId)),
+  updateScene: procedure
+    .input(
+      z.object({
+        sceneId,
+        narration: z.string().optional(),
+        visualPrompt: z.string().optional(),
+        keywords: z.array(z.string()).optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) => updateScene(ctx.deps, ctx.userId, input)),
+  addScene: procedure
+    .input(z.object({ projectId, after: z.string().optional(), narration: z.string() }))
+    .mutation(({ ctx, input }) => addScene(ctx.deps, ctx.userId, input)),
+  deleteScene: procedure
+    .input(z.object({ sceneId }))
+    .mutation(({ ctx, input }) => deleteScene(ctx.deps, ctx.userId, input.sceneId)),
+  moveScene: procedure
+    .input(z.object({ sceneId, position: z.number().int() }))
+    .mutation(({ ctx, input }) => moveScene(ctx.deps, ctx.userId, input)),
+  continue: procedure
+    .input(z.object({ projectId }))
+    .mutation(({ ctx, input }) => continuePipeline(ctx.deps, ctx.userId, input.projectId)),
+  regenerateScene: procedure
+    .input(z.object({ sceneId, part: z.enum(['text', 'visual']) }))
+    .mutation(({ ctx, input }) =>
+      input.part === 'text'
+        ? regenerateSceneText(ctx.deps, ctx.userId, input.sceneId)
+        : regenerateSceneVisual(ctx.deps, ctx.userId, input.sceneId),
+    ),
+  generateSceneVideo: procedure
+    .input(
+      z.object({
+        sceneId,
+        model: z.string().regex(/^[a-z]+\/.+$/) as unknown as z.ZodType<ModelRef>,
+        durationSec: z.number().int().min(1).max(60).optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) => generateSceneVideo(ctx.deps, ctx.userId, input)),
+  setSceneVisual: procedure
+    .input(z.object({ sceneId, assetId: z.string() }))
+    .mutation(({ ctx, input }) => setSceneVisual(ctx.deps, ctx.userId, input)),
+  reassemble: procedure
+    .input(z.object({ projectId, version: z.number().int().min(1) }))
+    .mutation(({ ctx, input }) => reassemble(ctx.deps, ctx.userId, input)),
+  cancel: procedure
+    .input(z.object({ projectId }))
+    .mutation(({ ctx, input }) => cancelPipeline(ctx.deps, ctx.userId, input.projectId)),
+  retry: procedure
+    .input(z.object({ projectId }))
+    .mutation(({ ctx, input }) => retryPipeline(ctx.deps, ctx.userId, input.projectId)),
+});
