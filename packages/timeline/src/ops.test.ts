@@ -231,6 +231,26 @@ describe('splitAt', () => {
 });
 
 describe('delete, unlink, volume, effects', () => {
+  const withTrack = (role: 'voiceover' | 'music'): TimelineDoc => ({
+    ...emptyTimeline('9:16'),
+    tracks: [
+      {
+        id: 't1',
+        kind: 'audio',
+        role,
+        language: 'uk',
+        clips: [{ id: 'c1', assetId: 'a', start: 0, duration: 1, in: 0, volume: 1, sceneId: 's1' }],
+      },
+    ],
+  });
+  it('deleteClips on voiceover clip records removedSegments', () => {
+    const d = deleteClips(withTrack('voiceover'), ['c1']);
+    expect(d.tracks[0]).toMatchObject({ clips: [], removedSegments: ['s1'] });
+  });
+  it('deleteClips on music clip does not', () => {
+    const d = deleteClips(withTrack('music'), ['c1']);
+    expect(d.tracks[0]).not.toHaveProperty('removedSegments');
+  });
   it('deleteClips(video) removes its linked audio', () => {
     const { doc, clipIds } = add(emptyTimeline('9:16'), vid, 0);
     const d = deleteClips(doc, [clipIds[0]!]);

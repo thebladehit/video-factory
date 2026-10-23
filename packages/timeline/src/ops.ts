@@ -482,13 +482,29 @@ export function deleteClips(doc: TimelineDoc, ids: string[]): TimelineDoc {
       for (const m of group(doc, id)) del.add(m.clip.id);
     } else orphanLinks.add(f.clip.linkId);
   }
-  return mapClips(doc, (c, track) => {
+  // Видалені кліпи озвучки запам'ятовуємо за сегментом, щоб синхронізація їх не повернула.
+  const removed = new Map<string, string[]>();
+  for (const track of clipTracks(doc)) {
+    if (track.kind !== 'audio' || track.role !== 'voiceover') continue;
+    const ids = (track.clips as AudioClip[]).filter((c) => del.has(c.id) && c.sceneId).map((c) => c.sceneId!);
+    if (ids.length) removed.set(track.id, ids);
+  }
+  const out = mapClips(doc, (c, track) => {
     if (del.has(c.id)) return null;
     if (track.kind === 'video' && c.linkId && orphanLinks.has(c.linkId)) {
       return { ...withoutLink(c), volume: 0 };
     }
     return c;
   });
+  if (!removed.size) return out;
+  return {
+    ...out,
+    tracks: out.tracks.map((t) => {
+      const add = removed.get(t.id);
+      if (!add || t.kind !== 'audio') return t;
+      return { ...t, removedSegments: [...new Set([...(t.removedSegments ?? []), ...add])] };
+    }),
+  };
 }
 
 function withoutLink<T extends AnyClip>(c: T): T {

@@ -116,6 +116,8 @@ const trackSchema = z.discriminatedUnion('kind', [
     clips: z.array(audioClipSchema),
     role: z.enum(['voiceover', 'music', 'sfx', 'original']),
     language: z.string().min(2).optional(),
+    /** Лише для `voiceover`: сегменти, кліп яких користувач видалив вручну (синхронізація їх не повертає). */
+    removedSegments: z.array(id).optional(),
   }),
   z.object({ id, kind: z.literal('captions'), clips: z.array(captionClipSchema), language: z.string().min(2) }),
 ]);
