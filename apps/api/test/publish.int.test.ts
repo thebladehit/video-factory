@@ -143,10 +143,13 @@ describe('publish.create', () => {
     const { renderId } = await makeRender(s);
     const items = [{ renderId, accountId: acc.id, meta: tiktokMeta }];
     const [id] = await s.caller.publish.create({ items });
-    await expect(s.caller.publish.create({ items })).rejects.toMatchObject({
+    const err = await s.caller.publish.create({ items }).catch((e) => e);
+    // повідомлення називає пару: платформа · акаунт · мова
+    expect(err).toMatchObject({
       code: 'CONFLICT',
-      message: 'Ця версія вже публікується на цей акаунт',
+      message: 'Ця версія вже публікується на цей акаунт: TikTok · Акаунт · UK',
     });
+    expect(err.cause.details).toEqual({ platform: 'tiktok', accountId: acc.id, accountName: 'Акаунт', language: 'uk' });
     await s.caller.publish.cancel({ id: id! });
     await s.caller.publish.create({ items });
   });

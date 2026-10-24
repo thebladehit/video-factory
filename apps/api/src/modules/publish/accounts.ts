@@ -77,14 +77,17 @@ const parseProfileUrl = (raw: string | undefined) => {
   return u.toString();
 };
 
+/** `details.reason` для callback OAuth: сервер не налаштований — не «застаріле посилання» */
+const notConfigured = (message: string) => new AppError('VALIDATION', message, { reason: 'notConfigured' });
+
 function requireKey(deps: AppDeps): Buffer {
-  if (!deps.publish.tokenKey) throw new AppError('VALIDATION', 'Не задано TOKEN_ENCRYPTION_KEY у .env');
+  if (!deps.publish.tokenKey) throw notConfigured('Не задано TOKEN_ENCRYPTION_KEY у .env');
   return deps.publish.tokenKey;
 }
 
 function requireProvider(deps: AppDeps, platform: Platform): OAuthProvider {
   const provider = deps.publish.oauth[platform];
-  if (!provider) throw new AppError('VALIDATION', NOT_CONFIGURED);
+  if (!provider) throw notConfigured(NOT_CONFIGURED);
   return provider;
 }
 
@@ -185,9 +188,18 @@ export function connectUrl(
   return { url: provider.authUrl(state, oauthRedirectUri(deps, input.platform)) };
 }
 
+/** null — токени не розшифровуються (змінено TOKEN_ENCRYPTION_KEY чи пошкоджено рядок) */
+function tryDecrypt(key: Buffer, enc: string): StoredTokens | null {
+  try {
+    return decryptJson<StoredTokens>(key, enc);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Callback OAuth: state → exchange → upsert за (user, platform, external_id).
- * Невалідний state → VALIDATION; збій обміну коду → PROVIDER_ERROR.
+ * Невалідний state → VALIDATION; збій обміну коду → PROVIDER_ERROR (`details.platformReason`).
  */
 export async function completeOAuth(
   deps: AppDeps,
@@ -206,6 +218,7 @@ export async function completeOAuth(
   } catch (e) {
     throw new AppError('PROVIDER_ERROR', e instanceof Error ? e.message : 'Не вдалося підключити канал', {
       reason: e instanceof PublishError ? e.reason : undefined,
+      platformReason: e instanceof PublishError ? e.platformReason : undefined,
     });
   }
   const { account } = result;
@@ -223,7 +236,8 @@ export async function completeOAuth(
           eq(socialAccounts.externalId, account.externalId),
         ),
       );
-    if (existing?.tokensEnc) refreshToken = decryptJson<StoredTokens>(key, existing.tokensEnc).refreshToken;
+    // нерозшифровні збережені токени — як «немає refresh token»: перепідключення не блокуємо
+    if (existing?.tokensEnc) refreshToken = tryDecrypt(key, existing.tokensEnc)?.refreshToken;
   }
   const tokensEnc = encryptJson(key, { accessToken: result.accessToken, refreshToken } satisfies StoredTokens);
   const fields = {
@@ -269,7 +283,11 @@ export function accessTokenFor(deps: AppDeps, account: { id: string; platform: P
       await markLost();
       throw new PublishError('auth', AUTH_LOST_MESSAGE, 'noTokens');
     }
-    const tokens = decryptJson<StoredTokens>(key, row.tokensEnc);
+    const tokens = tryDecrypt(key, row.tokensEnc);
+    if (!tokens) {
+      await markLost();
+      throw new PublishError('auth', AUTH_LOST_MESSAGE, 'decrypt');
+    }
     if (row.tokenExpiresAt && row.tokenExpiresAt.getTime() >= Date.now() + 60_000) return tokens.accessToken;
 
     if (!tokens.refreshToken) {

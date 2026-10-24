@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { jobs, publications } from '@vf/db';
+import { jobs, publications, socialAccounts } from '@vf/db';
 import { PublishError } from '@vf/publish';
 import type { Platform, PublicationStatus, PublishMethod } from '@vf/shared';
 import type { AppDeps } from '../../app';
@@ -142,6 +142,13 @@ async function pollProcessing(deps: AppDeps, r: TickRow, now: Date) {
         .update(publications)
         .set({ status: 'failed', error: publishErrorMessage(e), updatedAt: now })
         .where(processing);
+      // як у задачі publish: акаунт потребує перепідключення (крім «немає каналу»)
+      if (e.platformReason !== 'youtubeSignupRequired') {
+        await deps.db
+          .update(socialAccounts)
+          .set({ status: 'reauth_required', updatedAt: now })
+          .where(eq(socialAccounts.id, pub.accountId));
+      }
       return;
     }
     throw e;

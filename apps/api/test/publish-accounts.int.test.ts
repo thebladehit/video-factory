@@ -1,9 +1,11 @@
 import { eq } from 'drizzle-orm';
+import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { publications, renders, socialAccounts, users } from '@vf/db';
 import { createFakeOAuth, PublishError } from '@vf/publish';
 import { appRouter } from '../src/index';
 import { accessTokenFor } from '../src/modules/publish/accounts';
+import { registerOAuthRoutes } from '../src/modules/publish/oauth-route';
 import { start, type Started } from './publish-helpers';
 
 const TOKEN_FIELDS = ['tokensEnc', 'tokenExpiresAt', 'scopes', 'accessToken', 'refreshToken'];
@@ -99,6 +101,41 @@ describe('publish.accounts', () => {
     expect((await s.caller.publish.accounts.list()).accounts).toHaveLength(0);
   });
 
+  it('callback when channel is missing → ?connectError=noChannel', async () => {
+    const s = await start();
+    s.deps.publish.oauth.youtube = {
+      ...createFakeOAuth(),
+      exchange: () =>
+        Promise.reject(new PublishError('auth', 'На цьому Google-акаунті немає YouTube-каналу', 'noChannel')),
+    };
+    expect(await connect(s, 'uk')).toBe(`${s.deps.publish.redirectBase}/publications?connectError=noChannel`);
+  });
+
+  it('callback when YouTube is not configured on server → ?connectError=notConfigured', async () => {
+    const s = await start();
+    const { url } = await s.caller.publish.accounts.connectUrl({ platform: 'youtube', language: 'uk' });
+    s.deps.publish.oauth.youtube = undefined;
+    const u = new URL(url);
+    const res = await s.server.inject({ method: 'GET', url: u.pathname + u.search });
+    expect(res.headers.location).toBe(`${s.deps.publish.redirectBase}/publications?connectError=notConfigured`);
+  });
+
+  it('callback keeps code and state out of request logs', async () => {
+    const s = await start();
+    // окремий сервер із журналом у пам'ять (у тестах журнал основного сервера вимкнено)
+    const lines: string[] = [];
+    const logged = Fastify({ logger: { level: 'info', stream: { write: (l: string) => void lines.push(l) } } });
+    registerOAuthRoutes(logged, s.deps);
+    const { url } = await s.caller.publish.accounts.connectUrl({ platform: 'youtube', language: 'uk' });
+    const u = new URL(url);
+    const res = await logged.inject({ method: 'GET', url: u.pathname + u.search });
+    await logged.close();
+    expect(res.statusCode).toBe(302);
+    const log = lines.join('\n');
+    expect(log).not.toContain(u.searchParams.get('state')!);
+    expect(log).not.toContain('code=');
+  });
+
   it('callback whose exchange fails → ?connectError=exchange', async () => {
     const oauth = { ...createFakeOAuth(), exchange: () => Promise.reject(new PublishError('other', 'boom')) };
     const s = await start({ publishFake: true }, {});
@@ -182,6 +219,32 @@ describe('publish.accounts', () => {
     const after = await accountRow(s, id);
     expect(after.tokenExpiresAt!.getTime()).toBeGreaterThan(Date.now() + 60_000);
     expect(after.tokensEnc).not.toBe(before.tokensEnc);
+  });
+
+  it('accessTokenFor with undecryptable tokens → PublishError auth, account reauth_required', async () => {
+    const s = await start();
+    const id = /connected=([\w-]+)/.exec(await connect(s, 'uk'))![1]!;
+    await s.deps.db.update(socialAccounts).set({ tokensEnc: 'v1.broken.tokens.x' }).where(eq(socialAccounts.id, id));
+    const err = await accessTokenFor(s.deps, { id, platform: 'youtube' })().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PublishError);
+    expect(err).toMatchObject({ reason: 'auth', platformReason: 'decrypt' });
+    expect((await accountRow(s, id)).status).toBe('reauth_required');
+  });
+
+  it('reconnect with undecryptable stored tokens and no new refresh token → active again', async () => {
+    const s = await start();
+    const id = /connected=([\w-]+)/.exec(await connect(s, 'uk'))![1]!;
+    await s.deps.db
+      .update(socialAccounts)
+      .set({ tokensEnc: 'v1.broken.tokens.x', status: 'reauth_required' })
+      .where(eq(socialAccounts.id, id));
+    const fake = createFakeOAuth();
+    s.deps.publish.oauth.youtube = {
+      ...fake,
+      exchange: async (code, uri) => ({ ...(await fake.exchange(code, uri)), refreshToken: undefined }),
+    };
+    expect(await connect(s, 'uk')).toBe(`${s.deps.publish.redirectBase}/publications?connected=${id}`);
+    expect((await accountRow(s, id)).status).toBe('active');
   });
 
   it('accessTokenFor with fake oauth whose refresh throws auth → account reauth_required', async () => {

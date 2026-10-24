@@ -140,7 +140,16 @@ function checkYoutubeTime(platform: Platform, at: Date | null) {
   }
 }
 
-/** Порушення часткового unique (render_id, account_id) → CONFLICT */
+/** CONFLICT, що називає пару: «… на цей акаунт: YouTube · Канал · UK» */
+function liveConflict(account: { id: string; platform: Platform; name: string }, language: string): AppError {
+  return new AppError(
+    'CONFLICT',
+    `${CONFLICT_MESSAGE}: ${PLATFORM_LABELS[account.platform]} · ${account.name} · ${language.toUpperCase()}`,
+    { platform: account.platform, accountId: account.id, accountName: account.name, language },
+  );
+}
+
+/** Порушення часткового unique (render_id, account_id) → CONFLICT (гонка повз перевірку в транзакції) */
 function mapUnique(e: unknown): never {
   for (let cur: unknown = e, i = 0; cur && i < 4; i++, cur = (cur as { cause?: unknown }).cause) {
     const err = cur as { code?: string; constraint_name?: string; constraint?: string };
@@ -187,6 +196,18 @@ export async function createPublications(deps: AppDeps, userId: string, items: C
           throw new AppError('VALIDATION', 'Акаунт потребує повторного підключення');
         }
         checkMeta(account.platform, item.meta);
+        // жива публікація цієї версії на цей акаунт (зокрема щойно додана в цьому ж пакеті)
+        const [live] = await tx
+          .select({ id: publications.id })
+          .from(publications)
+          .where(
+            and(
+              eq(publications.renderId, render.id),
+              eq(publications.accountId, account.id),
+              inArray(publications.status, LIVE),
+            ),
+          );
+        if (live) throw liveConflict(account, render.language);
         const at = parseTime(item.scheduledAt);
         checkYoutubeTime(account.platform, at);
         // api: рядок у scheduled, задачу ставимо після коміту; manual «зараз» — одразу до ручної черги

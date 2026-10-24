@@ -307,6 +307,27 @@ describe('publish job', () => {
     expect(uploads).toBe(1);
   });
 
+  it('poll gets 401 from YouTube → failed, account reauth_required', async () => {
+    let lost = false;
+    const publisher: Publisher = {
+      ...createFakePublisher('youtube'),
+      status: async () => {
+        if (lost) throw new PublishError('auth', AUTH_LOST_MESSAGE);
+        return { state: 'processing' };
+      },
+    };
+    const s = await start(undefined, { publish: publishDeps(publisher) });
+    const acc = await youtubeAccount(s);
+    const { renderId } = await video(s);
+    const [id] = await s.caller.publish.create({ items: [{ renderId, accountId: acc.id, meta }] });
+    await waitStatus(s, id!, 'processing');
+    lost = true;
+    await publishTick(s.deps, new Date(Date.now() + 61_000));
+    expect(await pubRow(s, id!)).toMatchObject({ status: 'failed', error: AUTH_LOST_MESSAGE });
+    const [a] = await s.deps.db.select().from(socialAccounts).where(eq(socialAccounts.id, acc.id));
+    expect(a!.status).toBe('reauth_required');
+  });
+
   it('YouTube rejects the video → failed without post id; retry uploads again', async () => {
     let uploads = 0;
     let polls = 0;

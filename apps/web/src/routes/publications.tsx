@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { PublicationsPage } from '@/components/publish/PublicationsPage';
 import { useTRPC } from '@/lib/trpc';
 
-type ConnectError = 'denied' | 'state' | 'exchange';
+type ConnectError = 'denied' | 'state' | 'exchange' | 'noChannel' | 'notConfigured';
 
 interface PublicationsSearch {
   /** id підключеного акаунта після повернення з OAuth */
@@ -17,13 +17,15 @@ const CONNECT_ERRORS: Record<ConnectError, string> = {
   denied: 'Доступ не надано',
   state: 'Посилання підключення застаріло — спробуйте ще раз',
   exchange: 'Не вдалося підключити канал',
+  noChannel: 'На цьому Google-акаунті немає YouTube-каналу',
+  notConfigured: 'YouTube не налаштовано на сервері',
 };
 
 export const Route = createFileRoute('/publications')({
   validateSearch: (raw: Record<string, unknown>): PublicationsSearch => ({
     connected: typeof raw.connected === 'string' && raw.connected ? raw.connected : undefined,
     connectError:
-      typeof raw.connectError === 'string' && raw.connectError in CONNECT_ERRORS
+      typeof raw.connectError === 'string' && Object.hasOwn(CONNECT_ERRORS, raw.connectError)
         ? (raw.connectError as ConnectError)
         : undefined,
   }),
