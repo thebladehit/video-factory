@@ -145,4 +145,15 @@ test('publishing: manual TikTok + fake YouTube → YouTube published, TikTok awa
   await expect(cell('tiktok').getByTestId('publication-status')).toHaveText('Опубліковано');
   await expect(cell('tiktok').getByTestId('publication-link')).toHaveAttribute('href', /tiktok\.com/);
   await expect(page.getByTestId('pending-badge')).toHaveCount(0);
+
+  // повторне відкриття для вже опублікованої версії: YouTube неактивний і не вибраний, з поточним статусом
+  // (TikTok не перевіряємо: акаунти TikTok із попередніх запусків вільні, і діалог слушно пропонує один із них)
+  await page.goto(editorUrl);
+  await page.getByTestId('render-publish').first().click();
+  const again = page.getByTestId('publish-dialog');
+  const youtube = again.locator('[data-testid=publish-target][data-platform=youtube]');
+  await expect(youtube.getByTestId('publish-target-busy')).toHaveText('Уже є: Опубліковано');
+  await expect(youtube.locator('input[type=checkbox]')).toBeDisabled();
+  await expect(youtube.locator('input[type=checkbox]')).not.toBeChecked();
+  await expect(again.getByRole('tab', { name: /YouTube/ })).toHaveCount(0);
 });

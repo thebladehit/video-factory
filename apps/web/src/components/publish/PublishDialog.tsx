@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PLATFORM_LABELS, PLATFORMS, type Platform, type PublicationMeta } from '@vf/shared';
-import { Info, Plus } from 'lucide-react';
+import { Info, Plus, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -18,7 +18,10 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useTRPC } from '@/lib/trpc';
 import { AccountDialog } from './AccountDialog';
 import { PlatformIcon } from './AccountsStrip';
+import { useConnectYoutube } from './ConnectYoutubeDialog';
+import { blockingPublication, changedFields, mergeGenerated } from './dialog-state';
 import { EMPTY_META, MetaEditor, metaErrors, withDefaults, type GenState, type MetaTab } from './MetaEditor';
+import { statusLabel } from './status';
 import type { AccountRow } from './types';
 
 export const AUDIT_HINT =
@@ -57,6 +60,8 @@ export function timeError(when: 'now' | 'at', at: string, hasYoutube: boolean, n
 }
 
 const targetKey = (language: string, platform: Platform) => `${language}:${platform}`;
+/** Метадані й стан генерації — окремо для кожної пари (проєкт, мова) */
+const metaKey = (projectId: string, language: string) => `${projectId}:${language}`;
 
 export function PublishDialog({
   open,
@@ -113,8 +118,11 @@ function PublishForm({
   /** Ручні зміни «публікувати на цю платформу»; без запису — за замовчуванням */
   const [enabled, setEnabled] = useState<Record<string, boolean>>({});
   const [chosenAccount, setChosenAccount] = useState<Record<string, string>>({});
+  /** Ключ — metaKey(проєкт, мова) */
   const [metas, setMetas] = useState<Record<string, Partial<Record<Platform, PublicationMeta>>>>({});
   const [generation, setGeneration] = useState<Record<string, GenState | undefined>>({});
+  /** Поля, які користувач змінив вручну: пізня відповідь AI їх не перезапише */
+  const edited = useRef<Record<string, Partial<Record<Platform, Set<string>>>>>({});
   const [when, setWhen] = useState<'now' | 'at'>('now');
   const [at, setAt] = useState('');
   const [adding, setAdding] = useState<{ language: string; platform: Platform } | null>(null);
@@ -136,33 +144,62 @@ function PublishForm({
     return initialLanguage && all.includes(initialLanguage) ? [initialLanguage] : all;
   }, [pickedLangs, ready, initialLanguage]);
 
+  // наявні публікації проєкту: версію вдруге на той самий акаунт не пропонуємо
+  const publicationsQuery = useQuery({
+    ...trpc.publish.list.queryOptions({ projectId }),
+    enabled: Boolean(projectId),
+  });
+  const renderOf = (lang: string) => ready.find((v) => v.language === lang)?.renderId ?? null;
+  const blockerOf = (lang: string, account: AccountRow | undefined) => {
+    const renderId = renderOf(lang);
+    if (!account || !renderId) return undefined;
+    return blockingPublication(publicationsQuery.data ?? [], renderId, account.id);
+  };
+
   const accounts = accountsQuery.data?.accounts ?? [];
   const accountsFor = (lang: string, pl: Platform) =>
     accounts.filter((a) => a.language === lang && a.platform === pl && a.status === 'active');
+  const lostFor = (lang: string, pl: Platform) =>
+    accounts.filter((a) => a.language === lang && a.platform === pl && a.status === 'reauth_required');
   const accountOf = (lang: string, pl: Platform): AccountRow | undefined => {
     const list = accountsFor(lang, pl);
-    return list.find((a) => a.id === chosenAccount[targetKey(lang, pl)]) ?? list[0];
+    return (
+      list.find((a) => a.id === chosenAccount[targetKey(lang, pl)]) ?? list.find((a) => !blockerOf(lang, a)) ?? list[0]
+    );
   };
   const isEnabled = (lang: string, pl: Platform) => {
-    if (!accountOf(lang, pl)) return false;
+    const account = accountOf(lang, pl);
+    // поки список публікацій вантажиться, не знаємо, чи пара вже зайнята
+    if (!account || publicationsQuery.isPending || blockerOf(lang, account)) return false;
     return enabled[targetKey(lang, pl)] ?? (initialPlatform ? pl === initialPlatform : true);
   };
+  const reconnect = useConnectYoutube();
 
   // AI-метадані для кожної вибраної мови: при відкритті й при виборі нової мови
   const generate = useMutation(trpc.publish.generateMeta.mutationOptions());
   const requested = useRef(new Set<string>());
+  /** Номер останнього запиту для ключа: відповідь застарілого запиту відкидається */
+  const latest = useRef<Record<string, number>>({});
   const run = (lang: string, force: boolean) => {
     if (!projectId) return;
-    const pid = projectId;
-    setGeneration((g) => ({ ...g, [lang]: 'loading' }));
+    // відповідь пишеться лише під свій (проєкт, мова) — на інший проєкт вона не потрапить
+    const key = metaKey(projectId, lang);
+    const seq = (latest.current[key] ?? 0) + 1;
+    latest.current[key] = seq;
+    setGeneration((g) => ({ ...g, [key]: 'loading' }));
     generate
-      .mutateAsync({ projectId: pid, language: lang, force })
+      .mutateAsync({ projectId, language: lang, force })
       .then(({ variants }) => {
-        setMetas((m) => ({ ...m, [lang]: variants }));
-        setGeneration((g) => ({ ...g, [lang]: 'done' }));
+        if (latest.current[key] !== seq) return;
+        // «Згенерувати знову» — свідомий запит: перезаписує й ручні правки
+        if (force) edited.current[key] = {};
+        setMetas((m) => ({ ...m, [key]: mergeGenerated(variants, m[key], edited.current[key] ?? {}) }));
+        setGeneration((g) => ({ ...g, [key]: 'done' }));
       })
       // текст помилки показує загальний тост мутацій; поля лишаються для ручного заповнення
-      .catch(() => setGeneration((g) => ({ ...g, [lang]: 'error' })));
+      .catch(() => {
+        if (latest.current[key] === seq) setGeneration((g) => ({ ...g, [key]: 'error' }));
+      });
   };
   // повторні запити для тієї самої пари (проєкт, мова) відсікає requested
   useEffect(() => {
@@ -174,9 +211,15 @@ function PublishForm({
     }
   }, [projectId, langs]);
 
-  const metaOf = (lang: string, pl: Platform) => withDefaults(pl, metas[lang]?.[pl] ?? EMPTY_META);
-  const setMeta = (lang: string, pl: Platform, meta: PublicationMeta) =>
-    setMetas((m) => ({ ...m, [lang]: { ...m[lang], [pl]: meta } }));
+  const metaOf = (lang: string, pl: Platform) => withDefaults(pl, metas[metaKey(projectId, lang)]?.[pl] ?? EMPTY_META);
+  const setMeta = (lang: string, pl: Platform, meta: PublicationMeta) => {
+    const key = metaKey(projectId, lang);
+    const fields = ((edited.current[key] ??= {})[pl] ??= new Set());
+    for (const f of changedFields(metaOf(lang, pl), meta)) fields.add(f);
+    setMetas((m) => ({ ...m, [key]: { ...m[key], [pl]: meta } }));
+  };
+  /** Стан генерації поточного проєкту за мовою — як його чекає MetaEditor */
+  const generationByLang = Object.fromEntries(langs.map((l) => [l, generation[metaKey(projectId, l)]]));
 
   const targets = langs.flatMap((lang) =>
     PLATFORMS.filter((pl) => isEnabled(lang, pl)).map((pl) => ({ language: lang, platform: pl })),
@@ -185,7 +228,7 @@ function PublishForm({
   const hasYoutube = targets.some((t) => t.platform === 'youtube');
   const whenError = timeError(when, at, hasYoutube);
   const metaInvalid = tabs.some((t) => metaErrors(t.platform, t.meta).all.length > 0);
-  const generating = langs.some((l) => generation[l] === 'loading');
+  const generating = langs.some((l) => generationByLang[l] === 'loading');
   const showAudit =
     accountsQuery.data?.youtubeAudited === false &&
     targets.some((t) => t.platform === 'youtube' && accountOf(t.language, t.platform)?.method === 'api');
@@ -202,7 +245,7 @@ function PublishForm({
   const submit = () => {
     const scheduledAt = when === 'at' ? new Date(at).toISOString() : undefined;
     const items = targets.map((t) => ({
-      renderId: ready.find((v) => v.language === t.language)!.renderId!,
+      renderId: renderOf(t.language)!,
       accountId: accountOf(t.language, t.platform)!.id,
       meta: metaOf(t.language, t.platform),
       scheduledAt,
@@ -276,8 +319,11 @@ function PublishForm({
             {langs.flatMap((lang) =>
               PLATFORMS.map((pl) => {
                 const options = accountsFor(lang, pl);
+                const lost = lostFor(lang, pl)[0];
                 const key = targetKey(lang, pl);
                 const label = PLATFORM_LABELS[pl];
+                const current = accountOf(lang, pl);
+                const blocker = blockerOf(lang, current);
                 return (
                   <div
                     key={key}
@@ -287,7 +333,21 @@ function PublishForm({
                     className="flex min-h-9 items-center gap-3 text-sm"
                   >
                     <PlatformIcon platform={pl} className="size-6 text-[9px]" />
-                    {options.length === 0 ? (
+                    {options.length === 0 && lost ? (
+                      <>
+                        <span className="text-muted-foreground" data-testid="publish-target-reauth">
+                          {label} · {lang.toUpperCase()} · {lost.name} — Потребує перепідключення
+                        </span>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={reconnect.isPending}
+                          onClick={() => reconnect.mutate({ platform: 'youtube', language: lost.language })}
+                        >
+                          <RefreshCw /> Перепідключити
+                        </Button>
+                      </>
+                    ) : options.length === 0 ? (
                       <>
                         <span className="text-muted-foreground">
                           Немає акаунта {label} для {lang.toUpperCase()}
@@ -304,6 +364,7 @@ function PublishForm({
                             className="size-4 accent-primary"
                             aria-label={`${label} · ${lang.toUpperCase()}`}
                             checked={isEnabled(lang, pl)}
+                            disabled={Boolean(blocker)}
                             onChange={(e) => setEnabled((s) => ({ ...s, [key]: e.target.checked }))}
                           />
                           {label} · {lang.toUpperCase()}
@@ -329,6 +390,11 @@ function PublishForm({
                             {options[0]!.name} {options[0]!.method === 'api' ? '· API' : '· вручну'}
                           </span>
                         )}
+                        {blocker && (
+                          <span className="text-xs text-muted-foreground" data-testid="publish-target-busy">
+                            Уже є: {statusLabel(blocker, new Date())}
+                          </span>
+                        )}
                       </>
                     )}
                   </div>
@@ -342,7 +408,12 @@ function PublishForm({
       {targets.length > 0 && (
         <section className="grid gap-2">
           <h3 className="text-sm font-medium">Метадані</h3>
-          <MetaEditor tabs={tabs} generation={generation} onChange={setMeta} onRegenerate={(lang) => run(lang, true)} />
+          <MetaEditor
+            tabs={tabs}
+            generation={generationByLang}
+            onChange={setMeta}
+            onRegenerate={(lang) => run(lang, true)}
+          />
         </section>
       )}
 
