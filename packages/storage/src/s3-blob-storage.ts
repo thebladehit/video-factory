@@ -67,13 +67,18 @@ export function createS3BlobStorage(cfg: S3Config): BlobStorage {
       await client.send(new PutObjectCommand({ Bucket, Key: key, Body: body, ContentType: contentType }));
     },
 
-    async get(key) {
+    async get(key, { fromByte } = {}) {
       try {
-        const res = await client.send(new GetObjectCommand({ Bucket, Key: key }));
+        const ranged = fromByte !== undefined && fromByte > 0;
+        const res = await client.send(
+          new GetObjectCommand({ Bucket, Key: key, Range: ranged ? `bytes=${fromByte}-` : undefined }),
+        );
+        // при Range ContentLength — довжина шматка; повний розмір — у ContentRange (bytes a-b/total)
+        const total = ranged ? Number(res.ContentRange?.split('/')[1]) : NaN;
         return {
           body: res.Body as Readable,
           contentType: res.ContentType ?? 'application/octet-stream',
-          size: res.ContentLength ?? 0,
+          size: Number.isFinite(total) ? total : (res.ContentLength ?? 0),
         };
       } catch (e) {
         if (status(e) === 404) throw new AppError('NOT_FOUND', `Файл не знайдено: ${key}`, { key });

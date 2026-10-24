@@ -9,8 +9,11 @@ import {
   pipelineScenes,
   projectLanguageTimelines,
   projects,
+  publications,
+  renders,
   runMigrations,
   seed,
+  socialAccounts,
   transcripts,
   users,
   voiceLines,
@@ -277,6 +280,45 @@ describe('db', () => {
       const [after] = await db.select().from(pipelineScenes).where(sql`${pipelineScenes.id} = ${s!.id}`);
       expect(after!.visualAssetId).toBeNull();
       await db.delete(projects).where(sql`${projects.id} = ${p.id}`);
+    });
+  });
+
+  describe('publishing tables', () => {
+    it('second live publication for same render+account violates unique; failed one does not', async () => {
+      const [p] = await db
+        .insert(projects)
+        .values({ userId: LOCAL_USER_ID, title: 'publish test', format: '9:16', timeline: { schemaVersion: 1 } as never })
+        .returning();
+      const [r] = await db
+        .insert(renders)
+        .values({
+          userId: LOCAL_USER_ID,
+          projectId: p!.id,
+          preset: 'final',
+          timelineSnapshot: { schemaVersion: 1 } as never,
+          timelineVersion: 1,
+        })
+        .returning();
+      const [acc] = await db
+        .insert(socialAccounts)
+        .values({ userId: LOCAL_USER_ID, platform: 'youtube', method: 'manual', name: 'ch', language: 'uk' })
+        .returning();
+      const pub = (status: 'scheduled' | 'failed') => ({
+        userId: LOCAL_USER_ID,
+        projectId: p!.id,
+        renderId: r!.id,
+        language: 'uk',
+        platform: 'youtube' as const,
+        accountId: acc!.id,
+        method: 'manual' as const,
+        status,
+        metadata: { title: '', description: '', tags: [] },
+      });
+      await db.insert(publications).values(pub('scheduled'));
+      await expect(db.insert(publications).values(pub('scheduled'))).rejects.toThrow();
+      await expect(db.insert(publications).values(pub('failed'))).resolves.toBeDefined();
+      await db.delete(projects).where(sql`${projects.id} = ${p!.id}`);
+      await db.delete(socialAccounts).where(sql`${socialAccounts.id} = ${acc!.id}`);
     });
   });
 });

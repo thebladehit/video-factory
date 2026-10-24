@@ -12,6 +12,7 @@ import {
 } from '@vf/shared';
 import { docDuration } from '@vf/timeline';
 import type { AppDeps } from '../../app';
+import { assertNoLivePublications } from '../publish/service';
 import { editorAssets, ensureAnalyzed, isUuid, type EditorAsset } from './editor-assets';
 
 export interface ProjectCard {
@@ -331,6 +332,7 @@ export async function duplicateProject(deps: AppDeps, userId: string, id: string
 /** Рендери видаляються каскадом, їхні файли в бібліотеці лишаються. */
 export async function deleteProject(deps: AppDeps, userId: string, id: string): Promise<void> {
   await ownProject(deps, userId, id);
+  await assertNoLivePublications(deps, { projectId: id });
   await deps.db.delete(projects).where(and(eq(projects.id, id), eq(projects.userId, userId)));
 }
 

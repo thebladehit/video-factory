@@ -17,6 +17,14 @@ export interface AppConfig {
   webOrigin: string;
   queueDriver: 'inprocess';
   aiFake: boolean;
+  /** OAuth-клієнт Google; без id/secret підключення YouTube вимкнене */
+  youtube: { clientId?: string; clientSecret?: string; audited: boolean };
+  /** TOKEN_ENCRYPTION_KEY (32 байти): шифрування токенів і підпис OAuth state */
+  tokenKey?: Buffer;
+  /** Fake OAuth/публікатор замість YouTube (e2e, розробка без Google) */
+  publishFake: boolean;
+  /** Період тіку публікацій (e2e — коротший, щоб не чекати хвилину) */
+  publishTickMs: number;
 }
 
 const REQUIRED = ['DATABASE_URL', 'S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET'] as const;
@@ -34,6 +42,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
   }
   if (env.QUEUE_DRIVER && env.QUEUE_DRIVER !== 'inprocess') {
     throw new AppError('VALIDATION', `QUEUE_DRIVER=${env.QUEUE_DRIVER} ще не підтримується (доступно: inprocess)`);
+  }
+  const clientId = env.YOUTUBE_CLIENT_ID?.trim() || undefined;
+  const tokenKey = parseTokenKey(env.TOKEN_ENCRYPTION_KEY);
+  if (clientId && !tokenKey) {
+    throw new AppError(
+      'VALIDATION',
+      'Задано YOUTUBE_CLIENT_ID, але TOKEN_ENCRYPTION_KEY відсутній або некоректний (потрібно 32 байти в base64: openssl rand -base64 32)',
+    );
   }
   return {
     databaseUrl: env.DATABASE_URL!,
@@ -57,5 +73,29 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     webOrigin: env.WEB_ORIGIN || 'http://localhost:5173',
     queueDriver: 'inprocess',
     aiFake: env.AI_FAKE === '1',
+    youtube: {
+      clientId,
+      clientSecret: env.YOUTUBE_CLIENT_SECRET?.trim() || undefined,
+      audited: env.YOUTUBE_API_AUDITED === '1',
+    },
+    tokenKey,
+    publishFake: env.PUBLISH_FAKE === '1',
+    publishTickMs: parseTickMs(env.PUBLISH_TICK_MS),
   };
+}
+
+/** Ціле число мілісекунд ≥ 1000; інше (порожнє, дробове, менше секунди) — типові 60 000 */
+function parseTickMs(raw: string | undefined): number {
+  const v = raw?.trim();
+  if (!v || !/^\d+$/.test(v)) return 60_000;
+  const ms = Number(v);
+  return ms >= 1_000 ? ms : 60_000;
+}
+
+/** base64 → рівно 32 байти, інакше undefined (саме значення ключа в помилки не потрапляє) */
+function parseTokenKey(raw: string | undefined): Buffer | undefined {
+  const v = raw?.trim();
+  if (!v || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(v)) return undefined;
+  const key = Buffer.from(v, 'base64');
+  return key.length === 32 ? key : undefined;
 }

@@ -8,7 +8,10 @@ export default defineConfig({
   plugins: [tanstackRouter({ target: 'react', autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
-    // SSE-підписки tRPC теж ідуть через цей проксі
-    proxy: { '/trpc': { target: process.env.VF_API_URL ?? 'http://localhost:3001' } },
+    // SSE-підписки tRPC теж ідуть через цей проксі; /oauth — callback-и OAuth (redirect URI на origin веба)
+    proxy: {
+      '/trpc': { target: process.env.VF_API_URL ?? 'http://localhost:3001' },
+      '/oauth': { target: process.env.VF_API_URL ?? 'http://localhost:3001' },
+    },
   },
 });

@@ -9,6 +9,7 @@ import {
   type Orientation,
 } from '@vf/shared';
 import type { AppDeps } from '../../app';
+import { assertNoLivePublications } from '../publish/service';
 import { ownAsset, type AssetRow } from './service';
 
 export interface AssetView {
@@ -194,6 +195,7 @@ export async function updateAsset(
 
 export async function deleteAsset(deps: AppDeps, userId: string, id: string): Promise<void> {
   const row = await ownAsset(deps, userId, id);
+  await assertNoLivePublications(deps, { assetId: row.id });
   if (row.uploadId) await deps.storage.abortMultipart(row.storageKey, row.uploadId);
   await deps.storage.delete(row.storageKey);
   if (row.thumbKey) await deps.storage.delete(row.thumbKey);

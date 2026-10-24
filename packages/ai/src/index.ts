@@ -20,6 +20,13 @@ export {
   type SceneResult,
   type ScriptResult,
 } from './prompts/script';
+export {
+  PUBLISH_META_PROMPT_VERSION,
+  buildPublishMetaPrompt,
+  publishMetaSchema,
+  type PublishMetaLimits,
+  type PublishMetaResult,
+} from './prompts/publish-meta';
 export { solidPng } from './fake/png';
 export { createFakeTts } from './fake';
 export { DEFAULT_DELIVERY, deliveryFor, GEMINI_TTS_TEMPERATURE } from './delivery';

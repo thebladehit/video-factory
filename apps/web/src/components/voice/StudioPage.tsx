@@ -466,7 +466,7 @@ function Studio({ project }: { project: ProjectView }) {
         </section>
       </div>
 
-      <RenderHistory projectId={projectId} />
+      <RenderHistory projectId={projectId} baseLanguage={view.base} />
 
       <PasteTextDialog
         open={pasteOpen}

@@ -14,15 +14,20 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import {
+  ACCOUNT_STATUSES,
   ASSET_STATUSES,
   CAPABILITIES,
   FORMATS,
   JOB_STATUSES,
   PIPELINE_STAGES,
   PIPELINE_STATUSES,
+  PLATFORMS,
+  PUBLICATION_STATUSES,
+  PUBLISH_METHODS,
   SCENE_STATUSES,
   VISUAL_SOURCES,
 } from '@vf/shared';
@@ -30,6 +35,8 @@ import type {
   DefaultSlot,
   ModelRef,
   PipelineSettings,
+  Platform,
+  PublicationMeta,
   ProjectVoice,
   TimelineDoc,
   VideoFormat,
@@ -404,4 +411,105 @@ export const pipelineScenes = pgTable(
       sql`${t.visualSource} is null or ${t.visualSource} in (${inList(VISUAL_SOURCES)})`,
     ),
   ],
+);
+
+export const socialAccounts = pgTable(
+  'social_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    platform: text('platform', { enum: PLATFORMS }).notNull(),
+    method: text('method', { enum: PUBLISH_METHODS }).notNull(),
+    /** api — назва каналу з платформи; manual — введена користувачем */
+    name: text('name').notNull(),
+    /** Мова каналу — для автовибору акаунта */
+    language: text('language').notNull(),
+    /** channelId для api; null для manual */
+    externalId: text('external_id'),
+    profileUrl: text('profile_url'),
+    /** AES-256-GCM (ключ TOKEN_ENCRYPTION_KEY), лише api */
+    tokensEnc: text('tokens_enc'),
+    scopes: text('scopes')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+    status: text('status', { enum: ACCOUNT_STATUSES }).notNull().default('active'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('social_accounts_external_key')
+      .on(t.userId, t.platform, t.externalId)
+      .where(sql`${t.externalId} is not null`),
+    check('social_accounts_platform_check', sql`${t.platform} in (${inList(PLATFORMS)})`),
+    check('social_accounts_method_check', sql`${t.method} in (${inList(PUBLISH_METHODS)})`),
+    check('social_accounts_status_check', sql`${t.status} in (${inList(ACCOUNT_STATUSES)})`),
+  ],
+);
+
+export const publications = pgTable(
+  'publications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** Захист живих публікацій від видалення рендеру — у сервісах, не в FK */
+    renderId: uuid('render_id')
+      .notNull()
+      .references(() => renders.id, { onDelete: 'cascade' }),
+    language: text('language').notNull(),
+    platform: text('platform', { enum: PLATFORMS }).notNull(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => socialAccounts.id, { onDelete: 'cascade' }),
+    method: text('method', { enum: PUBLISH_METHODS }).notNull(),
+    status: text('status', { enum: PUBLICATION_STATUSES }).notNull(),
+    /** null = «зараз» */
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
+    metadata: jsonb('metadata').$type<PublicationMeta>().notNull(),
+    jobId: uuid('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    /** URI resumable-сесії YouTube */
+    uploadSession: text('upload_session'),
+    platformPostId: text('platform_post_id'),
+    url: text('url'),
+    error: text('error'),
+    /** Момент переходу в processing — для тайм-ауту обробки */
+    processingSince: timestamp('processing_since', { withTimezone: true }),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('publications_render_account_live_key')
+      .on(t.renderId, t.accountId)
+      .where(sql`${t.status} not in ('failed', 'cancelled')`),
+    index('publications_user_status_idx').on(t.userId, t.status),
+    index('publications_project_idx').on(t.projectId),
+    check('publications_platform_check', sql`${t.platform} in (${inList(PLATFORMS)})`),
+    check('publications_method_check', sql`${t.method} in (${inList(PUBLISH_METHODS)})`),
+    check('publications_status_check', sql`${t.status} in (${inList(PUBLICATION_STATUSES)})`),
+  ],
+);
+
+/** Кеш AI-метаданих: повторне відкриття діалогу не платить вдруге */
+export const publishMetaDrafts = pgTable(
+  'publish_meta_drafts',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    language: text('language').notNull(),
+    variants: jsonb('variants').$type<Record<Platform, PublicationMeta>>().notNull(),
+    model: text('model').notNull(),
+    generationId: uuid('generation_id').references(() => generations.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.language] })],
 );

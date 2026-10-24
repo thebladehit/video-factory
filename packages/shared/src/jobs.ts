@@ -18,7 +18,8 @@ export type JobType =
   | 'pipeline.script'
   | 'pipeline.scene'
   | 'pipeline.visual'
-  | 'pipeline.assemble';
+  | 'pipeline.assemble'
+  | 'publish';
 
 export interface JobRecord {
   id: string;
@@ -44,6 +45,7 @@ export interface JobSubject {
   projectId?: string;
   lineId?: string;
   sceneId?: string;
+  publicationId?: string;
 }
 
 export interface JobEvent {
@@ -66,6 +68,7 @@ export function jobSubject(payload: unknown): JobSubject {
   if (typeof p.projectId === 'string') subject.projectId = p.projectId;
   if (typeof p.lineId === 'string') subject.lineId = p.lineId;
   if (typeof p.sceneId === 'string') subject.sceneId = p.sceneId;
+  if (typeof p.publicationId === 'string') subject.publicationId = p.publicationId;
   return subject;
 }
 

@@ -11,7 +11,15 @@ import {
   type JobQueue,
   type WorkerRuntime,
 } from '@vf/jobs';
-import { AppError } from '@vf/shared';
+import {
+  createFakeOAuth,
+  createFakePublisher,
+  createGoogleOAuth,
+  createYoutubePublisher,
+  type OAuthProvider,
+  type Publisher,
+} from '@vf/publish';
+import { AppError, type Platform } from '@vf/shared';
 import { checkTools, type MediaTools } from '@vf/media';
 import { createFfmpegRenderer, type Renderer } from '@vf/render';
 import { createLazyBucket, createS3BlobStorage, type BlobStorage } from '@vf/storage';
@@ -21,6 +29,10 @@ import { debugSleep } from './jobs/debug-sleep';
 import { cleanupStaleUploads } from './modules/assets/cleanup';
 import { assetAnalyzeJob } from './modules/assets/analyze-job';
 import { assetProcessJob } from './modules/assets/process-job';
+import { FAKE_TOKEN_KEY } from './modules/publish/crypto';
+import { publishJob } from './modules/publish/job';
+import { publishTick } from './modules/publish/tick';
+import { registerOAuthRoutes } from './modules/publish/oauth-route';
 import { reconcileAfterRestart } from './modules/recovery';
 import { assetsTagJob } from './modules/assets/tag-job';
 import { imageGenerateJob } from './modules/generate/image-job';
@@ -53,6 +65,41 @@ export interface AppDeps {
   renderer: Renderer;
   /** Журнал сервера (фонові помилки, які не повертаються клієнту) */
   log: { error(obj: object, msg?: string): void };
+  publish: PublishDeps;
+}
+
+export interface PublishDeps {
+  /** Платформа без адаптера → лише ручна публікація */
+  publishers: Partial<Record<Platform, Publisher>>;
+  oauth: Partial<Record<Platform, OAuthProvider>>;
+  /** Ключ шифрування токенів і підпису OAuth state */
+  tokenKey?: Buffer;
+  /** Origin веба: redirect URI = `${redirectBase}/oauth/<platform>/callback` */
+  redirectBase: string;
+  youtubeAudited: boolean;
+}
+
+/** fake — для e2e; справжній YouTube — лише з client id/secret і ключем; інакше порожньо */
+function createPublishDeps(cfg: AppConfig): PublishDeps {
+  const base = { redirectBase: cfg.webOrigin, youtubeAudited: cfg.youtube.audited };
+  if (cfg.publishFake) {
+    return {
+      ...base,
+      publishers: { youtube: createFakePublisher('youtube') },
+      oauth: { youtube: createFakeOAuth() },
+      tokenKey: cfg.tokenKey ?? FAKE_TOKEN_KEY,
+    };
+  }
+  const { clientId, clientSecret } = cfg.youtube;
+  if (clientId && clientSecret && cfg.tokenKey) {
+    return {
+      ...base,
+      publishers: { youtube: createYoutubePublisher({ fetch: globalThis.fetch }) },
+      oauth: { youtube: createGoogleOAuth({ clientId, clientSecret, fetch: globalThis.fetch }) },
+      tokenKey: cfg.tokenKey,
+    };
+  }
+  return { ...base, publishers: {}, oauth: {}, tokenKey: cfg.tokenKey };
 }
 
 /** Composition root: єдине місце, де інтерфейси отримують реалізації. */
@@ -111,6 +158,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
     auth: overrides.auth ?? singleUserAuth,
     renderer: overrides.renderer ?? createFfmpegRenderer(media),
     log: overrides.log ?? server.log,
+    publish: overrides.publish ?? createPublishDeps(cfg),
     ...overrides,
   };
   deps.jobs.runtime.register(debugSleep);
@@ -128,6 +176,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
   deps.jobs.runtime.register(sceneJob(deps));
   deps.jobs.runtime.register(visualJob(deps));
   deps.jobs.runtime.register(assembleJob(deps));
+  deps.jobs.runtime.register(publishJob(deps));
   const offVoiceEvents = deps.jobs.queue.onEvent(releaseOnCancel(deps));
   const offPipelineEvents = deps.jobs.queue.onEvent(pipelineEvents(deps));
   const scheduler = createIntervalScheduler((msg, e) => server.log.error({ err: e }, msg));
@@ -140,6 +189,7 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
       createContext: async ({ req }) => ({ userId: (await deps.auth.authenticate(req)).userId, deps }),
     } satisfies FastifyTRPCPluginOptions<AppRouter>['trpcOptions'],
   });
+  registerOAuthRoutes(server, deps);
 
   let closed = false;
   return {
@@ -153,6 +203,10 @@ export async function createApp(cfg: AppConfig, overrides: Partial<AppDeps> = {}
       await deps.jobs.runtime.start();
       await reconcileAfterRestart(deps);
       scheduler.every('assets.cleanup', 3_600_000, async () => void (await cleanupStaleUploads(deps)), {
+        runOnStart: true,
+      });
+      // після відновлення: перервані завантаження вже знову scheduled
+      scheduler.every('publish.tick', cfg.publishTickMs, () => publishTick(deps, new Date(), cfg.publishTickMs), {
         runOnStart: true,
       });
     },

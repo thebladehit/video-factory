@@ -2,8 +2,11 @@ import type { Readable } from 'node:stream';
 
 export interface BlobStorage {
   put(key: string, body: Uint8Array | Readable, opts: { contentType: string }): Promise<void>;
-  /** Немає ключа → AppError('NOT_FOUND') */
-  get(key: string): Promise<{ body: Readable; contentType: string; size: number }>;
+  /** Немає ключа → AppError('NOT_FOUND'). fromByte — читати з байта (Range); size — повний розмір об'єкта */
+  get(
+    key: string,
+    opts?: { fromByte?: number },
+  ): Promise<{ body: Readable; contentType: string; size: number }>;
   /** Ідемпотентно */
   delete(key: string): Promise<void>;
   presignPut(key: string, opts: { contentType: string; expiresSec?: number }): Promise<string>;

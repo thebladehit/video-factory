@@ -18,6 +18,7 @@
     "@vf/db": "workspace:*",
     "@vf/jobs": "workspace:*",
     "@vf/media": "workspace:*",
+    "@vf/publish": "workspace:*",
     "@vf/render": "workspace:*",
     "@vf/shared": "workspace:*",
     "@vf/storage": "workspace:*",

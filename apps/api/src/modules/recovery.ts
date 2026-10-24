@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import { assets, generations, jobs, pipelineRuns, renders, voiceLines } from '@vf/db';
+import { assets, generations, jobs, pipelineRuns, publications, renders, voiceLines } from '@vf/db';
 import { RESTART_ERROR } from '@vf/jobs';
 import type { AppDeps } from '../app';
 import { runAdvance } from './pipeline/run-advance';
@@ -22,7 +22,8 @@ export async function hasLiveJob(deps: AppDeps, type: string, key: 'assetId' | '
  * генерації — для перерваних рестартом (відео продовжить опитування збереженої операції, не платячи вдруге);
  * рядки озвучки з перерваною задачею — «failed» з поясненням;
  * запуски конвеєра, що працюють, — `runAdvance` (перервана задача сценарію/збірки → запуск failed з її помилкою
- * «Перервано перезапуском сервера»; сцени й рядки — за звичайними правилами).
+ * «Перервано перезапуском сервера»; сцени й рядки — за звичайними правилами);
+ * публікації `uploading` з неживою задачею — знову `scheduled` (тік поставить задачу, яка продовжить `upload_session`).
  */
 export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
   const stuckAssets = await deps.db.select().from(assets).where(eq(assets.status, 'processing'));
@@ -84,6 +85,23 @@ export async function reconcileAfterRestart(deps: AppDeps): Promise<void> {
       .update(voiceLines)
       .set({ status: 'failed', error: l.error ?? RESTART_ERROR, updatedAt: new Date() })
       .where(eq(voiceLines.id, l.id));
+
+  // завантаження, перерване рестартом: scheduled_at не змінюється; скасована задача — скасована публікація
+  const stuckUploads = await deps.db
+    .select({ id: publications.id, jobStatus: jobs.status })
+    .from(publications)
+    .leftJoin(jobs, eq(jobs.id, publications.jobId))
+    .where(
+      and(
+        eq(publications.status, 'uploading'),
+        or(isNull(jobs.id), inArray(jobs.status, ['done', 'failed', 'cancelled'])),
+      ),
+    );
+  for (const p of stuckUploads)
+    await deps.db
+      .update(publications)
+      .set({ status: p.jobStatus === 'cancelled' ? 'cancelled' : 'scheduled', updatedAt: new Date() })
+      .where(and(eq(publications.id, p.id), eq(publications.status, 'uploading')));
 
   const interrupted = await deps.db
     .select({ g: generations })

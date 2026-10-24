@@ -57,6 +57,7 @@ services:
       - nm-timeline:/app/packages/timeline/node_modules
       - nm-render:/app/packages/render/node_modules
       - nm-captions:/app/packages/captions/node_modules
+      - nm-publish:/app/packages/publish/node_modules
     depends_on: &api-deps
       postgres: { condition: service_healthy }
       rustfs: { condition: service_started }
@@ -73,6 +74,10 @@ services:
       API_PORT: '3101'
       WEB_ORIGIN: http://localhost:5174
       AI_FAKE: '1'
+      PUBLISH_FAKE: '1'
+      PUBLISH_TICK_MS: '2000'
+      # тестовий ключ лише для e2e (справжніх токенів у fake-режимі немає)
+      TOKEN_ENCRYPTION_KEY: 'r8ApGY4N5J7omh7ezeIiUlTpLPCzDrkKfa/+lqcq7z8='
       SKIP_INSTALL: '1'
     ports:
       - '3101:3101'
@@ -96,3 +101,4 @@ volumes:
   nm-timeline:
   nm-render:
   nm-captions:
+  nm-publish:

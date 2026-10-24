@@ -217,6 +217,9 @@ importers:
       '@vf/media':
         specifier: workspace:*
         version: link:../../packages/media
+      '@vf/publish':
+        specifier: workspace:*
+        version: link:../../packages/publish
       '@vf/render':
         specifier: workspace:*
         version: link:../../packages/render
@@ -262,6 +265,9 @@ importers:
       '@vf/captions':
         specifier: workspace:*
         version: link:../../packages/captions
+      '@vf/publish':
+        specifier: workspace:*
+        version: link:../../packages/publish
       '@vf/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -398,6 +404,12 @@ importers:
         version: 10.0.0
 
   packages/media:
+    dependencies:
+      '@vf/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/publish:
     dependencies:
       '@vf/shared':
         specifier: workspace:*
