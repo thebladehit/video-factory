@@ -114,6 +114,20 @@ describe('createGoogleOAuth', () => {
     expect((err as PublishError).platformReason).toBe('invalid_grant');
   });
 
+  it.each(['invalid_client', 'unauthorized_client'])(
+    "refresh with {error:'%s'} (401) → reason 'other'",
+    async (code) => {
+      const { fetch } = recordingFetch(() => json({ error: code }, 401));
+      const oauth = createGoogleOAuth({ clientId: 'cid', clientSecret: 'sec', fetch });
+      const err = await oauth.refresh('rt-old').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(PublishError);
+      expect((err as PublishError).reason).toBe('other');
+      expect((err as PublishError).platformReason).toBe(code);
+      const ex = await oauth.exchange('code-1', 'http://localhost/cb').catch((e: unknown) => e);
+      expect((ex as PublishError).reason).toBe('other');
+    },
+  );
+
   it("exchange when channels.items empty → PublishError 'auth' with 'На цьому Google-акаунті немає YouTube-каналу'", async () => {
     const { fetch } = recordingFetch((c) =>
       c.url.startsWith('https://oauth2.googleapis.com/token')

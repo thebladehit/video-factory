@@ -17,12 +17,16 @@ describe('parsePostUrl', () => {
     );
     expect(parsePostUrl('tiktok', 'https://vm.tiktok.com/ZMabc/')).toEqual(id(null));
     expect(parsePostUrl('tiktok', 'https://vt.tiktok.com/ZSabc/')).toEqual(id(null));
+    expect(parsePostUrl('tiktok', 'https://www.tiktok.com/t/ZT8abcDEF/')).toEqual(id(null));
+    expect(parsePostUrl('tiktok', 'https://www.tiktok.com/t/')).toBeNull();
   });
 
   it.each([
     'https://www.instagram.com/reel/C1abc_-9/?igsh=x',
     'https://instagram.com/reels/C1abc_-9/',
     'https://www.instagram.com/p/C1abc_-9/',
+    'https://www.instagram.com/someuser/reel/C1abc_-9/?igsh=x',
+    'https://www.instagram.com/someuser/p/C1abc_-9/',
   ])('instagram %s', (u) => expect(parsePostUrl('instagram', u)).toEqual(id('C1abc_-9')));
 
   it('facebook', () => {
@@ -30,6 +34,25 @@ describe('parsePostUrl', () => {
     expect(parsePostUrl('facebook', 'https://facebook.com/watch/?v=123')).toEqual(id('123'));
     expect(parsePostUrl('facebook', 'https://www.facebook.com/MyPage/videos/123/')).toEqual(id('123'));
     expect(parsePostUrl('facebook', 'https://fb.watch/abc')).toEqual(id(null));
+  });
+
+  it.each([
+    ['https://www.facebook.com/share/r/1AbCdEfGh/', null],
+    ['https://www.facebook.com/share/v/1AbCdEfGh/?mibextid=x', null],
+    ['https://web.facebook.com/reel/123', '123'],
+    ['https://www.facebook.com/watch/videos/123/', '123'],
+    ['https://www.facebook.com/groups/mygroup/videos/123/', '123'],
+    ['https://www.facebook.com/MyPage/videos/my-video-title/123/', '123'],
+  ])('facebook %s', (u, postId) => expect(parsePostUrl('facebook', u)).toEqual(id(postId)));
+
+  it('нові форми не пропускають чуже чи сміття', () => {
+    expect(parsePostUrl('facebook', 'https://www.facebook.com/share/r/')).toBeNull();
+    expect(parsePostUrl('facebook', 'https://www.facebook.com/MyPage/videos/')).toBeNull();
+    expect(parsePostUrl('facebook', 'https://web.notfacebook.com/reel/123')).toBeNull();
+    expect(parsePostUrl('facebook', 'https://www.tiktok.com/t/ZT8abcDEF/')).toBeNull();
+    expect(parsePostUrl('instagram', 'https://www.instagram.com/someuser/')).toBeNull();
+    expect(parsePostUrl('instagram', 'https://www.instagram.com/someuser/stories/C1abc/')).toBeNull();
+    expect(parsePostUrl('tiktok', 'https://evil.com/t/ZT8abcDEF/')).toBeNull();
   });
 
   it('чужа платформа / сміття → null', () => {

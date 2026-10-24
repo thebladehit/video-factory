@@ -47,6 +47,13 @@ export async function apiError(res: Response): Promise<PublishError> {
   if (reason === 'quotaExceeded' || reason === 'uploadLimitExceeded')
     return new PublishError('quota', QUOTA_MESSAGE, reason);
   if (reason === 'youtubeSignupRequired') return new PublishError('auth', NO_CHANNEL_MESSAGE, reason);
+  // хибні облікові дані OAuth-клієнта на сервері: перепідключення каналу не допоможе
+  if (reason === 'invalid_client' || reason === 'unauthorized_client')
+    return new PublishError(
+      'other',
+      `Google відхилив OAuth-клієнт сервера (${reason}) — перевірте налаштування`,
+      reason,
+    );
   if (res.status === 401 || reason === 'invalid_grant') return new PublishError('auth', AUTH_LOST_MESSAGE, reason);
   if (res.status >= 500)
     return new PublishError('transient', `YouTube тимчасово недоступний (HTTP ${res.status})`, reason);
